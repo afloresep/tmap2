@@ -32,22 +32,45 @@ Design Principles
 - Type hints everywhere for IDE support and self-documentation
 """
 
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tmap.index.encoders.minhash import MinHash, WeightedMinHash
+
 __version__ = "0.1.0"
 
-# These will be your public API exports
-# Uncomment as you implement them:
-
-# from tmap.core import TreeMap
-# from tmap.index import Index, FaissIndex, AnnoyIndex
-# from tmap.graph import GraphBuilder, MSTBuilder
-# from tmap.layout import Layout, ForceDirectedLayout
-# from tmap.visualization import Visualizer, HTMLVisualizer
 
 __all__ = [
     "__version__",
+    "MinHash",
+    "WeightedMinHash",
     # "TreeMap",
     # "Index", "FaissIndex", "AnnoyIndex",
     # "GraphBuilder", "MSTBuilder",
     # "Layout", "ForceDirectedLayout",
     # "Visualizer", "HTMLVisualizer",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"MinHash", "WeightedMinHash"}:
+        try:
+            module = import_module("tmap.index.encoders.minhash")
+        except ModuleNotFoundError as exc:
+            if exc.name == "datasketch":
+                raise ModuleNotFoundError(
+                    f"Optional dependency 'datasketch' is required for `tmap.{name}`. "
+                    "Install it with `pip install datasketch`."
+                ) from exc
+            raise
+
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(list(globals().keys()) + ["MinHash", "WeightedMinHash"])
