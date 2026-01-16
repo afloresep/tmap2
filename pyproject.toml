@@ -31,6 +31,7 @@ faiss-gpu = ["faiss-gpu>=1.7"]
 annoy = ["annoy>=1.17"]
 viz = ["jinja2>=3.1"]
 dev = [
+    "datasketch>=1.8.0",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff>=0.1",
