@@ -1,5 +1,4 @@
 from collections.abc import Collection, Sequence
-
 import datasketch.minhash as _datasketch_minhash
 import numpy as np
 from datasketch.weighted_minhash import WeightedMinHashGenerator as _WeightedMinHashGenerator
@@ -78,7 +77,7 @@ class MinHash(Encoder):
         """convert binary vectors to sets of 'on' indices."""
         return [set(np.where(row)[0]) for row in vectors]
 
-    def from_binary_array(self, arr: NDArray[np.uint8]) -> NDArray[np.uint64]:
+    def from_binary_array(self, arr: NDArray[np.uint8] | list) -> NDArray[np.uint64]:
         """
         Create a MinHash signature from a single binary vector.
 
@@ -88,35 +87,54 @@ class MinHash(Encoder):
         Returns:
             1D array of shape (num_perm,) containing the MinHash signature
         """
+        if isinstance(arr, list): arr = np.array(arr) # Convert to np.array in case a list is provided  
+        if len(arr.shape) > 1: 
+            raise ValueError("vector must be 1D")
         return self.encode(arr.reshape(1, -1))[0]
 
     def from_sparse_binary_array(self, indices: Sequence[int]) -> NDArray[np.uint64]:
-        """
-        Create a MinHash signature from sparse representation (list of indices).
+        """Create a MinHash signature from sparse representation (list of indices).
 
         Args:
-            indices: sequence of integers representing positions of 1s
+            indices: 1D sequence of integers representing positions of 1s
 
         Returns:
             1D array of shape (num_perm,) containing the MinHash signature
         """
+        # reject nested sequences/arrays like [[1, 2], [3]]
+        if isinstance(indices, np.ndarray):
+            if indices.ndim != 1:
+                raise ValueError(f"indices must be 1D, got array with shape {indices.shape}")
+        else:
+            if any(isinstance(x, (list, tuple, set, dict, np.ndarray)) for x in indices):
+                raise ValueError("indices must be a 1D sequence of ints, not a nested sequence")
+
         return self.encode([set(indices)])[0]
 
     def from_string_array(self, strings: Sequence[str]) -> NDArray[np.uint64]:
-        """
-        Create a MinHash signature from a list of strings.
-
+        """Create a MinHash signature from a list of strings.
         Args:
-            strings: sequence of strings to be treated as set elements
-
+            strings: 1D sequence of strings to be treated as set elements
         Returns:
             1D array of shape (num_perm,) containing the MinHash signature
         """
+        # reject nested sequences/arrays like [["a"], ["b"]]
+        if isinstance(strings, np.ndarray):
+            if strings.ndim != 1:
+                raise ValueError(f"strings must be 1D, got array with shape {strings.shape}")
+        else:
+            if any(isinstance(x, (list, tuple, set, dict, np.ndarray)) for x in strings):
+                raise ValueError("strings must be a 1D sequence of str, not a nested sequence")
+
+        assert all(isinstance(x, float) for x in strings) 
         return self.encode([set(strings)])[0]
 
 
+        #TODO: implement batch methods
+
+
 # for integer/float data
-class WeightedMinHash(Encoder):
+class WeightedMinHash(Encoder): 
     def __init__(self, dim: int, num_perm: int = 128, seed: int = 1):
         """
         Weighted MinHash for float/integer vectors.
