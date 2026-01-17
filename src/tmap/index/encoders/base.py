@@ -15,10 +15,10 @@ class Encoder(ABC):
     def encode(self, data, num_perm: int= 128) -> NDArray[np.uint64]: # returns hash signatures
         ...
 
-    # Helper function 
+    # Helper functions 
     def _validate_non_negative_vector(self, data):
         arr = np.asarray(data)
-        if not np.all(arr > 0):
+        if not np.all(arr >= 0):
             raise ValueError("Vector must contain only non-negative values")
         
     def _validate_binary_vector(self,data):
