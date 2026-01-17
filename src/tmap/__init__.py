@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from tmap.index.encoders.minhash import MinHash, WeightedMinHash
+    from tmap.index.lsh_forest import LSHForest
 
 __version__ = "0.1.0"
 
@@ -45,6 +46,7 @@ __all__ = [
     "__version__",
     "MinHash",
     "WeightedMinHash",
+    "LSHForest",
     # "TreeMap",
     # "Index", "FaissIndex", "AnnoyIndex",
     # "GraphBuilder", "MSTBuilder",
@@ -54,6 +56,12 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
+    if name == "LSHForest":
+        module = import_module("tmap.index.lsh_forest")
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+
     if name in {"MinHash", "WeightedMinHash"}:
         try:
             module = import_module("tmap.index.encoders.minhash")
@@ -73,4 +81,4 @@ def __getattr__(name: str) -> Any:
 
 
 def __dir__() -> list[str]:
-    return sorted(list(globals().keys()) + ["MinHash", "WeightedMinHash"])
+    return sorted(list(globals().keys()) + ["MinHash", "WeightedMinHash", "LSHForest"])

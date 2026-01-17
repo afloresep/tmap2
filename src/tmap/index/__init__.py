@@ -33,8 +33,9 @@ We use ABC here because:
 
 from tmap.index.base import Index
 from tmap.index.types import KNNGraph, EdgeList
+from tmap.index.lsh_forest import LSHForest
 
-__all__ = ["Index", "KNNGraph", "EdgeList"]
+__all__ = ["Index", "KNNGraph", "EdgeList", "LSHForest"]
 
 # Concrete implementations - uncomment as you build them:
 # from tmap.index.faiss_index import FaissIndex
