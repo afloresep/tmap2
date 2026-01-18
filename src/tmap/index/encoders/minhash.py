@@ -1,10 +1,36 @@
 from collections.abc import Collection, Sequence
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os
+
 import datasketch.minhash as _datasketch_minhash
 import numpy as np
 from datasketch.weighted_minhash import WeightedMinHashGenerator as _WeightedMinHashGenerator
 from numpy.typing import NDArray
 
 from .base import Encoder
+
+
+# Module-level helper functions for parallel processing (must be picklable)
+def _encode_single_set(args: tuple[set, int, int]) -> NDArray[np.uint64]:
+    """Encode a single set into a MinHash signature."""
+    s, num_perm, seed = args
+    mh = _datasketch_minhash.MinHash(num_perm=num_perm, seed=seed)
+    for item in s:
+        mh.update(str(item).encode("utf-8"))
+    return mh.hashvalues
+
+
+def _encode_weighted_chunk(
+    args: tuple[NDArray, int, int, int],
+) -> NDArray[np.uint64]:
+    """Encode a chunk of weighted vectors (creates its own generator)."""
+    data, dim, num_perm, seed = args
+    generator = _WeightedMinHashGenerator(dim=dim, sample_size=num_perm, seed=seed)
+    n_samples = data.shape[0]
+    signatures = np.zeros((n_samples, num_perm, 2), dtype=np.uint64)
+    for i in range(n_samples):
+        signatures[i] = generator.minhash(data[i]).hashvalues
+    return signatures
 
 __all__ = [
     "MinHash",
@@ -126,11 +152,119 @@ class MinHash(Encoder):
             if any(isinstance(x, (list, tuple, set, dict, np.ndarray)) for x in strings):
                 raise ValueError("strings must be a 1D sequence of str, not a nested sequence")
 
-        assert all(isinstance(x, float) for x in strings) 
+        if not all(isinstance(x, str) for x in strings):
+            raise ValueError("All elements must be strings")
         return self.encode([set(strings)])[0]
 
+    # -------------------------------------------------------------------------
+    # Batch methods (parallelized)
+    # -------------------------------------------------------------------------
 
-        #TODO: implement batch methods
+    def batch_from_binary_array(
+        self,
+        arrays: Sequence[NDArray[np.uint8]] | NDArray[np.uint8],
+        n_jobs: int | None = None,
+    ) -> NDArray[np.uint64]:
+        """
+        Create MinHash signatures from multiple binary vectors (parallelized).
+
+        Args:
+            arrays: Either a 2D array of shape (n_samples, n_features) or
+                    a sequence of 1D binary arrays
+            n_jobs: Number of parallel workers. None = number of CPUs.
+
+        Returns:
+            2D array of shape (n_samples, num_perm) containing MinHash signatures
+        """
+        if isinstance(arrays, np.ndarray) and arrays.ndim == 2:
+            # Already a 2D array, use encode directly with parallelization
+            return self._parallel_encode_sets(
+                [set(np.nonzero(row)[0].tolist()) for row in arrays],
+                n_jobs=n_jobs,
+            )
+        else:
+            # Sequence of 1D arrays
+            sets = [set(np.nonzero(arr)[0].tolist()) for arr in arrays]
+            return self._parallel_encode_sets(sets, n_jobs=n_jobs)
+
+    def batch_from_sparse_binary_array(
+        self,
+        indices_list: Sequence[Sequence[int]],
+        n_jobs: int | None = None,
+    ) -> NDArray[np.uint64]:
+        """
+        Create MinHash signatures from multiple sparse representations (parallelized).
+
+        Args:
+            indices_list: Sequence of sequences, where each inner sequence contains
+                          the indices of 1s in a sparse binary vector
+            n_jobs: Number of parallel workers. None = number of CPUs.
+
+        Returns:
+            2D array of shape (n_samples, num_perm) containing MinHash signatures
+        """
+        sets = [set(indices) for indices in indices_list]
+        return self._parallel_encode_sets(sets, n_jobs=n_jobs)
+
+    def batch_from_string_array(
+        self,
+        string_lists: Sequence[Sequence[str]],
+        n_jobs: int | None = None,
+    ) -> NDArray[np.uint64]:
+        """
+        Create MinHash signatures from multiple string lists (parallelized).
+
+        Args:
+            string_lists: Sequence of string sequences, where each inner sequence
+                          contains strings to be treated as set elements
+            n_jobs: Number of parallel workers. None = number of CPUs.
+
+        Returns:
+            2D array of shape (n_samples, num_perm) containing MinHash signatures
+        """
+        sets = [set(strings) for strings in string_lists]
+        return self._parallel_encode_sets(sets, n_jobs=n_jobs)
+
+    def _parallel_encode_sets(
+        self,
+        sets: list[set],
+        n_jobs: int | None = None,
+    ) -> NDArray[np.uint64]:
+        """
+        Internal method to encode sets in parallel using ProcessPoolExecutor.
+
+        Args:
+            sets: List of sets to encode
+            n_jobs: Number of parallel workers. None = number of CPUs.
+
+        Returns:
+            2D array of shape (n_samples, num_perm) containing MinHash signatures
+        """
+        if n_jobs is None:
+            n_jobs = os.cpu_count() or 1
+
+        n_samples = len(sets)
+
+        # For small inputs, sequential is faster due to process spawn overhead
+        if n_samples < 100 or n_jobs == 1:
+            return self.encode(sets)
+
+        # Prepare arguments for parallel processing
+        args = [(s, self._num_perm, self._seed) for s in sets]
+
+        signatures = np.zeros((n_samples, self._num_perm), dtype=np.uint64)
+
+        with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+            # Submit all tasks and track their original indices
+            future_to_idx = {
+                executor.submit(_encode_single_set, arg): i for i, arg in enumerate(args)
+            }
+
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                signatures[idx] = future.result()
+
+        return signatures
 
 
 # for integer/float data
@@ -196,6 +330,51 @@ class WeightedMinHash(Encoder):
             This implementation uses datasketch's consistent weighted sampling.
         """
         return self.encode(vec.reshape(1, -1))[0]
+
+    def batch_from_weight_array(
+        self,
+        vectors: Sequence[NDArray[np.floating]] | NDArray[np.floating],
+        n_jobs: int | None = None,
+    ) -> NDArray[np.uint64]:
+        """
+        Create weighted MinHash signatures from multiple weight vectors (parallelized).
+
+        Args:
+            vectors: Either a 2D array of shape (n_samples, dim) or
+                     a sequence of 1D weight arrays
+            n_jobs: Number of parallel workers. None = number of CPUs.
+                    Note: Currently parallelization is limited because the
+                    WeightedMinHashGenerator is not easily serializable.
+
+        Returns:
+            3D array of shape (n_samples, num_perm, 2) containing weighted MinHash signatures
+        """
+        if isinstance(vectors, np.ndarray) and vectors.ndim == 2:
+            data = vectors
+        else:
+            data = np.stack(vectors)
+
+        n_samples = data.shape[0]
+
+        # For large datasets with n_jobs > 1, use chunk-based parallelism
+        # Each worker gets its own generator to avoid serialization issues
+        if n_jobs is None:
+            n_jobs = os.cpu_count() or 1
+
+        if n_samples < 100 or n_jobs == 1:
+            return self.encode(data.astype(np.float32))
+
+        # Chunk the data for parallel processing
+        chunk_size = max(1, n_samples // n_jobs)
+        chunks = [
+            (data[i : i + chunk_size], self._dim, self._num_perm, self._seed)
+            for i in range(0, n_samples, chunk_size)
+        ]
+
+        with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+            results = list(executor.map(_encode_weighted_chunk, chunks))
+
+        return np.concatenate(results, axis=0)
 
     @staticmethod
     def get_weighted_distance(vec_a: NDArray[np.uint64], vec_b: NDArray[np.uint64]) -> float:
