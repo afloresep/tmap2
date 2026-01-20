@@ -526,3 +526,155 @@ class TestWeightedMinHashIntegration:
 
         # Should have moderate distance since 90% is the same
         assert 0.0 < distance < 0.5
+
+
+# =============================================================================
+# Numba Backend Tests
+# =============================================================================
+
+
+class TestMinHashNumbaBackend:
+    """Test MinHash with Numba JIT backend."""
+
+    def test_numba_available_property(self):
+        """Test that numba_available property reflects actual state."""
+        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
+
+        mh = MinHash(num_perm=32)
+        assert mh.numba_available == NUMBA_AVAILABLE
+
+    def test_numba_encode_shape(self):
+        """Test that Numba backend produces correct output shape."""
+        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
+
+        if not NUMBA_AVAILABLE:
+            pytest.skip("Numba not available")
+
+        mh = MinHash(num_perm=64, seed=42)
+        data = np.array([[1, 0, 1, 1, 0], [0, 1, 1, 0, 1]], dtype=np.uint8)
+        sigs = mh.encode(data)
+
+        assert sigs.shape == (2, 64)
+        assert sigs.dtype == np.uint64
+
+    def test_numba_determinism(self):
+        """Test that Numba backend is deterministic with same seed."""
+        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
+
+        if not NUMBA_AVAILABLE:
+            pytest.skip("Numba not available")
+
+        mh1 = MinHash(num_perm=64, seed=42)
+        mh2 = MinHash(num_perm=64, seed=42)
+
+        data = np.array([[1, 0, 1, 1, 0, 0, 1, 0, 1, 1]], dtype=np.uint8)
+
+        sig1 = mh1.encode(data)
+        sig2 = mh2.encode(data)
+
+        np.testing.assert_array_equal(sig1, sig2)
+
+    def test_numba_distance_accuracy(self):
+        """Test that Numba backend produces accurate Jaccard estimates."""
+        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
+
+        if not NUMBA_AVAILABLE:
+            pytest.skip("Numba not available")
+
+        mh = MinHash(num_perm=512, seed=42)
+
+        # Create two fingerprints with known overlap
+        # fp1: bits 0-99 on
+        # fp2: bits 50-149 on
+        # Intersection: 50-99 (50 bits), Union: 0-149 (150 bits)
+        # True Jaccard = 50/150 = 0.333, Distance = 0.667
+        fp1 = np.zeros(200, dtype=np.uint8)
+        fp2 = np.zeros(200, dtype=np.uint8)
+        fp1[:100] = 1
+        fp2[50:150] = 1
+
+        sig1 = mh.from_binary_array(fp1)
+        sig2 = mh.from_binary_array(fp2)
+
+        distance = mh.get_distance(sig1, sig2)
+        true_distance = 1 - 50 / 150  # ~0.667
+
+        # With 512 permutations, should be within 0.1 of true value
+        assert abs(distance - true_distance) < 0.1
+
+    def test_numba_sparse_consistency(self):
+        """Test that sparse and dense paths produce consistent results."""
+        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
+
+        if not NUMBA_AVAILABLE:
+            pytest.skip("Numba not available")
+
+        mh = MinHash(num_perm=128, seed=42)
+
+        # Create same data in sparse and dense format
+        indices = [0, 5, 10, 15, 20, 100, 200]
+        dense = np.zeros(300, dtype=np.uint8)
+        dense[indices] = 1
+
+        sig_sparse = mh.from_sparse_binary_array(indices)
+        sig_dense = mh.from_binary_array(dense)
+
+        np.testing.assert_array_equal(sig_sparse, sig_dense)
+
+    def test_numba_batch_consistency(self):
+        """Test that batch and single encoding produce same results."""
+        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
+
+        if not NUMBA_AVAILABLE:
+            pytest.skip("Numba not available")
+
+        mh = MinHash(num_perm=64, seed=42)
+
+        # Single fingerprints
+        fp1 = np.array([1, 0, 1, 1, 0, 0, 1, 0], dtype=np.uint8)
+        fp2 = np.array([0, 1, 1, 0, 1, 0, 0, 1], dtype=np.uint8)
+
+        sig1_single = mh.from_binary_array(fp1)
+        sig2_single = mh.from_binary_array(fp2)
+
+        # Batch
+        batch = np.stack([fp1, fp2])
+        sigs_batch = mh.batch_from_binary_array(batch)
+
+        np.testing.assert_array_equal(sig1_single, sigs_batch[0])
+        np.testing.assert_array_equal(sig2_single, sigs_batch[1])
+
+    def test_numba_large_batch(self):
+        """Test Numba backend with large batch (performance sanity check)."""
+        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
+
+        if not NUMBA_AVAILABLE:
+            pytest.skip("Numba not available")
+
+        mh = MinHash(num_perm=128, seed=42)
+
+        # 10k fingerprints, 2048 bits each
+        np.random.seed(42)
+        data = (np.random.rand(10_000, 2048) < 0.1).astype(np.uint8)
+
+        sigs = mh.batch_from_binary_array(data)
+
+        assert sigs.shape == (10_000, 128)
+        assert sigs.dtype == np.uint64
+
+        # Sanity check: identical fingerprints should have distance 0
+        assert mh.get_distance(sigs[0], sigs[0]) == 0.0
+
+    def test_identical_inputs_zero_distance_numba(self):
+        """Test that identical inputs produce zero distance with Numba."""
+        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
+
+        if not NUMBA_AVAILABLE:
+            pytest.skip("Numba not available")
+
+        mh = MinHash(num_perm=128, seed=42)
+
+        fp = np.array([1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1], dtype=np.uint8)
+        sig = mh.from_binary_array(fp)
+
+        assert mh.get_distance(sig, sig) == 0.0
