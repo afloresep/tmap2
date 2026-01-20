@@ -18,7 +18,7 @@ class Encoder(ABC):
     # Helper functions 
     def _validate_non_negative_vector(self, data):
         arr = np.asarray(data)
-        if not np.all(arr >= 0):
+        if not np.all(arr > 0):
             raise ValueError("Vector must contain only non-negative values")
         
     def _validate_binary_vector(self,data):
