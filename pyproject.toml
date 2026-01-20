@@ -23,6 +23,7 @@ classifiers = [
 dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
+    "datasketch>=1.6.0",
 ]
 
 [project.optional-dependencies]
@@ -30,14 +31,15 @@ faiss = ["faiss-cpu>=1.7"]
 faiss-gpu = ["faiss-gpu>=1.7"]
 annoy = ["annoy>=1.17"]
 viz = ["jinja2>=3.1"]
+fast = ["numba>=0.59"]  # JIT-compiled MinHash (50-100x faster for binary data)
 dev = [
-    "datasketch>=1.8.0",
+    "numba>=0.59",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff>=0.1",
     "mypy>=1.0",
 ]
-all = ["tmap[faiss,annoy,viz,dev]"]
+all = ["tmap[faiss,annoy,viz,fast,dev]"]
 
 [project.urls]
 Homepage = "https://github.com/afloresep/TMAP"
