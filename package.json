@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "regl-scatterplot": "^1.15.0"
+  }
+}
