@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TMAP + regl-scatterplot Demo</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            overflow: hidden;
+        }
+        #app { display: flex; flex-direction: column; height: 100vh; }
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+        }
+        header h1 { font-size: 1.2rem; font-weight: 500; }
+        #stats { display: flex; gap: 20px; font-size: 0.85rem; color: #aaa; }
+        .stat-value { color: #4fc3f7; font-weight: 600; margin-left: 6px; }
+        #canvas-container { flex: 1; position: relative; }
+        #scatter-canvas { width: 100%; height: 100%; display: block; }
+
+        #status {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(22, 33, 62, 0.95);
+            padding: 30px 50px;
+            border-radius: 12px;
+        }
+        #status.hidden { display: none; }
+        #status-spinner {
+            width: 40px; height: 40px;
+            border: 3px solid #0f3460;
+            border-top-color: #4fc3f7;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        #error {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(180, 50, 50, 0.95);
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 600px;
+        }
+        #error.hidden { display: none; }
+        #error pre {
+            text-align: left;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 10px;
+            font-size: 0.8rem;
+            overflow-x: auto;
+            max-height: 200px;
+        }
+
+        #controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        #controls.hidden { display: none; }
+        .control-group {
+            background: rgba(22, 33, 62, 0.9);
+            border-radius: 6px;
+            padding: 10px;
+        }
+        .control-group label { display: block; font-size: 0.75rem; color: #aaa; margin-bottom: 4px; }
+        .control-group input[type="range"] { width: 120px; }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            background: #0f3460;
+            color: #eee;
+            cursor: pointer;
+        }
+        button:hover { background: #1a5276; }
+
+        #perf {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(22, 33, 62, 0.9);
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 0.75rem;
+            font-family: monospace;
+        }
+        #perf.hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>TMAP Visualization (regl-scatterplot)</h1>
+            <div id="stats">
+                <span>Points:<span class="stat-value" id="stat-points">-</span></span>
+                <span>Load:<span class="stat-value" id="stat-load">-</span></span>
+                <span>Draw:<span class="stat-value" id="stat-draw">-</span></span>
+                <span>FPS:<span class="stat-value" id="stat-fps">-</span></span>
+            </div>
+        </header>
+
+        <div id="canvas-container">
+            <canvas id="scatter-canvas"></canvas>
+
+            <div id="status">
+                <div id="status-spinner"></div>
+                <p id="status-text">Initializing...</p>
+            </div>
+
+            <div id="error" class="hidden">
+                <h3>Error</h3>
+                <p id="error-text"></p>
+                <pre id="error-details"></pre>
+            </div>
+
+            <div id="controls" class="hidden">
+                <div class="control-group">
+                    <label>Point Size: <span id="size-val">2</span></label>
+                    <input type="range" id="point-size" min="0.5" max="10" step="0.5" value="2">
+                </div>
+                <div class="control-group">
+                    <label>Opacity: <span id="opacity-val">0.8</span></label>
+                    <input type="range" id="opacity" min="0.1" max="1" step="0.1" value="0.8">
+                </div>
+                <div class="control-group">
+                    <button id="reset-btn">Reset View</button>
+                </div>
+            </div>
+
+            <div id="perf" class="hidden"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Use jsdelivr ESM build - properly bundles all dependencies
+        import createScatterplot from 'https://cdn.jsdelivr.net/npm/regl-scatterplot@1.10.1/+esm';
+
+        var $ = function(id) { return document.getElementById(id); };
+        var canvas = $('scatter-canvas');
+        var container = $('canvas-container');
+        var scatterplot = null;
+
+            function setStatus(text) {
+                $('status').classList.remove('hidden');
+                $('error').classList.add('hidden');
+                $('status-text').textContent = text;
+                console.log('[Status]', text);
+            }
+
+            function setError(text, details) {
+                $('status').classList.add('hidden');
+                $('error').classList.remove('hidden');
+                $('error-text').textContent = text;
+                $('error-details').textContent = details || '';
+                console.error('[Error]', text, details);
+            }
+
+            function hideStatus() {
+                $('status').classList.add('hidden');
+                $('controls').classList.remove('hidden');
+                $('perf').classList.remove('hidden');
+            }
+
+            // Give browser time to update UI
+            function yieldToUI() {
+                return new Promise(function(resolve) { setTimeout(resolve, 10); });
+            }
+
+            function resizeCanvas() {
+                var rect = container.getBoundingClientRect();
+                var dpr = window.devicePixelRatio || 1;
+                canvas.width = rect.width * dpr;
+                canvas.height = rect.height * dpr;
+                canvas.style.width = rect.width + 'px';
+                canvas.style.height = rect.height + 'px';
+                if (scatterplot) {
+                    scatterplot.set({ width: rect.width, height: rect.height });
+                }
+            }
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            async function loadLayout() {
+                setStatus('Fetching layout.bin...');
+                await yieldToUI();
+
+                var response = await fetch('layout.bin');
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+                }
+
+                var buffer = await response.arrayBuffer();
+                var dataView = new DataView(buffer);
+                var numPoints = dataView.getUint32(0, true);
+
+                setStatus('Parsing ' + numPoints.toLocaleString() + ' points...');
+                await yieldToUI();
+
+                console.log('Buffer size:', buffer.byteLength, 'bytes');
+                console.log('Num points:', numPoints);
+
+                // Create new typed arrays and copy data (avoid buffer aliasing issues)
+                var x = new Float32Array(numPoints);
+                var y = new Float32Array(numPoints);
+
+                var srcX = new Float32Array(buffer, 4, numPoints);
+                var srcY = new Float32Array(buffer, 4 + numPoints * 4, numPoints);
+
+                for (var i = 0; i < numPoints; i++) {
+                    x[i] = srcX[i];
+                    y[i] = srcY[i];
+                }
+
+                // Check for categories
+                var categories = null;
+                var expectedSize = 4 + numPoints * 8;
+                if (buffer.byteLength > expectedSize) {
+                    categories = new Float32Array(numPoints);
+                    var srcCat = new Float32Array(buffer, 4 + numPoints * 8, numPoints);
+                    for (var j = 0; j < numPoints; j++) {
+                        categories[j] = srcCat[j];
+                    }
+                }
+
+                return { x: x, y: y, categories: categories, numPoints: numPoints };
+            }
+
+            async function main() {
+                try {
+                    console.log('regl-scatterplot loaded successfully');
+
+                    setStatus('Loading layout data...');
+                    await yieldToUI();
+
+                    var loadStart = performance.now();
+                    var data = await loadLayout();
+                    var loadTime = performance.now() - loadStart;
+
+                    $('stat-load').textContent = loadTime.toFixed(0) + 'ms';
+                    $('stat-points').textContent = data.numPoints.toLocaleString();
+
+                    setStatus('Initializing WebGL...');
+                    await yieldToUI();
+
+                    var rect = container.getBoundingClientRect();
+                    var isLarge = data.numPoints > 500000;
+                    var isVeryLarge = data.numPoints >= 1000000;
+
+                    console.log('Creating scatterplot, performanceMode:', isLarge);
+
+                    scatterplot = createScatterplot({
+                        canvas: canvas,
+                        width: rect.width,
+                        height: rect.height,
+                        pointSize: isVeryLarge ? 1 : (isLarge ? 1.5 : 3),
+                        opacity: isVeryLarge ? 0.5 : (isLarge ? 0.6 : 0.8),
+                        pointColor: ['#4fc3f7', '#ff7043', '#66bb6a', '#ab47bc', '#ffd54f'],
+                        colorBy: 'valueA',
+                        performanceMode: isLarge,
+                        spatialIndexUseWorker: false,  // Disable worker to avoid issues
+                        showReticle: !isVeryLarge,
+                        reticleColor: [1, 1, 0.878, 0.5]
+                    });
+
+                    setStatus('Preparing points...');
+                    await yieldToUI();
+
+                    // Prepare points
+                    var points = {
+                        x: data.x,
+                        y: data.y
+                    };
+
+                    // Categories
+                    if (data.categories) {
+                        points.z = data.categories;
+                    } else {
+                        // Simple categories (faster than random)
+                        var cats = new Float32Array(data.numPoints);
+                        for (var k = 0; k < data.numPoints; k++) {
+                            cats[k] = k % 5;
+                        }
+                        points.z = cats;
+                    }
+
+                    setStatus('Drawing ' + data.numPoints.toLocaleString() + ' points...');
+                    await yieldToUI();
+
+                    console.log('Starting draw...');
+                    var drawStart = performance.now();
+
+                    await scatterplot.draw(points);
+
+                    var drawTime = performance.now() - drawStart;
+                    console.log('Draw complete:', drawTime.toFixed(0), 'ms');
+
+                    $('stat-draw').textContent = drawTime.toFixed(0) + 'ms';
+                    hideStatus();
+
+                    // Controls
+                    $('point-size').oninput = function(e) {
+                        $('size-val').textContent = e.target.value;
+                        scatterplot.set({ pointSize: parseFloat(e.target.value) });
+                    };
+                    $('opacity').oninput = function(e) {
+                        $('opacity-val').textContent = e.target.value;
+                        scatterplot.set({ opacity: parseFloat(e.target.value) });
+                    };
+                    $('reset-btn').onclick = function() {
+                        scatterplot.reset();
+                    };
+
+                    // FPS counter
+                    var frames = 0;
+                    var lastTime = performance.now();
+                    function updateFPS() {
+                        frames++;
+                        var now = performance.now();
+                        if (now - lastTime >= 1000) {
+                            var fps = Math.round(frames * 1000 / (now - lastTime));
+                            $('stat-fps').textContent = fps;
+                            $('perf').textContent = 'FPS: ' + fps + ' | Points: ' + data.numPoints.toLocaleString();
+                            frames = 0;
+                            lastTime = now;
+                        }
+                        requestAnimationFrame(updateFPS);
+                    }
+                    requestAnimationFrame(updateFPS);
+
+                    // Hover (skip for very large)
+                    if (!isVeryLarge) {
+                        scatterplot.subscribe('pointOver', function(idx) {
+                            $('perf').textContent = 'Hovering point #' + idx.toLocaleString();
+                        });
+                        scatterplot.subscribe('pointOut', function() {
+                            $('perf').textContent = 'Points: ' + data.numPoints.toLocaleString();
+                        });
+                    }
+
+                    console.log('Complete! Load:', loadTime.toFixed(0), 'ms, Draw:', drawTime.toFixed(0), 'ms');
+
+                } catch (err) {
+                    console.error('Error:', err);
+                    setError('Visualization failed', err.stack || err.message || String(err));
+                }
+            }
+
+        // Start (modules are deferred by default)
+        main();
+    </script>
+</body>
+</html>
