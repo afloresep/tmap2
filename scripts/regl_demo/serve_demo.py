@@ -189,7 +189,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Your .npy file (shape 2×N)
+    # Your .npy file (shape 2xN)
     python serve_demo.py --npy x_y_100k_coords.npy
 
     # Synthetic data
@@ -199,7 +199,7 @@ Examples:
     python serve_demo.py --layout my_layout.npz
         """,
     )
-    parser.add_argument("--npy", help="Path to .npy coordinates file (shape 2×N or N×2)")
+    parser.add_argument("--npy", help="Path to .npy coordinates file (shape 2xN or Nx2)")
     parser.add_argument("--layout", help="Path to .npz layout file")
     parser.add_argument("--synthetic", type=int, help="Generate N synthetic points")
     parser.add_argument("--port", type=int, default=8080, help="Server port")
