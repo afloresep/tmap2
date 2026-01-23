@@ -55,6 +55,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+# E741/E743: Allow 'l' as variable name (standard TMAP API for number of bands)
+# N806: Allow CONSTANT naming inside Numba functions
+ignore = ["E741", "E743", "N806"]
 
 [tool.mypy]
 python_version = "3.12"
