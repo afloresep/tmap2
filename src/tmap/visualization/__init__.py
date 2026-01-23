@@ -1,37 +1,53 @@
 """
-Visualization module: Render layouts to HTML/images.
+Visualization module: Render layouts to interactive HTML.
 
-DESIGN: Minimal abstraction here
---------------------------------
-Unlike Index and Layout, visualization doesn't need complex
-inheritance hierarchies. You'll likely have:
-- HTMLVisualizer (main one, interactive)
-- Maybe a PNG/SVG exporter for static images
+Main API
+--------
+TmapViz is the primary class for creating visualizations:
 
-The Visualizer base class is simple - just render(coords, metadata).
+    from tmap.visualization import TmapViz
 
+    viz = TmapViz(title="My Data")
+    viz.set_layout(coords)
+    viz.add_column("label", labels, role="label")
+    viz.add_column("value", values, dtype="continuous")
+    viz.set_color("value", colormap="viridis")
+    viz.save("output.html")
 
-TEMPLATE APPROACH
------------------
-For HTML output, we use Jinja2 templates. This separates:
-- Python logic (data preparation)
-- HTML/JS/CSS (presentation)
+Features:
+- WebGL rendering via regl-scatterplot (handles millions of points)
+- Self-contained HTML output (no server required)
+- Continuous and categorical color mapping
+- Interactive tooltips with metadata
+- Pan, zoom, and lasso selection
 
-The template lives in templates/tmap.html and includes:
-- Canvas rendering with WebGL (for performance)
-- Pan/zoom controls
-- Hover tooltips
-- Search/filter (your "find node" feature)
-- Copy data (your "copy SMILES" feature)
-
-You customize by:
-1. Editing the template (HTML/JS)
-2. Passing different metadata to render()
+Colormaps
+---------
+Available colormaps:
+- Sequential: viridis, plasma, inferno, magma, cividis
+- Diverging: coolwarm, RdYlBu
+- Categorical: tab10, tab20, Set1, Set2, Dark2, Paired
 """
 
-from tmap.visualization.base import Visualizer
+from tmap.visualization.base import HTMLVisualizer, NodeMetadata, Visualizer
+from tmap.visualization.colormaps import (
+    get_colormap,
+    map_categorical,
+    map_continuous,
+)
+from tmap.visualization.simple_inline import SimpleInlineViz
+from tmap.visualization.tmap_viz import TmapViz
 
-__all__ = ["Visualizer"]
-
-# Uncomment as you implement:
-# from tmap.visualization.html import HTMLVisualizer
+__all__ = [
+    # Main API
+    "TmapViz",
+    "SimpleInlineViz",
+    # Colormap utilities
+    "get_colormap",
+    "map_continuous",
+    "map_categorical",
+    # Base classes (for extension)
+    "Visualizer",
+    "HTMLVisualizer",
+    "NodeMetadata",
+]

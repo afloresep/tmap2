@@ -103,10 +103,10 @@ def main() -> None:
 
     # Set color encoding (try different options)
     # Option 1: Continuous color
-    viz.set_color("activity", colormap="viridis")
+    # viz.set_color("activity", colormap="viridis")
 
     # Option 2: Categorical color (uncomment to try)
-    viz.set_color("cluster", colormap="tab10")
+    # viz.set_color("cluster", colormap="tab10")
 
     # Option 3: Diverging colormap (uncomment to try)
     # viz.set_color("mw", colormap="coolwarm")
