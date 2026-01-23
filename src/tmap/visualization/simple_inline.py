@@ -392,7 +392,7 @@ import createScatterplot from '${{scatterUrl}}';
 const payloadEl = document.getElementById('payload');
 const payload = JSON.parse(payloadEl.textContent || '{{}}');
 
-const points = payload.points || [];
+const coords = payload.points || [];
 const columns = payload.columns || {{}};
 const colormaps = payload.colormaps || {{}};
 const labelColumn = payload.labelColumn || "";
@@ -416,45 +416,46 @@ const scatterplot = createScatterplot({{
   lassoInitiator: false,
 }});
 
-const clamp01 = (v) => Math.min(1, Math.max(0, v));
-const pickContinuousColor = (cmap, t) => {{
-  const colors = cmap && cmap.length ? cmap : ['#4a9eff'];
-  const idx = Math.min(colors.length - 1, Math.round(clamp01(t) * (colors.length - 1)));
-  return colors[idx];
-}};
+const x = coords.map((p) => p[0]);
+const y = coords.map((p) => p[1]);
+const zeroArray = new Array(x.length).fill(0);
 
-function computeColors(columnName) {{
-  if (!columnName || columnName === '__none__') return null;
+function applyColor(columnName) {{
   const col = columns[columnName];
-  if (!col) return null;
+  if (!col || columnName === '__none__') {{
+    scatterplot.set({{ colorBy: null, pointColor: payload.pointColor || '#4a9eff' }});
+    scatterplot.draw({{ x, y }});
+    return;
+  }}
+
   const cmap = colormaps[col.colormap] || colormaps.viridis || ['#4a9eff'];
 
   if (col.dtype === 'categorical') {{
     const mapping = new Map();
-    let next = 0;
-    return col.values.map((v) => {{
-      if (!mapping.has(v)) mapping.set(v, next++);
-      const idx = mapping.get(v) % cmap.length;
-      return cmap[idx];
-    }});
+    const z = new Array(x.length);
+    for (let i = 0; i < x.length; i++) {{
+      const v = col.values[i];
+      if (!mapping.has(v)) mapping.set(v, mapping.size);
+      z[i] = mapping.get(v);
+    }}
+    scatterplot.set({{ colorBy: 'valueA', pointColor: cmap }});
+    scatterplot.draw({{ x, y, z, w: zeroArray }});
   }} else {{
     const nums = col.values.map(Number);
-    let min = Math.min(...nums);
-    let max = Math.max(...nums);
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
-    if (max === min) max = min + 1;
-    return nums.map((v) => pickContinuousColor(cmap, (v - min) / (max - min)));
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < nums.length; i++) {{
+      const v = nums[i];
+      if (Number.isFinite(v)) {{
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }}
+    }}
+    const range = max === min ? 1 : max - min;
+    const w = nums.map((v) => ((v - min) / range));
+    scatterplot.set({{ colorBy: 'valueB', pointColor: cmap }});
+    scatterplot.draw({{ x, y, z: zeroArray, w }});
   }}
-}}
-
-function applyColor(columnName) {{
-  const colors = computeColors(columnName);
-  if (colors && colors.length === points.length) {{
-    scatterplot.set({{ pointColor: colors }});
-  }} else {{
-    scatterplot.set({{ pointColor: payload.pointColor || '#4a9eff' }});
-  }}
-  scatterplot.draw(points);
 }}
 
 function formatValue(val) {{
