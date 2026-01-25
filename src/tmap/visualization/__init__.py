@@ -36,7 +36,7 @@ from tmap.visualization.colormaps import (
     map_continuous,
 )
 from tmap.visualization.simple_inline import SimpleInlineViz
-from tmap.visualization.tmap_viz import TmapViz
+from tmap.visualization.tmapviz import TmapViz
 
 __all__ = [
     # Main API
