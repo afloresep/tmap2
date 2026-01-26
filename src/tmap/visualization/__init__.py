@@ -35,13 +35,11 @@ from tmap.visualization.colormaps import (
     map_categorical,
     map_continuous,
 )
-from tmap.visualization.simple_inline import SimpleInlineViz
 from tmap.visualization.tmapviz import TmapViz
 
 __all__ = [
     # Main API
     "TmapViz",
-    "SimpleInlineViz",
     # Colormap utilities
     "get_colormap",
     "map_continuous",

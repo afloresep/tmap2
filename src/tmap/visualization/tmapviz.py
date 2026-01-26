@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Literal, Optional
 
-import matplotlib.colors as mcolors
 import numpy as np
 from matplotlib import colormaps
 from numpy.typing import NDArray
@@ -142,29 +141,55 @@ class TmapViz:
             values = values.tolist()
         else:
             values = list(values)
-            
+
+        # Default to continuous because it will give less issues and having to pass 
+        # always the type can be annoying... 
         _column_dtype = "categorical" if categorical else "continuous"
 
-
+        # Default colors
         if color is None:
             color = "tab10" if categorical else "viridis"
 
         if color not in COLORMAPS:
             raise ValueError(f"Color option not found. Choose from {list(matplotlib.colormaps)}")
 
+        if not categorical and color not in set(matplotlib.colormaps).difference(set(matplotlib.color_sequences)):
+            raise ValueError(
+                f"Continuous layout requires a color scheme from {set(matplotlib.colormaps).difference(set(matplotlib.color_sequences))}"
+            )
+        
         if categorical and color not in list(matplotlib.color_sequences):
             raise ValueError(
                 f"Categorical layout requires a color scheme from {list(matplotlib.color_sequences)}"
             )
 
+        if categorical:
+            try:
+                unique_count = len(set(values))
+            except TypeError as exc:
+                raise ValueError(
+                    "Categorical layout values must be hashable to compute unique categories."
+                ) from exc
+
+            cmap_size = matplotlib.colormaps[color].N
+            if unique_count > cmap_size:
+                raise ValueError(
+                    f"Categorical layout '{name}' has {unique_count} unique values but "
+                    f"colormap '{color}' only provides {cmap_size} colors."
+                )
         if name not in self._layout_keys:
             self._layout_keys.append(name)
 
-        if add_as_label and name not in self._labels_keys:
-            self._labels_keys.append(name)
-            self._columns[name] = Column(name, values, "layout+label", _column_dtype, color=color)
+        if add_as_label:
+            if name not in self._labels_keys:
+                self._labels_keys.append(name)
+            role = "layout+label"
         else:
-            self._columns[name] = Column(name, values, "layout", _column_dtype, color=color)
+            if name in self._labels_keys:
+                self._labels_keys.remove(name)
+            role = "layout"
+
+        self._columns[name] = Column(name, values, role, _column_dtype, color=color)
 
     def add_label(
         self,
@@ -343,6 +368,57 @@ class TmapViz:
       background: #000;
       color: #fff;
     }}
+    #legend {{
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      padding: 10px 12px;
+      background: #000;
+      border: 1px solid #333;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #fff;
+      min-width: 160px;
+      max-width: 240px;
+      max-height: 240px;
+      overflow: auto;
+    }}
+    #legend.hidden {{ display: none; }}
+    #legend-title {{
+      font-weight: 600;
+      margin-bottom: 6px;
+      font-size: 12px;
+    }}
+    .legend-gradient {{
+      height: 10px;
+      border-radius: 4px;
+      border: 1px solid #fff;
+    }}
+    .legend-range {{
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      margin-top: 4px;
+    }}
+    .legend-item {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 2px 0;
+    }}
+    .legend-swatch {{
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      border: 1px solid #fff;
+      flex: 0 0 auto;
+    }}
+    .legend-label {{
+      color: #fff;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
     #tooltip {{
       position: fixed;
       pointer-events: none;
@@ -381,6 +457,10 @@ class TmapViz:
   <div id="tooltip">
     <div class="label" id="tooltip-label"></div>
     <div id="tooltip-content"></div>
+  </div>
+  <div id="legend" class="hidden">
+    <div id="legend-title"></div>
+    <div id="legend-content"></div>
   </div>
   <script id="payload" type="application/json">{payload_json}</script>
   <script type="module">
@@ -424,6 +504,8 @@ const labelOptions = payload.labelOptions || [];
 const initialColor = layoutOptions.includes(payload.initialColor)
   ? payload.initialColor
   : (layoutOptions[0] || '');
+const hasLayouts = layoutOptions.length > 0;
+const fallbackPointColor = hasLayouts ? (payload.pointColor || '#4a9eff') : '#000000';
 
 const labelOnlyOptions = labelOptions.filter((name) => {{
   const col = columns[name];
@@ -433,20 +515,16 @@ const labelFallbackOptions = labelOptions.filter((name) => {{
   const col = columns[name];
   return col && col.role !== 'label';
 }});
-const tooltipFields = [...layoutOptions];
-const tooltipSet = new Set(layoutOptions);
-for (const name of labelOnlyOptions) {{
-  if (!tooltipSet.has(name)) {{
-    tooltipSet.add(name);
-    tooltipFields.push(name);
-  }}
-}}
+const tooltipFields = [...labelOptions];
 
 const canvas = document.getElementById('canvas');
 const colorSelect = document.getElementById('color-select');
 const tooltip = document.getElementById('tooltip');
 const tooltipLabel = document.getElementById('tooltip-label');
 const tooltipContent = document.getElementById('tooltip-content');
+const legend = document.getElementById('legend');
+const legendTitle = document.getElementById('legend-title');
+const legendContent = document.getElementById('legend-content');
 
 const scatterplot = createScatterplot({{
   canvas,
@@ -455,7 +533,7 @@ const scatterplot = createScatterplot({{
   pointSize: payload.pointSize || 4,
   opacity: payload.opacity ?? 0.85,
   backgroundColor: payload.backgroundColor || [0, 0, 0, 1],
-  pointColor: payload.pointColor || '#4a9eff',
+  pointColor: fallbackPointColor,
   colorBy: null,
   lassoInitiator: false,
 }});
@@ -467,12 +545,13 @@ const zeroArray = new Array(x.length).fill(0);
 function applyColor(columnName) {{
   const col = columns[columnName];
   if (!col) {{
-    scatterplot.set({{ colorBy: null, pointColor: payload.pointColor || '#4a9eff' }});
+    scatterplot.set({{ colorBy: null, pointColor: fallbackPointColor }});
     scatterplot.draw({{ x, y }});
+    updateLegend('');
     return;
   }}
 
-  const cmap = (col.colormap && colormaps[col.colormap]) || ['#4a9eff'];
+  const cmap = (col.colormap && colormaps[col.colormap]) || [fallbackPointColor];
 
   if (col.dtype === 'categorical') {{
     const mapping = new Map();
@@ -500,6 +579,7 @@ function applyColor(columnName) {{
     scatterplot.set({{ colorBy: 'valueB', pointColor: cmap }});
     scatterplot.draw({{ x, y, z: zeroArray, w }});
   }}
+  updateLegend(columnName);
 }}
 
 function formatValue(val) {{
@@ -509,6 +589,81 @@ function formatValue(val) {{
     return val.toFixed(3);
   }}
   return String(val);
+}}
+
+function buildGradient(colors) {{
+  if (!colors || colors.length === 0) return '#000000';
+  const steps = Math.min(12, colors.length);
+  if (steps === 1) return colors[0];
+  const stops = [];
+  for (let i = 0; i < steps; i++) {{
+    const t = i / (steps - 1);
+    const idx = Math.round((colors.length - 1) * t);
+    const pct = Math.round(t * 100);
+    stops.push(colors[idx] + ' ' + pct + '%');
+  }}
+  return 'linear-gradient(90deg, ' + stops.join(', ') + ')';
+}}
+
+function updateLegend(columnName) {{
+  const col = columns[columnName];
+  if (!col || col.role === 'label') {{
+    legend.classList.add('hidden');
+    legendTitle.textContent = '';
+    legendContent.innerHTML = '';
+    return;
+  }}
+
+  const cmap = (col.colormap && colormaps[col.colormap]) || [fallbackPointColor];
+  legendTitle.textContent = columnName;
+
+  if (col.dtype === 'categorical') {{
+    const mapping = new Map();
+    const items = [];
+    for (let i = 0; i < col.values.length; i++) {{
+      const v = col.values[i];
+      if (!mapping.has(v)) {{
+        mapping.set(v, mapping.size);
+        items.push(v);
+      }}
+    }}
+    if (mapping.size > cmap.length) {{
+      throw new Error(
+        'Categorical layout "' + columnName + '" has ' + mapping.size +
+        ' unique values but colormap "' + col.colormap + '" only provides ' +
+        cmap.length + ' colors.'
+      );
+    }}
+    let html = '';
+    for (let i = 0; i < items.length; i++) {{
+      const color = cmap[i];
+      html += '<div class="legend-item"><span class="legend-swatch" style="background: ' +
+        color + ';"></span><span class="legend-label">' + items[i] + '</span></div>';
+    }}
+    legendContent.innerHTML = html;
+  }} else {{
+    const nums = col.values.map(Number);
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < nums.length; i++) {{
+      const v = nums[i];
+      if (Number.isFinite(v)) {{
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }}
+    }}
+    if (min === Infinity) {{
+      min = 0;
+      max = 0;
+    }}
+    const gradient = buildGradient(cmap);
+    legendContent.innerHTML =
+      '<div class="legend-gradient" style="background: ' + gradient + ';"></div>' +
+      '<div class="legend-range"><span>' + formatValue(min) + '</span><span>' +
+      formatValue(max) + '</span></div>';
+  }}
+
+  legend.classList.remove('hidden');
 }}
 
 function getLabel(idx) {{
