@@ -28,24 +28,6 @@ Available colormaps:
 - Diverging: coolwarm, RdYlBu
 - Categorical: tab10, tab20, Set1, Set2, Dark2, Paired
 """
-
-from tmap.visualization.base import HTMLVisualizer, NodeMetadata, Visualizer
-from tmap.visualization.colormaps import (
-    get_colormap,
-    map_categorical,
-    map_continuous,
-)
 from tmap.visualization.tmapviz import TmapViz
 
-__all__ = [
-    # Main API
-    "TmapViz",
-    # Colormap utilities
-    "get_colormap",
-    "map_continuous",
-    "map_categorical",
-    # Base classes (for extension)
-    "Visualizer",
-    "HTMLVisualizer",
-    "NodeMetadata",
-]
+__all__ = [ "TmapViz"]

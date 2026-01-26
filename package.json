@@ -1,5 +1,7 @@
 {
   "dependencies": {
+    "pub-sub-es": "^3.0.0",
+    "regl": "^2.1.1",
     "regl-scatterplot": "^1.15.0"
   }
 }

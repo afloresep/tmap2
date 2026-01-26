@@ -1,0 +1,44 @@
+{#
+  SMILES Template - Extends base template to add molecular structure rendering
+
+  This template adds:
+  - SmilesDrawer integration for rendering SMILES strings
+  - Molecular structure preview in tooltips
+
+  Usage:
+    viz.render(template_name="smiles.html.j2")
+
+  Future implementation will require:
+  - SmilesDrawer JS library (to be bundled or loaded from CDN)
+  - SMILES column in the data payload
+  - Canvas or SVG rendering in the tooltip
+#}
+{% extends "base.html.j2" %}
+
+{% block extra_styles %}
+    #tooltip .structure {
+      width: 200px;
+      height: 200px;
+      background: #fff;
+      border-radius: 4px;
+      margin-top: 8px;
+    }
+    #tooltip .structure canvas {
+      width: 100%;
+      height: 100%;
+    }
+{% endblock %}
+
+{% block extra_elements %}
+  {# Structure canvas placeholder for SmilesDrawer #}
+{% endblock %}
+
+{% block extra_runtime %}
+// SMILES rendering extension
+// TODO: implement when SmilesDrawer is integrated
+// This block will add:
+// - SmilesDrawer initialization
+// - Hook into tooltip to render molecular structures
+// - Caching for rendered structures
+console.log('SMILES template loaded - structure rendering coming soon');
+{% endblock %}

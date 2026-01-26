@@ -49,6 +49,9 @@ Repository = "https://github.com/afloresep/TMAP"
 [tool.hatch.build.targets.wheel]
 packages = ["src/tmap"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/tmap/visualization/templates" = "tmap/visualization/templates"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

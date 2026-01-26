@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Literal, Optional
 
@@ -10,7 +11,15 @@ import numpy as np
 from matplotlib import colormaps
 from numpy.typing import NDArray
 
+try:
+    from jinja2 import Environment, PackageLoader, select_autoescape
+
+    _JINJA_AVAILABLE = True
+except ImportError:
+    _JINJA_AVAILABLE = False
+
 COLORMAPS = list(colormaps)
+TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
 def _project_root() -> Path:
@@ -56,6 +65,22 @@ def _runtime_base64() -> dict[str, str]:
     }
 
 
+@lru_cache(maxsize=1)
+def _get_jinja_env() -> "Environment":
+    """Get or create a cached Jinja2 environment for templates."""
+    if not _JINJA_AVAILABLE:
+        raise ImportError(
+            "Jinja2 is required for template rendering. "
+            "Install with: pip install tmap[viz]"
+        )
+    return Environment(
+        loader=PackageLoader("tmap.visualization", "templates"),
+        autoescape=select_autoescape(["html", "xml"]),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+
+
 def _normalize_coords(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """
     Normalize coordinates to [-1, 1] preserving aspect ratio.
@@ -89,9 +114,8 @@ def _hex_to_rgba(hex_color: str, alpha: float = 1.0) -> list[float]:
     return [int(hex_color[i : i + 2], 16) / 255.0 for i in (0, 2, 4)] + [alpha]
 
 
-
-#TODO: Implement categorical=True preserves listed colors when available
-def _colormap_to_hex(name:str) -> list[str]:
+# TODO: Implement categorical=True preserves listed colors when available
+def _colormap_to_hex(name: str) -> list[str]:
     """
     Convert a matplotlib colormap to a list of hex strings.
     """
@@ -101,7 +125,6 @@ def _colormap_to_hex(name:str) -> list[str]:
     cmap = mpl.colormaps[name]
     hex_colors = [to_hex(cmap(i)) for i in range(cmap.N)]
     return hex_colors
-
 
 
 @dataclass
@@ -142,8 +165,8 @@ class TmapViz:
         else:
             values = list(values)
 
-        # Default to continuous because it will give less issues and having to pass 
-        # always the type can be annoying... 
+        # Default to continuous because it will give less issues and having to pass
+        # always the type can be annoying...
         _column_dtype = "categorical" if categorical else "continuous"
 
         # Default colors
@@ -151,16 +174,22 @@ class TmapViz:
             color = "tab10" if categorical else "viridis"
 
         if color not in COLORMAPS:
-            raise ValueError(f"Color option not found. Choose from {list(matplotlib.colormaps)}")
-
-        if not categorical and color not in set(matplotlib.colormaps).difference(set(matplotlib.color_sequences)):
             raise ValueError(
-                f"Continuous layout requires a color scheme from {set(matplotlib.colormaps).difference(set(matplotlib.color_sequences))}"
+                f"Color option not found. Choose from {list(matplotlib.colormaps)}"
             )
-        
+
+        if color not in set(matplotlib.colormaps).difference(
+            set(matplotlib.color_sequences)
+        ) and not categorical:
+            raise ValueError(
+                f"Continuous layout requires a color scheme from "
+                f"{set(matplotlib.colormaps).difference(set(matplotlib.color_sequences))}"
+            )
+
         if categorical and color not in list(matplotlib.color_sequences):
             raise ValueError(
-                f"Categorical layout requires a color scheme from {list(matplotlib.color_sequences)}"
+                f"Categorical layout requires a color scheme from "
+                f"{list(matplotlib.color_sequences)}"
             )
 
         if categorical:
@@ -230,14 +259,13 @@ class TmapViz:
         y_arr = np.asarray(y, dtype=np.float64)
         """
         ^^^^^^^
-        Not really sure if converting here to np.array is the best idea. 
+        Not really sure if converting here to np.array is the best idea.
         JSON requires list so at the end we are doing list -> np.array -> list
         becasue we need to normalize. Maybe just asking for np.array is cleaner
-        but I feel like a lot of people will be passing it as list and having the 
-        type error could be annoying. 
-        TODO: profile this to see impact 
+        but I feel like a lot of people will be passing it as list and having the
+        type error could be annoying.
+        TODO: profile this to see impact
         """
-
 
         if x_arr.shape != y_arr.shape:
             raise ValueError("x and y must have the same shape")
@@ -256,8 +284,14 @@ class TmapViz:
                     f"{len(self._points)} points"
                 )
 
-    def render(self) -> str:
-        """Return the full HTML string for the visualization."""
+    def render(self, template_name: str = "base.html.j2") -> str:
+        """Return the full HTML string for the visualization.
+
+        Args:
+            template_name: Name of the Jinja2 template to use.
+                           Default is "base.html.j2". Other options include
+                           future templates like "smiles.html.j2".
+        """
         if not self._points:
             raise ValueError("Call set_points() before rendering.")
 
@@ -283,9 +317,7 @@ class TmapViz:
             }
 
             if colormap_name and colormap_name not in colormaps_payload:
-                colormaps_payload[colormap_name] = _colormap_to_hex(
-                    colormap_name)
-                
+                colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
 
         layout_options = list(self._layout_keys)
         label_options = [name for name in self._labels_keys if name in self._columns]
@@ -308,448 +340,27 @@ class TmapViz:
         runtime = _runtime_base64()
         payload_json = json.dumps(payload, separators=(",", ":"))
 
-        html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{self.title}</title>
-  <style>
-    html, body {{
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      background: {self.background_color};
-      color: #e0e0e0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }}
-    #canvas {{
-      width: 100vw;
-      height: 100vh;
-      display: block;
-    }}
-    #title {{
-      position: fixed;
-      top: 12px;
-      left: 12px;
-      padding: 6px 10px;
-      border-radius: 6px;
-      background: rgba(0, 0, 0, 0.4);
-      font-size: 14px;
-      letter-spacing: 0.4px;
-    }}
-    #controls {{
-      position: fixed;
-      top: 12px;
-      right: 12px;
-      padding: 8px 10px;
-      background: #000;
-      border-radius: 6px;
-      font-size: 13px;
-      color: #fff;
-      min-width: 160px;
-    }}
-    #controls label {{
-      font-size: 12px;
-      color: #fff;
-      display: block;
-      margin-bottom: 4px;
-    }}
-    #controls select {{
-      width: 100%;
-      padding: 6px 8px;
-      border-radius: 4px;
-      border: 1px solid #fff;
-      background: #000;
-      color: #fff;
-    }}
-    #controls select option {{
-      background: #000;
-      color: #fff;
-    }}
-    #legend {{
-      position: fixed;
-      bottom: 12px;
-      right: 12px;
-      padding: 10px 12px;
-      background: #000;
-      border: 1px solid #333;
-      border-radius: 6px;
-      font-size: 12px;
-      color: #fff;
-      min-width: 160px;
-      max-width: 240px;
-      max-height: 240px;
-      overflow: auto;
-    }}
-    #legend.hidden {{ display: none; }}
-    #legend-title {{
-      font-weight: 600;
-      margin-bottom: 6px;
-      font-size: 12px;
-    }}
-    .legend-gradient {{
-      height: 10px;
-      border-radius: 4px;
-      border: 1px solid #fff;
-    }}
-    .legend-range {{
-      display: flex;
-      justify-content: space-between;
-      font-size: 11px;
-      margin-top: 4px;
-    }}
-    .legend-item {{
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 2px 0;
-    }}
-    .legend-swatch {{
-      width: 12px;
-      height: 12px;
-      border-radius: 3px;
-      border: 1px solid #fff;
-      flex: 0 0 auto;
-    }}
-    .legend-label {{
-      color: #fff;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }}
-    #tooltip {{
-      position: fixed;
-      pointer-events: none;
-      background: rgba(0, 0, 0, 0.7);
-      border: 1px solid #333;
-      border-radius: 8px;
-      padding: 10px 12px;
-      font-size: 12px;
-      color: #e0e0e0;
-      max-width: 300px;
-      display: none;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
-    }}
-    #tooltip.visible {{ display: block; }}
-    #tooltip .label {{
-      font-weight: 700;
-      margin-bottom: 6px;
-    }}
-    #tooltip .row {{
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      margin: 2px 0;
-    }}
-    #tooltip .key {{ color: #9ca3af; }}
-    #tooltip .value {{ color: #e5e7eb; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-  </style>
-</head>
-<body>
-  <div id="title">{self.title}</div>
-  <div id="controls">
-    <label for="color-select">Color By Layout</label>
-    <select id="color-select"></select>
-  </div>
-  <canvas id="canvas"></canvas>
-  <div id="tooltip">
-    <div class="label" id="tooltip-label"></div>
-    <div id="tooltip-content"></div>
-  </div>
-  <div id="legend" class="hidden">
-    <div id="legend-title"></div>
-    <div id="legend-content"></div>
-  </div>
-  <script id="payload" type="application/json">{payload_json}</script>
-  <script type="module">
-    const decode = (b64) => atob(b64);
-    const mkModule = (code) =>
-      URL.createObjectURL(new Blob([code], {{ type: 'application/javascript' }}));
+        # Render using Jinja2 template
+        env = _get_jinja_env()
+        template = env.get_template(template_name)
 
-    const reglSource = decode("{runtime['regl']}");
-    const pubSubSource = decode("{runtime['pubsub']}");
-    const scatterSourceRaw = decode("{runtime['scatterplot']}");
-
-    // Wrap regl's UMD build into an ES module
-    const reglModuleSource = `
-const module = {{ exports: {{}} }};
-const exports = module.exports;
-const globalThisRef = typeof globalThis !== 'undefined' ? globalThis : window;
-${{reglSource}}
-export default module.exports || globalThisRef.createREGL || createREGL;
-`;
-    const reglUrl = mkModule(reglModuleSource);
-
-    const pubSubUrl = mkModule(pubSubSource);
-    const scatterSource = scatterSourceRaw
-      .replace(/from "regl"/g, 'from "' + reglUrl + '"')
-      .replace(/from 'regl'/g, 'from "' + reglUrl + '"')
-      .replace(/from "pub-sub-es"/g, 'from "' + pubSubUrl + '"')
-      .replace(/from 'pub-sub-es'/g, 'from "' + pubSubUrl + '"');
-    const scatterUrl = mkModule(scatterSource);
-
-    const runtime = `
-import createScatterplot from '${{scatterUrl}}';
-
-const payloadEl = document.getElementById('payload');
-const payload = JSON.parse(payloadEl.textContent || '{{}}');
-
-const coords = payload.points || [];
-const columns = payload.columns || {{}};
-const colormaps = payload.colormaps || {{}};
-const layoutOptions = payload.layoutOptions || [];
-const labelOptions = payload.labelOptions || [];
-const initialColor = layoutOptions.includes(payload.initialColor)
-  ? payload.initialColor
-  : (layoutOptions[0] || '');
-const hasLayouts = layoutOptions.length > 0;
-const fallbackPointColor = hasLayouts ? (payload.pointColor || '#4a9eff') : '#000000';
-
-const labelOnlyOptions = labelOptions.filter((name) => {{
-  const col = columns[name];
-  return col && col.role === 'label';
-}});
-const labelFallbackOptions = labelOptions.filter((name) => {{
-  const col = columns[name];
-  return col && col.role !== 'label';
-}});
-const tooltipFields = [...labelOptions];
-
-const canvas = document.getElementById('canvas');
-const colorSelect = document.getElementById('color-select');
-const tooltip = document.getElementById('tooltip');
-const tooltipLabel = document.getElementById('tooltip-label');
-const tooltipContent = document.getElementById('tooltip-content');
-const legend = document.getElementById('legend');
-const legendTitle = document.getElementById('legend-title');
-const legendContent = document.getElementById('legend-content');
-
-const scatterplot = createScatterplot({{
-  canvas,
-  width: canvas.clientWidth || window.innerWidth,
-  height: canvas.clientHeight || window.innerHeight,
-  pointSize: payload.pointSize || 4,
-  opacity: payload.opacity ?? 0.85,
-  backgroundColor: payload.backgroundColor || [0, 0, 0, 1],
-  pointColor: fallbackPointColor,
-  colorBy: null,
-  lassoInitiator: false,
-}});
-
-const x = coords.map((p) => p[0]);
-const y = coords.map((p) => p[1]);
-const zeroArray = new Array(x.length).fill(0);
-
-function applyColor(columnName) {{
-  const col = columns[columnName];
-  if (!col) {{
-    scatterplot.set({{ colorBy: null, pointColor: fallbackPointColor }});
-    scatterplot.draw({{ x, y }});
-    updateLegend('');
-    return;
-  }}
-
-  const cmap = (col.colormap && colormaps[col.colormap]) || [fallbackPointColor];
-
-  if (col.dtype === 'categorical') {{
-    const mapping = new Map();
-    const z = new Array(x.length);
-    for (let i = 0; i < x.length; i++) {{
-      const v = col.values[i];
-      if (!mapping.has(v)) mapping.set(v, mapping.size);
-      z[i] = mapping.get(v);
-    }}
-    scatterplot.set({{ colorBy: 'valueA', pointColor: cmap }});
-    scatterplot.draw({{ x, y, z, w: zeroArray }});
-  }} else {{
-    const nums = col.values.map(Number);
-    let min = Infinity;
-    let max = -Infinity;
-    for (let i = 0; i < nums.length; i++) {{
-      const v = nums[i];
-      if (Number.isFinite(v)) {{
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }}
-    }}
-    const range = max === min ? 1 : max - min;
-    const w = nums.map((v) => ((v - min) / range));
-    scatterplot.set({{ colorBy: 'valueB', pointColor: cmap }});
-    scatterplot.draw({{ x, y, z: zeroArray, w }});
-  }}
-  updateLegend(columnName);
-}}
-
-function formatValue(val) {{
-  if (typeof val === 'number') {{
-    const abs = Math.abs(val);
-    if (abs >= 1000 || (abs > 0 && abs < 0.01)) return val.toExponential(2);
-    return val.toFixed(3);
-  }}
-  return String(val);
-}}
-
-function buildGradient(colors) {{
-  if (!colors || colors.length === 0) return '#000000';
-  const steps = Math.min(12, colors.length);
-  if (steps === 1) return colors[0];
-  const stops = [];
-  for (let i = 0; i < steps; i++) {{
-    const t = i / (steps - 1);
-    const idx = Math.round((colors.length - 1) * t);
-    const pct = Math.round(t * 100);
-    stops.push(colors[idx] + ' ' + pct + '%');
-  }}
-  return 'linear-gradient(90deg, ' + stops.join(', ') + ')';
-}}
-
-function updateLegend(columnName) {{
-  const col = columns[columnName];
-  if (!col || col.role === 'label') {{
-    legend.classList.add('hidden');
-    legendTitle.textContent = '';
-    legendContent.innerHTML = '';
-    return;
-  }}
-
-  const cmap = (col.colormap && colormaps[col.colormap]) || [fallbackPointColor];
-  legendTitle.textContent = columnName;
-
-  if (col.dtype === 'categorical') {{
-    const mapping = new Map();
-    const items = [];
-    for (let i = 0; i < col.values.length; i++) {{
-      const v = col.values[i];
-      if (!mapping.has(v)) {{
-        mapping.set(v, mapping.size);
-        items.push(v);
-      }}
-    }}
-    if (mapping.size > cmap.length) {{
-      throw new Error(
-        'Categorical layout "' + columnName + '" has ' + mapping.size +
-        ' unique values but colormap "' + col.colormap + '" only provides ' +
-        cmap.length + ' colors.'
-      );
-    }}
-    let html = '';
-    for (let i = 0; i < items.length; i++) {{
-      const color = cmap[i];
-      html += '<div class="legend-item"><span class="legend-swatch" style="background: ' +
-        color + ';"></span><span class="legend-label">' + items[i] + '</span></div>';
-    }}
-    legendContent.innerHTML = html;
-  }} else {{
-    const nums = col.values.map(Number);
-    let min = Infinity;
-    let max = -Infinity;
-    for (let i = 0; i < nums.length; i++) {{
-      const v = nums[i];
-      if (Number.isFinite(v)) {{
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }}
-    }}
-    if (min === Infinity) {{
-      min = 0;
-      max = 0;
-    }}
-    const gradient = buildGradient(cmap);
-    legendContent.innerHTML =
-      '<div class="legend-gradient" style="background: ' + gradient + ';"></div>' +
-      '<div class="legend-range"><span>' + formatValue(min) + '</span><span>' +
-      formatValue(max) + '</span></div>';
-  }}
-
-  legend.classList.remove('hidden');
-}}
-
-function getLabel(idx) {{
-  for (const name of labelOnlyOptions) {{
-    const col = columns[name];
-    if (col && col.values[idx] !== undefined) {{
-      return col.values[idx];
-    }}
-  }}
-  for (const name of labelFallbackOptions) {{
-    const col = columns[name];
-    if (col && col.values[idx] !== undefined) {{
-      return col.values[idx];
-    }}
-  }}
-  return 'Point ' + idx;
-}}
-
-let mouseX = 0, mouseY = 0;
-canvas.addEventListener('mousemove', (e) => {{ mouseX = e.clientX; mouseY = e.clientY; }});
-
-function showTooltip(idx) {{
-  tooltipLabel.textContent = getLabel(idx);
-
-  let html = '';
-  for (const name of tooltipFields) {{
-    const col = columns[name];
-    if (!col) continue;
-    const val = col.values[idx];
-    html += '<div class="row"><span class="key">' + name + '</span><span class="value">' + formatValue(val) + '</span></div>';
-  }}
-  tooltipContent.innerHTML = html;
-
-  tooltip.classList.add('visible');
-  const {{ width, height }} = tooltip.getBoundingClientRect();
-  let left = mouseX + 12;
-  let top = mouseY + 12;
-  if (left + width > window.innerWidth - 8) left = mouseX - width - 12;
-  if (top + height > window.innerHeight - 8) top = mouseY - height - 12;
-  tooltip.style.left = left + 'px';
-  tooltip.style.top = top + 'px';
-}}
-
-function hideTooltip() {{
-  tooltip.classList.remove('visible');
-}}
-
-scatterplot.subscribe('pointover', (idx) => showTooltip(idx));
-scatterplot.subscribe('pointout', hideTooltip);
-
-const resize = () => {{
-  const {{ width, height }} = canvas.getBoundingClientRect();
-  scatterplot.set({{ width, height }});
-}};
-window.addEventListener('resize', resize);
-
-for (const name of layoutOptions) {{
-  const col = columns[name];
-  if (!col) continue;
-  const opt = document.createElement('option');
-  opt.value = name;
-  opt.textContent = name + ' (' + col.dtype + ')';
-  colorSelect.appendChild(opt);
-}}
-if (initialColor) {{
-  colorSelect.value = initialColor;
-}}
-colorSelect.addEventListener('change', (e) => applyColor(e.target.value));
-
-applyColor(initialColor || '');
-`;
-
-    const runtimeUrl = mkModule(runtime);
-    import(runtimeUrl);
-  </script>
-</body>
-</html>
-"""
-        return html
+        return template.render(
+            title=self.title,
+            background_color=self.background_color,
+            payload_json=payload_json,
+            runtime_regl=runtime["regl"],
+            runtime_pubsub=runtime["pubsub"],
+            runtime_scatterplot=runtime["scatterplot"],
+        )
 
     def save(self, path: str | Path) -> Path:
         """Write HTML to disk and return the path."""
-        import os 
-        if not (self.title).endswith('.html'):
-            title = self.title+'.html'
-        else: title=self.title
+        import os
+
+        if not (self.title).endswith(".html"):
+            title = self.title + ".html"
+        else:
+            title = self.title
         output_path = Path(os.path.join(path, title))
         output_path.write_text(self.render(), encoding="utf-8")
         return output_path
