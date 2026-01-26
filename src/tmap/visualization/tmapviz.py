@@ -171,6 +171,13 @@ class TmapViz:
         name: str,
         values: List[Any],
     ) -> None:
+        if isinstance(values, np.ndarray):
+            values = values.tolist()
+        else:
+            values = list(values)
+
+        if name not in self._labels_keys:
+            self._labels_keys.append(name)
         self._columns[name] = Column(name, values, "label", "label")
 
     @property
@@ -257,7 +264,7 @@ class TmapViz:
 
         layout_options = list(self._layout_keys)
         label_options = [name for name in self._labels_keys if name in self._columns]
-        initial_color = layout_options[0] if layout_options else "__none__"
+        initial_color = layout_options[0] if layout_options else None
 
         payload = {
             "title": self.title,
@@ -312,15 +319,15 @@ class TmapViz:
       top: 12px;
       right: 12px;
       padding: 8px 10px;
-      background: rgba(0, 0, 0, 0.4);
+      background: #000;
       border-radius: 6px;
       font-size: 13px;
-      color: #e0e0e0;
+      color: #fff;
       min-width: 160px;
     }}
     #controls label {{
       font-size: 12px;
-      color: #b0b0b0;
+      color: #fff;
       display: block;
       margin-bottom: 4px;
     }}
@@ -328,9 +335,13 @@ class TmapViz:
       width: 100%;
       padding: 6px 8px;
       border-radius: 4px;
-      border: 1px solid #444;
-      background: #111827;
-      color: #e0e0e0;
+      border: 1px solid #fff;
+      background: #000;
+      color: #fff;
+    }}
+    #controls select option {{
+      background: #000;
+      color: #fff;
     }}
     #tooltip {{
       position: fixed;
@@ -410,7 +421,26 @@ const columns = payload.columns || {{}};
 const colormaps = payload.colormaps || {{}};
 const layoutOptions = payload.layoutOptions || [];
 const labelOptions = payload.labelOptions || [];
-const initialColor = layoutOptions.includes(payload.initialColor) ? payload.initialColor : '__none__';
+const initialColor = layoutOptions.includes(payload.initialColor)
+  ? payload.initialColor
+  : (layoutOptions[0] || '');
+
+const labelOnlyOptions = labelOptions.filter((name) => {{
+  const col = columns[name];
+  return col && col.role === 'label';
+}});
+const labelFallbackOptions = labelOptions.filter((name) => {{
+  const col = columns[name];
+  return col && col.role !== 'label';
+}});
+const tooltipFields = [...layoutOptions];
+const tooltipSet = new Set(layoutOptions);
+for (const name of labelOnlyOptions) {{
+  if (!tooltipSet.has(name)) {{
+    tooltipSet.add(name);
+    tooltipFields.push(name);
+  }}
+}}
 
 const canvas = document.getElementById('canvas');
 const colorSelect = document.getElementById('color-select');
@@ -436,7 +466,7 @@ const zeroArray = new Array(x.length).fill(0);
 
 function applyColor(columnName) {{
   const col = columns[columnName];
-  if (!col || columnName === '__none__') {{
+  if (!col) {{
     scatterplot.set({{ colorBy: null, pointColor: payload.pointColor || '#4a9eff' }});
     scatterplot.draw({{ x, y }});
     return;
@@ -482,7 +512,13 @@ function formatValue(val) {{
 }}
 
 function getLabel(idx) {{
-  for (const name of labelOptions) {{
+  for (const name of labelOnlyOptions) {{
+    const col = columns[name];
+    if (col && col.values[idx] !== undefined) {{
+      return col.values[idx];
+    }}
+  }}
+  for (const name of labelFallbackOptions) {{
     const col = columns[name];
     if (col && col.values[idx] !== undefined) {{
       return col.values[idx];
@@ -498,7 +534,7 @@ function showTooltip(idx) {{
   tooltipLabel.textContent = getLabel(idx);
 
   let html = '';
-  for (const name of layoutOptions) {{
+  for (const name of tooltipFields) {{
     const col = columns[name];
     if (!col) continue;
     const val = col.values[idx];
@@ -529,10 +565,6 @@ const resize = () => {{
 }};
 window.addEventListener('resize', resize);
 
-const defaultOption = document.createElement('option');
-defaultOption.value = '__none__';
-defaultOption.textContent = 'None (uniform)';
-colorSelect.appendChild(defaultOption);
 for (const name of layoutOptions) {{
   const col = columns[name];
   if (!col) continue;
@@ -541,10 +573,12 @@ for (const name of layoutOptions) {{
   opt.textContent = name + ' (' + col.dtype + ')';
   colorSelect.appendChild(opt);
 }}
-colorSelect.value = initialColor && columns[initialColor] ? initialColor : '__none__';
+if (initialColor) {{
+  colorSelect.value = initialColor;
+}}
 colorSelect.addEventListener('change', (e) => applyColor(e.target.value));
 
-applyColor(colorSelect.value);
+applyColor(initialColor || '');
 `;
 
     const runtimeUrl = mkModule(runtime);
