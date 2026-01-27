@@ -52,6 +52,7 @@ packages = ["src/tmap"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/tmap/visualization/templates" = "tmap/visualization/templates"
 "src/tmap/visualization/static" = "tmap/visualization/static"
+"src/tmap/visualization/vendor" = "tmap/visualization/vendor"
 
 [tool.ruff]
 line-length = 100

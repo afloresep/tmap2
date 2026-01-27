@@ -21,6 +21,7 @@ except ImportError:
 
 COLORMAPS = list(colormaps)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+VENDOR_DIR = Path(__file__).parent / "vendor"
 
 # Default threshold for switching to binary mode (number of points)
 BINARY_THRESHOLD = 500_000
@@ -32,9 +33,30 @@ def _project_root() -> Path:
 
 
 def _load_js_sources() -> dict[str, str]:
-    """Load raw JS sources from node_modules for inline embedding."""
+    """Load raw JS sources for inline embedding.
+
+    First tries vendored files (included in package), then falls back
+    to node_modules (for development).
+    """
+    # Vendored files (preferred - included in package)
+    vendor_deps = {
+        "regl": VENDOR_DIR / "regl.min.js",
+        "scatterplot": VENDOR_DIR / "regl-scatterplot.esm.js",
+        "pubsub": VENDOR_DIR / "pub-sub-es.js",
+    }
+
+    # Check if vendored files exist
+    if all(path.exists() for path in vendor_deps.values()):
+        return {name: path.read_text(encoding="utf-8") for name, path in vendor_deps.items()}
+
+    # Fallback to node_modules (for development)
+    """TODO: remove this once develop is done
+    This is the node_modules that `npm install regl-scatterplot`
+    creates. Not really something to commit, now the vendors take care 
+    of that but in weird cases a fallback is okay
+    """
     root = _project_root()
-    deps = {
+    node_deps = {
         "regl": root / "node_modules" / "regl" / "dist" / "regl.min.js",
         "scatterplot": root
         / "node_modules"
@@ -44,15 +66,16 @@ def _load_js_sources() -> dict[str, str]:
         "pubsub": root / "node_modules" / "pub-sub-es" / "dist" / "index.js",
     }
 
-    missing = [name for name, path in deps.items() if not path.exists()]
+    missing = [name for name, path in node_deps.items() if not path.exists()]
     if missing:
         missing_list = ", ".join(missing)
         raise RuntimeError(
             f"Missing JS dependencies: {missing_list}. "
-            "Run `npm install regl-scatterplot` in the repo root to fetch node_modules."
+            "Vendored files not found and node_modules unavailable. "
+            "This is likely a packaging issue - please reinstall the package."
         )
 
-    return {name: path.read_text(encoding="utf-8") for name, path in deps.items()}
+    return {name: path.read_text(encoding="utf-8") for name, path in node_deps.items()}
 
 
 def _b64(text: str) -> str:
@@ -435,7 +458,6 @@ class TmapViz:
         # Render using Jinja2 template
         env = _get_jinja_env()
         template = env.get_template(template_name)
-        print('template: ', template)
 
         return template.render(
             title=self.title,
