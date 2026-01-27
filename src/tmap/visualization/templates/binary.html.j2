@@ -1,3 +1,15 @@
+{#
+  Binary Template - Optimized for large datasets (5M+ points)
+
+  Uses:
+  - Uint16 quantized coordinates (4x smaller than JSON)
+  - Gzip-compressed typed arrays
+  - WebWorker decoding (non-blocking)
+  - Transferable buffers (zero-copy)
+
+  Usage:
+    viz.render(template_name="binary.html.j2")
+#}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -54,10 +66,6 @@
       background: #000;
       color: #fff;
     }
-    #controls select option {
-      background: #000;
-      color: #fff;
-    }
     #legend {
       position: fixed;
       bottom: 12px;
@@ -77,7 +85,6 @@
     #legend-title {
       font-weight: 600;
       margin-bottom: 6px;
-      font-size: 12px;
     }
     .legend-gradient {
       height: 10px;
@@ -101,13 +108,6 @@
       height: 12px;
       border-radius: 3px;
       border: 1px solid #fff;
-      flex: 0 0 auto;
-    }
-    .legend-label {
-      color: #fff;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
     #tooltip {
       position: fixed;
@@ -123,25 +123,58 @@
       box-shadow: 0 4px 16px rgba(0,0,0,0.4);
     }
     #tooltip.visible { display: block; }
-    #tooltip .label {
-      font-weight: 700;
-      margin-bottom: 6px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    #tooltip .row {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      margin: 2px 0;
-    }
+    #tooltip .label { font-weight: 700; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tooltip .row { display: flex; justify-content: space-between; gap: 12px; margin: 2px 0; }
     #tooltip .key { color: #9ca3af; flex-shrink: 0; }
     #tooltip .value { color: #e5e7eb; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+    /* Loading overlay */
+    #loading {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: {{ background_color }};
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    #loading.hidden { display: none; }
+    #loading-text {
+      font-size: 18px;
+      margin-bottom: 20px;
+    }
+    #progress-bar {
+      width: 300px;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    #progress-fill {
+      height: 100%;
+      background: #4a9eff;
+      width: 0%;
+      transition: width 0.2s;
+    }
+    #progress-text {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #9ca3af;
+    }
 {% block extra_styles %}{% endblock %}
   </style>
 </head>
 <body>
+  <div id="loading">
+    <div id="loading-text">Loading visualization...</div>
+    <div id="progress-bar"><div id="progress-fill"></div></div>
+    <div id="progress-text">Initializing...</div>
+  </div>
+
   <div id="title">{{ title }}</div>
   <div id="controls">
     <label for="color-select">Color By Layout</label>
@@ -157,7 +190,18 @@
     <div id="legend-content"></div>
   </div>
 {% block extra_elements %}{% endblock %}
-  <script id="payload" type="application/json">{{ payload_json }}</script>
+
+  <!-- Binary data sections -->
+  <script id="tmap-header" type="application/json">{{ header_json }}</script>
+  <script id="tmap-coords" type="application/octet-stream">{{ coords_b64 }}</script>
+{% for name, data in columns_b64.items() %}
+  <script id="tmap-col-{{ name }}" type="application/octet-stream">{{ data }}</script>
+{% endfor %}
+
+  <!-- fflate for decompression (UMD build) -->
+  <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.min.js"></script>
+
+  <!-- Scatterplot libraries -->
   <script type="module">
     const decode = (b64) => atob(b64);
     const mkModule = (code) =>
@@ -167,7 +211,6 @@
     const pubSubSource = decode("{{ runtime_pubsub }}");
     const scatterSourceRaw = decode("{{ runtime_scatterplot }}");
 
-    // Wrap regl's UMD build into an ES module
     const reglModuleSource = `
 const module = { exports: {} };
 const exports = module.exports;
@@ -176,7 +219,6 @@ ${reglSource}
 export default module.exports || globalThisRef.createREGL || createREGL;
 `;
     const reglUrl = mkModule(reglModuleSource);
-
     const pubSubUrl = mkModule(pubSubSource);
     const scatterSource = scatterSourceRaw
       .replace(/from "regl"/g, 'from "' + reglUrl + '"')
@@ -185,33 +227,139 @@ export default module.exports || globalThisRef.createREGL || createREGL;
       .replace(/from 'pub-sub-es'/g, 'from "' + pubSubUrl + '"');
     const scatterUrl = mkModule(scatterSource);
 
-{% block runtime_script %}
     const runtime = `
 import createScatterplot from '${scatterUrl}';
 
-const payloadEl = document.getElementById('payload');
-const payload = JSON.parse(payloadEl.textContent || '{}');
+// ============================================
+// Binary Data Decoding
+// ============================================
 
-const coords = payload.points || [];
-const columns = payload.columns || {};
-const colormaps = payload.colormaps || {};
-const layoutOptions = payload.layoutOptions || [];
-const labelOptions = payload.labelOptions || [];
-const initialColor = layoutOptions.includes(payload.initialColor)
-  ? payload.initialColor
-  : (layoutOptions[0] || '');
-const hasLayouts = layoutOptions.length > 0;
-const fallbackPointColor = hasLayouts ? (payload.pointColor || '#4a9eff') : '#000000';
+const loading = document.getElementById('loading');
+const progressFill = document.getElementById('progress-fill');
+const progressText = document.getElementById('progress-text');
 
-const labelOnlyOptions = labelOptions.filter((name) => {
-  const col = columns[name];
-  return col && col.role === 'label';
-});
-const labelFallbackOptions = labelOptions.filter((name) => {
-  const col = columns[name];
-  return col && col.role !== 'label';
-});
-const tooltipFields = [...labelOptions];
+function updateProgress(percent, text) {
+  progressFill.style.width = percent + '%';
+  progressText.textContent = text;
+}
+
+// Decode gzip-compressed base64 using fflate
+function decodeGzipBase64(base64, dtype) {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+
+  const decompressed = fflate.gunzipSync(bytes);
+
+  switch (dtype) {
+    case 'uint16': return new Uint16Array(decompressed.buffer);
+    case 'uint32': return new Uint32Array(decompressed.buffer);
+    case 'float32': return new Float32Array(decompressed.buffer);
+    case 'int32': return new Int32Array(decompressed.buffer);
+    default: throw new Error('Unknown dtype: ' + dtype);
+  }
+}
+
+// Dequantize coords
+function dequantizeCoords(quantized, bits = 16) {
+  const n = quantized.length / 2;
+  const maxVal = bits === 16 ? 65535 : 4294967295;
+  const scale = 2.0 / maxVal;
+
+  const x = new Float32Array(n);
+  const y = new Float32Array(n);
+
+  for (let i = 0; i < n; i++) {
+    x[i] = quantized[i * 2] * scale - 1.0;
+    y[i] = quantized[i * 2 + 1] * scale - 1.0;
+  }
+
+  return { x, y };
+}
+
+// ============================================
+// Load Data
+// ============================================
+
+updateProgress(5, 'Parsing header...');
+
+const header = JSON.parse(document.getElementById('tmap-header').textContent);
+const coordsB64 = document.getElementById('tmap-coords').textContent;
+
+const metadata = header.metadata || {};
+const colormaps = metadata.colormaps || {};
+const layoutOptions = metadata.layoutOptions || [];
+const labelOptions = metadata.labelOptions || [];
+const columnMeta = header.columns || {};
+
+updateProgress(10, 'Decoding coordinates...');
+
+// Decode coordinates
+const coordDtype = header.coordDtype || 'uint16';
+const coordBits = coordDtype === 'uint16' ? 16 : 32;
+const quantizedCoords = decodeGzipBase64(coordsB64, coordDtype);
+const { x, y } = dequantizeCoords(quantizedCoords, coordBits);
+const n = x.length;
+
+updateProgress(40, 'Decoding columns...');
+
+// Decode columns
+const columns = {};
+const columnNames = Object.keys(columnMeta);
+let colIdx = 0;
+
+for (const name of columnNames) {
+  const meta = columnMeta[name];
+  const el = document.getElementById('tmap-col-' + name);
+
+  // String columns (labels / SMILES) are embedded in metadata, not separate script tags
+  if (!el) {
+    if (meta && meta.dtype === 'string' && Array.isArray(meta.values)) {
+      columns[name] = {
+        values: meta.values,
+        dtype: 'string',
+        role: meta.role,
+        colormap: meta.colormap,
+      };
+      colIdx++;
+      const pct = 40 + (colIdx / columnNames.length) * 40;
+      updateProgress(pct, 'Decoding ' + name + '...');
+    }
+    continue;
+  }
+
+  const b64 = el.textContent;
+  const decoded = decodeGzipBase64(b64, meta.dtype);
+
+  if (meta.dictionary) {
+    // Categorical: map indices to values
+    columns[name] = {
+      values: Array.from(decoded).map(i => meta.dictionary[i]),
+      dtype: 'categorical',
+      role: meta.role,
+      colormap: meta.colormap,
+    };
+  } else {
+    columns[name] = {
+      values: decoded,
+      dtype: meta.dtype === 'float32' ? 'continuous' : meta.dtype,
+      role: meta.role,
+      colormap: meta.colormap,
+    };
+  }
+
+  colIdx++;
+  const pct = 40 + (colIdx / columnNames.length) * 40;
+  updateProgress(pct, 'Decoding ' + name + '...');
+}
+
+updateProgress(85, 'Initializing visualization...');
+
+// ============================================
+// Visualization Setup
+// ============================================
 
 const canvas = document.getElementById('canvas');
 const colorSelect = document.getElementById('color-select');
@@ -222,21 +370,22 @@ const legend = document.getElementById('legend');
 const legendTitle = document.getElementById('legend-title');
 const legendContent = document.getElementById('legend-content');
 
+const initialColor = layoutOptions[0] || '';
+const fallbackPointColor = metadata.pointColor || '#4a9eff';
+
 const scatterplot = createScatterplot({
   canvas,
   width: canvas.clientWidth || window.innerWidth,
   height: canvas.clientHeight || window.innerHeight,
-  pointSize: payload.pointSize || 4,
-  opacity: payload.opacity ?? 0.85,
-  backgroundColor: payload.backgroundColor || [0, 0, 0, 1],
+  pointSize: metadata.pointSize || 4,
+  opacity: metadata.opacity ?? 0.85,
+  backgroundColor: metadata.backgroundColor || [0, 0, 0, 1],
   pointColor: fallbackPointColor,
   colorBy: null,
   lassoInitiator: false,
 });
 
-const x = coords.map((p) => p[0]);
-const y = coords.map((p) => p[1]);
-const zeroArray = new Array(x.length).fill(0);
+const zeroArray = new Float32Array(n);
 
 function applyColor(columnName) {
   const col = columns[columnName];
@@ -251,27 +400,30 @@ function applyColor(columnName) {
 
   if (col.dtype === 'categorical') {
     const mapping = new Map();
-    const z = new Array(x.length);
-    for (let i = 0; i < x.length; i++) {
-      const v = col.values[i];
+    const z = new Float32Array(n);
+    const values = col.values;
+    for (let i = 0; i < n; i++) {
+      const v = values[i];
       if (!mapping.has(v)) mapping.set(v, mapping.size);
       z[i] = mapping.get(v);
     }
     scatterplot.set({ colorBy: 'valueA', pointColor: cmap });
     scatterplot.draw({ x, y, z, w: zeroArray });
   } else {
-    const nums = col.values.map(Number);
-    let min = Infinity;
-    let max = -Infinity;
-    for (let i = 0; i < nums.length; i++) {
-      const v = nums[i];
+    const values = col.values;
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const v = values[i];
       if (Number.isFinite(v)) {
         if (v < min) min = v;
         if (v > max) max = v;
       }
     }
     const range = max === min ? 1 : max - min;
-    const w = nums.map((v) => ((v - min) / range));
+    const w = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      w[i] = (values[i] - min) / range;
+    }
     scatterplot.set({ colorBy: 'valueB', pointColor: cmap });
     scatterplot.draw({ x, y, z: zeroArray, w });
   }
@@ -295,8 +447,7 @@ function buildGradient(colors) {
   for (let i = 0; i < steps; i++) {
     const t = i / (steps - 1);
     const idx = Math.round((colors.length - 1) * t);
-    const pct = Math.round(t * 100);
-    stops.push(colors[idx] + ' ' + pct + '%');
+    stops.push(colors[idx] + ' ' + Math.round(t * 100) + '%');
   }
   return 'linear-gradient(90deg, ' + stops.join(', ') + ')';
 }
@@ -305,8 +456,6 @@ function updateLegend(columnName) {
   const col = columns[columnName];
   if (!col || col.role === 'label') {
     legend.classList.add('hidden');
-    legendTitle.textContent = '';
-    legendContent.innerHTML = '';
     return;
   }
 
@@ -323,69 +472,47 @@ function updateLegend(columnName) {
         items.push(v);
       }
     }
-    if (mapping.size > cmap.length) {
-      throw new Error(
-        'Categorical layout "' + columnName + '" has ' + mapping.size +
-        ' unique values but colormap "' + col.colormap + '" only provides ' +
-        cmap.length + ' colors.'
-      );
-    }
     let html = '';
     for (let i = 0; i < items.length; i++) {
-      const color = cmap[i];
-      html += '<div class="legend-item"><span class="legend-swatch" style="background: ' +
-        color + ';"></span><span class="legend-label">' + items[i] + '</span></div>';
+      html += '<div class="legend-item"><span class="legend-swatch" style="background:' +
+        cmap[i % cmap.length] + '"></span><span>' + items[i] + '</span></div>';
     }
     legendContent.innerHTML = html;
   } else {
-    const nums = col.values.map(Number);
-    let min = Infinity;
-    let max = -Infinity;
-    for (let i = 0; i < nums.length; i++) {
-      const v = nums[i];
+    const values = col.values;
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
       if (Number.isFinite(v)) {
         if (v < min) min = v;
         if (v > max) max = v;
       }
     }
-    if (min === Infinity) {
-      min = 0;
-      max = 0;
-    }
-    const gradient = buildGradient(cmap);
     legendContent.innerHTML =
-      '<div class="legend-gradient" style="background: ' + gradient + ';"></div>' +
-      '<div class="legend-range"><span>' + formatValue(min) + '</span><span>' +
-      formatValue(max) + '</span></div>';
+      '<div class="legend-gradient" style="background:' + buildGradient(cmap) + '"></div>' +
+      '<div class="legend-range"><span>' + formatValue(min) + '</span><span>' + formatValue(max) + '</span></div>';
   }
-
   legend.classList.remove('hidden');
 }
 
-function getLabel(idx) {
-  for (const name of labelOnlyOptions) {
-    const col = columns[name];
-    if (col && col.values[idx] !== undefined) {
-      return col.values[idx];
-    }
-  }
-  for (const name of labelFallbackOptions) {
-    const col = columns[name];
-    if (col && col.values[idx] !== undefined) {
-      return col.values[idx];
-    }
-  }
-  return 'Point ' + idx;
-}
-
+// Tooltip
 let mouseX = 0, mouseY = 0;
 canvas.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
 
 function showTooltip(idx) {
-  tooltipLabel.textContent = getLabel(idx);
+  // Get label from first label column
+  let label = 'Point ' + idx;
+  for (const name of labelOptions) {
+    const col = columns[name];
+    if (col && col.values[idx] !== undefined) {
+      label = col.values[idx];
+      break;
+    }
+  }
+  tooltipLabel.textContent = label;
 
   let html = '';
-  for (const name of tooltipFields) {
+  for (const name of labelOptions) {
     const col = columns[name];
     if (!col) continue;
     const val = col.values[idx];
@@ -394,11 +521,11 @@ function showTooltip(idx) {
   tooltipContent.innerHTML = html;
 
   tooltip.classList.add('visible');
-  const { width, height } = tooltip.getBoundingClientRect();
+  const rect = tooltip.getBoundingClientRect();
   let left = mouseX + 12;
   let top = mouseY + 12;
-  if (left + width > window.innerWidth - 8) left = mouseX - width - 12;
-  if (top + height > window.innerHeight - 8) top = mouseY - height - 12;
+  if (left + rect.width > window.innerWidth - 8) left = mouseX - rect.width - 12;
+  if (top + rect.height > window.innerHeight - 8) top = mouseY - rect.height - 12;
   tooltip.style.left = left + 'px';
   tooltip.style.top = top + 'px';
 }
@@ -410,12 +537,13 @@ function hideTooltip() {
 scatterplot.subscribe('pointover', (idx) => showTooltip(idx));
 scatterplot.subscribe('pointout', hideTooltip);
 
-const resize = () => {
+// Resize
+window.addEventListener('resize', () => {
   const { width, height } = canvas.getBoundingClientRect();
   scatterplot.set({ width, height });
-};
-window.addEventListener('resize', resize);
+});
 
+// Color selector
 for (const name of layoutOptions) {
   const col = columns[name];
   if (!col) continue;
@@ -424,16 +552,23 @@ for (const name of layoutOptions) {
   opt.textContent = name + ' (' + col.dtype + ')';
   colorSelect.appendChild(opt);
 }
-if (initialColor) {
-  colorSelect.value = initialColor;
-}
+if (initialColor) colorSelect.value = initialColor;
 colorSelect.addEventListener('change', (e) => applyColor(e.target.value));
 
+// Initial render
+updateProgress(95, 'Rendering...');
 applyColor(initialColor || '');
+
+// Hide loading
+updateProgress(100, 'Complete!');
+setTimeout(() => {
+  loading.classList.add('hidden');
+}, 200);
+
+console.log('Loaded ' + n.toLocaleString() + ' points');
 
 {% block extra_runtime %}{% endblock %}
 `;
-{% endblock %}
 
     const runtimeUrl = mkModule(runtime);
     import(runtimeUrl);

@@ -1,15 +1,12 @@
 {#
-  SMILES Template - Extends base template to add molecular structure rendering
-
-  This template adds:
-  - SmilesDrawer integration for rendering SMILES strings
-  - Molecular structure preview in tooltips
+  Binary SMILES Template - Extends binary template to add SmilesDrawer rendering
 
   Usage:
     viz.add_smiles("SMILES", smiles_list)
-    viz.render(template_name="smiles.html.j2")
+    viz.render_binary(template_name="smiles_binary.html.j2")
+    or let TmapViz auto-pick when a SMILES column exists.
 #}
-{% extends "base.html.j2" %}
+{% extends "binary.html.j2" %}
 
 {% block extra_styles %}
     #tooltip .structure-container {
@@ -36,8 +33,8 @@
 {% endblock %}
 
 {% block extra_runtime %}
-// SMILES rendering extension
-const smilesColumn = payload.smilesColumn;
+// SMILES rendering extension (binary mode)
+const smilesColumn = metadata.smilesColumn;
 
 if (smilesColumn && columns[smilesColumn]) {
   // Create structure container in tooltip
@@ -46,45 +43,38 @@ if (smilesColumn && columns[smilesColumn]) {
   structureContainer.id = 'structure-container';
   tooltip.appendChild(structureContainer);
 
-  // Create SVG element for SmilesDrawer
   const structureSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   structureSvg.id = 'structure-svg';
   structureContainer.appendChild(structureSvg);
 
-  // Support both SmiDrawer (wrapper) and SmilesDrawer (core) globals
   const g = typeof window !== 'undefined' ? window : globalThis;
   const SmiDrawerCtor = g.SmiDrawer;
   const SmilesDrawerLib = g.SmilesDrawer;
 
+  const drawerOptions = { width: 240, height: 200, bondThickness: 1.0, compactDrawing: false };
+
   let drawer = null;
   let drawSmiles = null;
-
-  const drawerOptions = {
-    width: 240,
-    height: 200,
-    bondThickness: 1.0,
-    compactDrawing: false,
-  };
 
   if (SmiDrawerCtor) {
     drawer = new SmiDrawerCtor(drawerOptions);
     drawSmiles = (smiles) => drawer.draw(smiles, '#structure-svg', 'light');
   } else if (SmilesDrawerLib && SmilesDrawerLib.Drawer && SmilesDrawerLib.parse) {
     drawer = new SmilesDrawerLib.Drawer(drawerOptions);
-    drawSmiles = (smiles) => SmilesDrawerLib.parse(
-      smiles,
-      (tree) => drawer.draw(tree, 'structure-svg', 'light', false),
-      (err) => {
-        console.warn('Failed to parse SMILES:', smiles, err);
-        structureContainer.classList.add('hidden');
-      },
-    );
+    drawSmiles = (smiles) =>
+      SmilesDrawerLib.parse(
+        smiles,
+        (tree) => drawer.draw(tree, 'structure-svg', 'light', false),
+        (err) => {
+          console.warn('Failed to parse SMILES:', smiles, err);
+          structureContainer.classList.add('hidden');
+        },
+      );
   }
 
   if (!drawSmiles) {
-    console.error('SmilesDrawer not loaded! Tried window.SmiDrawer and window.SmilesDrawer');
+    console.error('SmilesDrawer not loaded! Tried SmiDrawer and SmilesDrawer');
   } else {
-    // Override showTooltip to add molecule rendering
     const originalShowTooltip = showTooltip;
     showTooltip = function(idx) {
       originalShowTooltip(idx);
@@ -96,25 +86,22 @@ if (smilesColumn && columns[smilesColumn]) {
       }
 
       const smiles = smilesCol.values[idx];
-      if (!smiles || typeof smiles !== 'string' || smiles.trim() === '') {
+      if (!smiles || typeof smiles !== 'string' || !smiles.trim()) {
         structureContainer.classList.add('hidden');
         return;
       }
 
       structureContainer.classList.remove('hidden');
-
-      // Clear previous drawing
       structureSvg.innerHTML = '';
 
       try {
         drawSmiles(smiles);
-      } catch (e) {
-        console.warn('Failed to render SMILES:', smiles, e);
+      } catch (err) {
+        console.warn('Failed to render SMILES:', smiles, err);
         structureContainer.classList.add('hidden');
       }
     };
 
-    // Override hideTooltip to clean up
     const originalHideTooltip = hideTooltip;
     hideTooltip = function() {
       originalHideTooltip();
@@ -124,6 +111,6 @@ if (smilesColumn && columns[smilesColumn]) {
     console.log('SMILES rendering enabled for column:', smilesColumn);
   }
 } else {
-  console.log('SMILES template loaded but no SMILES column specified');
+  console.log('SMILES binary template loaded but no SMILES column specified');
 }
 {% endblock %}

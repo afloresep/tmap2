@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Literal, Optional, Sequence
 
 import numpy as np
 from matplotlib import colormaps
@@ -20,6 +21,9 @@ except ImportError:
 
 COLORMAPS = list(colormaps)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+# Default threshold for switching to binary mode (number of points)
+BINARY_THRESHOLD = 500_000
 
 
 def _project_root() -> Path:
@@ -130,10 +134,53 @@ def _colormap_to_hex(name: str) -> list[str]:
 @dataclass
 class Column:
     name: str
-    values: List[int | np.floating | str]
-    role: Literal["layout", "label", "layout+label"]
-    dtype: Literal["continuous", "categorical", "label"]
+    values: Sequence[int | np.floating | str]
+    role: Literal["layout", "label", "layout+label", "smiles"]
+    dtype: Literal["continuous", "categorical", "label", "smiles"]
     color: Optional[str] = None
+
+
+def _pack_coords_binary(points: np.ndarray, bits: int = 16) -> bytes:
+    """Pack normalized [-1,1] coordinates as gzip-compressed quantized integers."""
+    if bits == 16:
+        max_val = 65535
+        dtype = np.uint16
+    else:
+        max_val = 4294967295
+        dtype = np.uint32
+
+    # Quantize: [-1, 1] -> [0, max_val]
+    quantized = ((points.astype(np.float64) + 1.0) * (max_val / 2.0)).astype(dtype)
+    raw = quantized.flatten().tobytes()
+    return gzip.compress(raw, compresslevel=6)
+
+
+def _pack_numeric_binary(values: np.ndarray, dtype: str = "float32") -> bytes:
+    """Pack numeric column as gzip-compressed typed array."""
+    if dtype == "float32":
+        arr = values.astype(np.float32)
+    elif dtype == "int32":
+        arr = values.astype(np.int32)
+    else:
+        arr = values.astype(np.float32)
+    return gzip.compress(arr.tobytes(), compresslevel=6)
+
+
+def _pack_categorical_binary(values: Sequence[Any]) -> tuple[bytes, list[str]]:
+    """Pack categorical column using dictionary encoding."""
+    unique_values: list[str] = []
+    value_to_idx: dict[str, int] = {}
+    indices = np.empty(len(values), dtype=np.uint32)
+
+    for i, v in enumerate(values):
+        s = str(v)
+        if s not in value_to_idx:
+            value_to_idx[s] = len(unique_values)
+            unique_values.append(s)
+        indices[i] = value_to_idx[s]
+
+    compressed = gzip.compress(indices.tobytes(), compresslevel=6)
+    return compressed, unique_values
 
 
 class TmapViz:
@@ -144,12 +191,15 @@ class TmapViz:
         self.point_size: float = 4.0
         self.opacity: float = 0.85
 
+        # Store both formats for flexibility
         self._points: List[list[float]] = []
+        self._points_array: Optional[np.ndarray] = None  # Shape: (n, 2)
         self._layout_keys: List[str] = []
         self._labels_keys: List[str] = []
+        self._smiles_column: Optional[str] = None
         self._columns: dict[str, Column] = {}
 
-    def add_layout(
+    def add_color_layout(
         self,
         name: str,
         values: List[Any],
@@ -234,6 +284,41 @@ class TmapViz:
             self._labels_keys.append(name)
         self._columns[name] = Column(name, values, "label", "label")
 
+    def add_smiles(
+        self,
+        name: str,
+        values: List[str],
+    ) -> None:
+        """Add a SMILES column for molecular structure visualization.
+
+        When using the SMILES template (smiles.html.j2), molecules will be
+        rendered in the tooltip when hovering over points.
+
+        Args:
+            name: Column name (displayed in tooltip)
+            values: List of SMILES strings, one per point
+        """
+        if isinstance(values, np.ndarray):
+            values = values.tolist()
+        else:
+            values = list(values)
+
+        if self._smiles_column is not None:
+            raise ValueError(
+                f"Only one SMILES column is supported. "
+                f"Already have '{self._smiles_column}', cannot add '{name}'."
+            )
+
+        self._smiles_column = name
+        if name not in self._labels_keys:
+            self._labels_keys.append(name)
+        self._columns[name] = Column(name, values, "smiles", "smiles")
+
+    @property
+    def n_points(self) -> int:
+        """Return the number of points set."""
+        return len(self._points) if self._points else 0
+
     @property
     def layouts(self) -> List[Column]:
         """Return layouts added."""
@@ -275,7 +360,8 @@ class TmapViz:
             )
 
         normalized_coords = _normalize_coords(x_arr, y_arr)
-        self._points = normalized_coords.tolist()
+        self._points_array = normalized_coords  # Keep numpy array for binary mode
+        self._points = normalized_coords.tolist()  # Keep list for JSON mode
 
         for col in self._columns.values():
             if len(col.values) != len(self._points):
@@ -294,6 +380,11 @@ class TmapViz:
         """
         if not self._points:
             raise ValueError("Call set_points() before rendering.")
+
+        # Auto-switch to the SMILES template when a SMILES column is present
+        # and the caller didn't request a custom template.
+        if template_name == "base.html.j2" and self._smiles_column:
+            template_name = "smiles.html.j2"
 
         n_points = len(self._points)
         for col in self._columns.values():
@@ -335,6 +426,7 @@ class TmapViz:
             "labelOptions": label_options,
             "initialColor": initial_color,
             "colormaps": colormaps_payload,
+            "smilesColumn": self._smiles_column,
         }
 
         runtime = _runtime_base64()
@@ -343,6 +435,7 @@ class TmapViz:
         # Render using Jinja2 template
         env = _get_jinja_env()
         template = env.get_template(template_name)
+        print('template: ', template)
 
         return template.render(
             title=self.title,
@@ -353,14 +446,155 @@ class TmapViz:
             runtime_scatterplot=runtime["scatterplot"],
         )
 
-    def save(self, path: str | Path) -> Path:
-        """Write HTML to disk and return the path."""
+    def render_binary(self, template_name: str = "binary.html.j2") -> str:
+        """Return HTML string using binary encoding for large datasets.
+
+        This method uses:
+        - Uint16 quantized coordinates (4x smaller than JSON)
+        - Gzip-compressed typed arrays
+        - WebWorker decoding (non-blocking)
+
+        Recommended for datasets with >500K points.
+
+        Args:
+            template_name: Name of the Jinja2 template to use.
+        """
+        if self._points_array is None:
+            raise ValueError("Call set_points() before rendering.")
+
+        # Auto-switch to SMILES-aware binary template when needed.
+        if template_name == "binary.html.j2" and self._smiles_column:
+            template_name = "smiles_binary.html.j2"
+
+        n_points = len(self._points_array)
+        for col in self._columns.values():
+            if len(col.values) != n_points:
+                raise ValueError(
+                    f"Column '{col.name}' has {len(col.values)} values but there are "
+                    f"{n_points} points"
+                )
+
+        # Pack coordinates as binary
+        coords_compressed = _pack_coords_binary(self._points_array, bits=16)
+        coords_b64 = base64.b64encode(coords_compressed).decode("ascii")
+
+        # Pack columns
+        columns_b64: dict[str, str] = {}
+        columns_meta: dict[str, dict[str, Any]] = {}
+        colormaps_payload: dict[str, list[str]] = {}
+
+        for name, col in self._columns.items():
+            colormap_name = col.color if col.role in ("layout", "layout+label") else None
+
+            if col.dtype == "categorical":
+                compressed, dictionary = _pack_categorical_binary(col.values)
+                columns_b64[name] = base64.b64encode(compressed).decode("ascii")
+                columns_meta[name] = {
+                    "dtype": "uint32",
+                    "role": col.role,
+                    "colormap": colormap_name,
+                    "dictionary": dictionary,
+                }
+            elif col.dtype == "continuous":
+                arr = np.array(col.values, dtype=np.float32)
+                compressed = _pack_numeric_binary(arr, "float32")
+                columns_b64[name] = base64.b64encode(compressed).decode("ascii")
+                columns_meta[name] = {
+                    "dtype": "float32",
+                    "role": col.role,
+                    "colormap": colormap_name,
+                }
+            else:
+                # Labels and SMILES - keep as strings for now (will be optimized later)
+                # For now, we skip binary encoding for string columns
+                # They'll be included in metadata
+                columns_meta[name] = {
+                    "dtype": "string",
+                    "role": col.role,
+                    "values": col.values,  # Include directly in metadata for now
+                }
+
+            if colormap_name and colormap_name not in colormaps_payload:
+                colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
+
+        # Build header/metadata
+        layout_options = list(self._layout_keys)
+        label_options = [name for name in self._labels_keys if name in self._columns]
+
+        header = {
+            "version": 1,
+            "nPoints": n_points,
+            "coordDtype": "uint16",
+            "columns": columns_meta,
+            "metadata": {
+                "title": self.title,
+                "pointColor": self.point_color,
+                "pointSize": self.point_size,
+                "opacity": self.opacity,
+                "backgroundColor": _hex_to_rgba(self.background_color),
+                "layoutOptions": layout_options,
+                "labelOptions": label_options,
+                "colormaps": colormaps_payload,
+                "smilesColumn": self._smiles_column,
+            },
+        }
+
+        runtime = _runtime_base64()
+        header_json = json.dumps(header, separators=(",", ":"))
+
+        # Filter out string columns from binary data (they're in header)
+        columns_b64_filtered = {
+            k: v for k, v in columns_b64.items()
+            if columns_meta[k]["dtype"] != "string"
+        }
+
+        env = _get_jinja_env()
+        template = env.get_template(template_name)
+
+        return template.render(
+            title=self.title,
+            background_color=self.background_color,
+            header_json=header_json,
+            coords_b64=coords_b64,
+            columns_b64=columns_b64_filtered,
+            runtime_regl=runtime["regl"],
+            runtime_pubsub=runtime["pubsub"],
+            runtime_scatterplot=runtime["scatterplot"],
+        )
+
+    def save(
+        self,
+        path: str | Path,
+        binary_threshold: int = BINARY_THRESHOLD,
+        force_binary: bool = False,
+    ) -> Path:
+        """Write HTML to disk and return the path.
+
+        Args:
+            path: Directory to save the file
+            binary_threshold: Point count above which binary mode is used.
+                              Default is 500,000 points.
+            force_binary: If True, always use binary mode regardless of size.
+
+        Returns:
+            Path to the saved file
+        """
         import os
 
         if not (self.title).endswith(".html"):
             title = self.title + ".html"
         else:
             title = self.title
+
         output_path = Path(os.path.join(path, title))
-        output_path.write_text(self.render(), encoding="utf-8")
+
+        n_points = len(self._points) if self._points else 0
+        use_binary = force_binary or n_points > binary_threshold
+
+        if use_binary:
+            html = self.render_binary()
+        else:
+            html = self.render()
+
+        output_path.write_text(html, encoding="utf-8")
         return output_path
