@@ -26,6 +26,24 @@
       width: 240px;
       height: 200px;
     }
+    /* Card structure preview */
+    .card .card-structure-container {
+      display: flex;
+      width: 216px;
+      height: 200px;
+      background: #fff;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      align-items: center;
+      justify-content: center;
+    }
+    .card .card-structure-container.hidden {
+      display: none;
+    }
+    .card #card-structure-svg {
+      width: 216px;
+      height: 200px;
+    }
 {% endblock %}
 
 {% block extra_elements %}
@@ -109,6 +127,52 @@ if (smilesColumn && columns[smilesColumn]) {
     };
 
     console.log('SMILES rendering enabled for column:', smilesColumn);
+
+    // Card structure rendering
+    cardStack.addEventListener('cardrendered', (e) => {
+      const { idx, smilesValue } = e.detail;
+      const cardStructure = document.getElementById('card-structure');
+      if (!cardStructure) return;
+
+      if (!smilesValue || typeof smilesValue !== 'string' || !smilesValue.trim()) {
+        cardStructure.classList.add('hidden');
+        return;
+      }
+
+      // Create SVG if not exists
+      let cardSvg = document.getElementById('card-structure-svg');
+      if (!cardSvg) {
+        cardSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        cardSvg.id = 'card-structure-svg';
+        cardStructure.appendChild(cardSvg);
+      }
+
+      cardStructure.classList.remove('hidden');
+      cardSvg.innerHTML = '';
+
+      // Create a separate drawer for cards with matching dimensions
+      const cardDrawerOptions = { width: 216, height: 200, bondThickness: 1.0, compactDrawing: false };
+
+      try {
+        if (SmiDrawerCtor) {
+          const cardDrawer = new SmiDrawerCtor(cardDrawerOptions);
+          cardDrawer.draw(smilesValue, '#card-structure-svg', 'light');
+        } else if (SmilesDrawerLib && SmilesDrawerLib.Drawer && SmilesDrawerLib.parse) {
+          const cardDrawer = new SmilesDrawerLib.Drawer(cardDrawerOptions);
+          SmilesDrawerLib.parse(
+            smilesValue,
+            (tree) => cardDrawer.draw(tree, 'card-structure-svg', 'light', false),
+            (err) => {
+              console.warn('Failed to parse SMILES for card:', smilesValue, err);
+              cardStructure.classList.add('hidden');
+            },
+          );
+        }
+      } catch (err) {
+        console.warn('Failed to render SMILES in card:', smilesValue, err);
+        cardStructure.classList.add('hidden');
+      }
+    });
   }
 } else {
   console.log('SMILES binary template loaded but no SMILES column specified');

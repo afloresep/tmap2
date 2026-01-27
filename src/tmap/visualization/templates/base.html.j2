@@ -138,6 +138,210 @@
     }
     #tooltip .key { color: #9ca3af; flex-shrink: 0; }
     #tooltip .value { color: #e5e7eb; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+    /* Card stack - pinned cards from single clicks */
+    #card-stack {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      z-index: 100;
+    }
+    #card-stack.hidden { display: none; }
+    .card {
+      width: 240px;
+      background: rgba(0, 0, 0, 0.9);
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 12px;
+      color: #e0e0e0;
+      font-size: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #333;
+    }
+    .card-nav {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #9ca3af;
+    }
+    .card-nav button {
+      background: #333;
+      border: 1px solid #555;
+      color: #fff;
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      padding: 0;
+    }
+    .card-nav button:hover { background: #444; }
+    .card-nav button:disabled { opacity: 0.3; cursor: not-allowed; }
+    .card-close {
+      background: transparent;
+      border: none;
+      color: #666;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0 0 0 8px;
+      line-height: 1;
+    }
+    .card-close:hover { color: #fff; }
+    .card-minimize {
+      background: transparent;
+      border: none;
+      color: #666;
+      font-size: 14px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+    .card-minimize:hover { color: #fff; }
+    .card.minimized .card-body { display: none; }
+    .card.minimized { padding: 8px 12px; }
+    .card.minimized .card-header { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+    .card-body { }
+    .card-label {
+      font-weight: 700;
+      margin-bottom: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .card-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0;
+    }
+    .card-row .key { color: #9ca3af; flex-shrink: 0; font-size: 11px; }
+    .card-row .value {
+      color: #e5e7eb;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+      flex: 1;
+      text-align: right;
+    }
+    .card-copy-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0;
+      background: #1a1a1a;
+      padding: 6px 8px;
+      border-radius: 4px;
+    }
+    .card-copy-row .key { color: #9ca3af; flex-shrink: 0; font-size: 11px; }
+    .card-copy-row .value {
+      color: #e5e7eb;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+      flex: 1;
+      font-family: monospace;
+      font-size: 11px;
+    }
+    .card-copy-btn {
+      background: #4a9eff;
+      border: none;
+      color: #fff;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 10px;
+      flex-shrink: 0;
+      font-weight: 500;
+    }
+    .card-copy-btn:hover { background: #3a8eef; }
+    .card-copy-btn.copied { background: #22c55e; }
+    .card-structure-container { display: none; }
+
+    /* Export panel - for multi-select */
+    #export-panel {
+      position: fixed;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.9);
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: #e0e0e0;
+      font-size: 12px;
+      z-index: 100;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      min-width: 280px;
+    }
+    #export-panel.hidden { display: none; }
+    .export-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .export-title { font-weight: 600; font-size: 13px; }
+    .export-close {
+      background: transparent;
+      border: none;
+      color: #666;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0;
+    }
+    .export-close:hover { color: #fff; }
+    .export-columns {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+      margin-bottom: 12px;
+      padding: 8px;
+      background: #1a1a1a;
+      border-radius: 4px;
+      max-width: 400px;
+    }
+    .export-columns label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .export-columns input[type="checkbox"] { cursor: pointer; }
+    .export-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .export-btn {
+      background: #4a9eff;
+      border: none;
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .export-btn:hover { background: #3a8eef; }
+    .export-btn.secondary {
+      background: #333;
+      border: 1px solid #555;
+    }
+    .export-btn.secondary:hover { background: #444; }
 {% block extra_styles %}{% endblock %}
   </style>
 </head>
@@ -155,6 +359,19 @@
   <div id="legend" class="hidden">
     <div id="legend-title"></div>
     <div id="legend-content"></div>
+  </div>
+  <div id="card-stack" class="hidden"></div>
+  <div id="export-panel" class="hidden">
+    <div class="export-header">
+      <span class="export-title" id="export-title">0 points selected</span>
+      <button class="export-close" id="export-close">&times;</button>
+    </div>
+    <div class="export-columns" id="export-columns"></div>
+    <div class="export-actions">
+      <button class="export-btn" id="export-csv">Export CSV</button>
+      <button class="export-btn secondary" id="export-tsv">Export TSV</button>
+      <button class="export-btn secondary" id="export-clear">Clear</button>
+    </div>
   </div>
 {% block extra_elements %}{% endblock %}
   <script id="payload" type="application/json">{{ payload_json }}</script>
@@ -430,6 +647,293 @@ if (initialColor) {
 colorSelect.addEventListener('change', (e) => applyColor(e.target.value));
 
 applyColor(initialColor || '');
+
+// ============================================
+// Card Stack System (single-click pinned cards)
+// ============================================
+
+const cardStack = document.getElementById('card-stack');
+const pinnedCards = []; // Array of point indices
+let currentCardIndex = 0;
+
+// >>> CARD_STACK_LIMIT: Change this value to adjust maximum pinned cards <<<
+const MAX_CARDS = 50;
+
+let hoveredPointIndex = -1;
+let cardMinimized = false;
+scatterplot.subscribe('pointover', (idx) => { hoveredPointIndex = idx; });
+scatterplot.subscribe('pointout', () => { hoveredPointIndex = -1; });
+
+// Drag detection - only select on click, not drag
+let mouseDownPos = null;
+const DRAG_THRESHOLD = 5; // pixels
+
+canvas.addEventListener('mousedown', (e) => {
+  mouseDownPos = { x: e.clientX, y: e.clientY };
+});
+
+canvas.addEventListener('mouseup', (e) => {
+  if (!mouseDownPos) return;
+
+  // Check if this was a drag (moved more than threshold)
+  const dx = e.clientX - mouseDownPos.x;
+  const dy = e.clientY - mouseDownPos.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  mouseDownPos = null;
+
+  if (distance > DRAG_THRESHOLD) return; // Was a drag, not a click
+
+  // Ignore if shift/ctrl held (multi-select mode)
+  if (e.shiftKey || e.ctrlKey || e.metaKey) return;
+  if (hoveredPointIndex < 0) return;
+
+  const idx = hoveredPointIndex;
+  const existingIndex = pinnedCards.indexOf(idx);
+
+  if (existingIndex >= 0) {
+    // Jump to existing card
+    currentCardIndex = existingIndex;
+  } else {
+    // Add new card (remove oldest if at limit)
+    if (pinnedCards.length >= MAX_CARDS) {
+      pinnedCards.shift();
+    }
+    pinnedCards.push(idx);
+    currentCardIndex = pinnedCards.length - 1;
+  }
+  renderCardStack();
+});
+
+function truncateString(str, maxLen) {
+  if (!str || str.length <= maxLen) return str;
+  return str.substring(0, maxLen - 3) + '...';
+}
+
+function renderCardStack() {
+  if (pinnedCards.length === 0) {
+    cardStack.classList.add('hidden');
+    cardStack.innerHTML = '';
+    return;
+  }
+
+  cardStack.classList.remove('hidden');
+  const idx = pinnedCards[currentCardIndex];
+  const label = getLabel(idx);
+
+  // Find SMILES column (if any)
+  const smilesColName = payload.smilesColumn;
+  const smilesCol = smilesColName ? columns[smilesColName] : null;
+  const smilesValue = smilesCol ? smilesCol.values[idx] : null;
+
+  let html = '<div class="card' + (cardMinimized ? ' minimized' : '') + '">';
+
+  // Header with navigation
+  html += '<div class="card-header">';
+  html += '<div class="card-nav">';
+  html += '<button id="card-prev" ' + (currentCardIndex <= 0 ? 'disabled' : '') + '>&larr;</button>';
+  html += '<span>' + (currentCardIndex + 1) + ' of ' + pinnedCards.length + '</span>';
+  html += '<button id="card-next" ' + (currentCardIndex >= pinnedCards.length - 1 ? 'disabled' : '') + '>&rarr;</button>';
+  html += '</div>';
+  html += '<div>';
+  html += '<button class="card-minimize" id="card-minimize" title="' + (cardMinimized ? 'Expand' : 'Minimize') + '">' + (cardMinimized ? '&#9650;' : '&#9660;') + '</button>';
+  html += '<button class="card-close" id="card-close" title="Close">&times;</button>';
+  html += '</div>';
+  html += '</div>';
+
+  // Card body (hidden when minimized)
+  html += '<div class="card-body">';
+
+  // Label
+  html += '<div class="card-label">' + truncateString(String(label), 40) + '</div>';
+
+  // Structure container placeholder (extended by SMILES templates)
+  html += '<div class="card-structure-container" id="card-structure"></div>';
+
+  // SMILES row with copy button (if present)
+  if (smilesValue && typeof smilesValue === 'string') {
+    html += '<div class="card-copy-row">';
+    html += '<span class="key">SMILES</span>';
+    html += '<span class="value">' + truncateString(smilesValue, 25) + '</span>';
+    html += '<button class="card-copy-btn" id="copy-smiles" data-value="' + smilesValue.replace(/"/g, '&quot;') + '">Copy</button>';
+    html += '</div>';
+  }
+
+  // Other label fields
+  for (const name of tooltipFields) {
+    if (name === smilesColName) continue; // Already shown above
+    const col = columns[name];
+    if (!col) continue;
+    const val = col.values[idx];
+    const displayVal = truncateString(formatValue(val), 30);
+
+    // Add copy button for string values
+    if (typeof val === 'string' && val.length > 0) {
+      html += '<div class="card-copy-row">';
+      html += '<span class="key">' + name + '</span>';
+      html += '<span class="value">' + displayVal + '</span>';
+      html += '<button class="card-copy-btn" data-value="' + String(val).replace(/"/g, '&quot;') + '">Copy</button>';
+      html += '</div>';
+    } else {
+      html += '<div class="card-row">';
+      html += '<span class="key">' + name + '</span>';
+      html += '<span class="value">' + displayVal + '</span>';
+      html += '</div>';
+    }
+  }
+
+  html += '</div>'; // close card-body
+  html += '</div>'; // close card
+  cardStack.innerHTML = html;
+
+  // Attach event listeners
+  document.getElementById('card-prev')?.addEventListener('click', () => {
+    if (currentCardIndex > 0) { currentCardIndex--; renderCardStack(); }
+  });
+  document.getElementById('card-next')?.addEventListener('click', () => {
+    if (currentCardIndex < pinnedCards.length - 1) { currentCardIndex++; renderCardStack(); }
+  });
+  document.getElementById('card-minimize')?.addEventListener('click', () => {
+    cardMinimized = !cardMinimized;
+    renderCardStack();
+  });
+  document.getElementById('card-close')?.addEventListener('click', () => {
+    pinnedCards.splice(currentCardIndex, 1);
+    if (currentCardIndex >= pinnedCards.length) currentCardIndex = Math.max(0, pinnedCards.length - 1);
+    renderCardStack();
+  });
+
+  // Copy buttons
+  cardStack.querySelectorAll('.card-copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      const value = btn.dataset.value;
+      try {
+        await navigator.clipboard.writeText(value);
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+      } catch (err) {
+        console.error('Copy failed:', err);
+        btn.textContent = 'Failed';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      }
+    });
+  });
+
+  // Trigger custom event for SMILES template extension
+  cardStack.dispatchEvent(new CustomEvent('cardrendered', { detail: { idx, smilesValue } }));
+}
+
+// ============================================
+// Export Panel System (multi-select)
+// ============================================
+
+const exportPanel = document.getElementById('export-panel');
+const exportTitle = document.getElementById('export-title');
+const exportColumns = document.getElementById('export-columns');
+const exportCsvBtn = document.getElementById('export-csv');
+const exportTsvBtn = document.getElementById('export-tsv');
+const exportClearBtn = document.getElementById('export-clear');
+const exportCloseBtn = document.getElementById('export-close');
+
+let selectedIndices = [];
+
+// Build column checkboxes
+function buildExportColumns() {
+  let html = '';
+  for (const name of labelOptions) {
+    const col = columns[name];
+    if (!col) continue;
+    html += '<label><input type="checkbox" value="' + name + '" checked> ' + name + '</label>';
+  }
+  exportColumns.innerHTML = html;
+}
+buildExportColumns();
+
+function showExportPanel(indices) {
+  selectedIndices = indices;
+  exportTitle.textContent = indices.length.toLocaleString() + ' points selected';
+  exportPanel.classList.remove('hidden');
+}
+
+function hideExportPanel() {
+  selectedIndices = [];
+  exportPanel.classList.add('hidden');
+}
+
+// Listen for scatterplot selection events (only show export for multi-select, not single click)
+scatterplot.subscribe('select', (selection) => {
+  const indices = selection.points || selection;
+  if (Array.isArray(indices) && indices.length > 1) {
+    showExportPanel(indices);
+  } else {
+    hideExportPanel();
+  }
+});
+
+function getSelectedColumns() {
+  const checked = [];
+  exportColumns.querySelectorAll('input[type="checkbox"]:checked').forEach((cb) => {
+    checked.push(cb.value);
+  });
+  return checked;
+}
+
+function exportData(separator, extension) {
+  const colNames = getSelectedColumns();
+  if (colNames.length === 0 || selectedIndices.length === 0) return;
+
+  // Build header
+  const rows = [colNames.join(separator)];
+
+  // Build data rows
+  for (const idx of selectedIndices) {
+    const rowValues = colNames.map((name) => {
+      const col = columns[name];
+      if (!col) return '';
+      const val = col.values[idx];
+      let strVal = typeof val === 'number' ? formatValue(val) : String(val ?? '');
+      // Escape quotes and wrap in quotes if contains separator or quotes
+      if (strVal.includes(separator) || strVal.includes('"') || strVal.includes('\\n')) {
+        strVal = '"' + strVal.replace(/"/g, '""') + '"';
+      }
+      return strVal;
+    });
+    rows.push(rowValues.join(separator));
+  }
+
+  const content = rows.join('\\n');
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'tmap_export_' + selectedIndices.length + '_points.' + extension;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+exportCsvBtn.addEventListener('click', () => exportData(',', 'csv'));
+exportTsvBtn.addEventListener('click', () => exportData('\\t', 'tsv'));
+exportClearBtn.addEventListener('click', () => {
+  scatterplot.select([]);
+  hideExportPanel();
+});
+exportCloseBtn.addEventListener('click', () => {
+  hideExportPanel();
+});
+
+// Keyboard shortcut: Escape closes card stack
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (pinnedCards.length > 0) {
+      pinnedCards.length = 0;
+      currentCardIndex = 0;
+      renderCardStack();
+    }
+  }
+});
 
 {% block extra_runtime %}{% endblock %}
 `;
