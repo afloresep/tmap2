@@ -260,6 +260,64 @@
     .card-copy-btn.copied { background: #22c55e; }
     .card-structure-container { display: none; }
 
+    /* Search panel - top left below title */
+    #search-panel {
+      position: fixed;
+      top: 52px;
+      left: 12px;
+      padding: 8px 10px;
+      background: #000;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 200px;
+      z-index: 90;
+    }
+    #search-panel label { font-size: 11px; color: #9ca3af; }
+    #search-panel select, #search-panel input[type="text"] {
+      width: 100%;
+      padding: 5px 8px;
+      border-radius: 4px;
+      border: 1px solid #555;
+      background: #1a1a1a;
+      color: #fff;
+      font-size: 12px;
+      box-sizing: border-box;
+    }
+    #search-panel .search-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    #search-panel .search-btn {
+      background: #4a9eff;
+      border: none;
+      color: #fff;
+      padding: 5px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    #search-panel .search-btn:hover { background: #3a8eef; }
+    #search-panel .search-btn.clear { background: #333; border: 1px solid #555; }
+    #search-panel .search-btn.clear:hover { background: #444; }
+    #search-panel .partial-match {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    #search-results {
+      font-size: 11px;
+      color: #9ca3af;
+      min-height: 16px;
+    }
+
     /* Export panel - for multi-select */
     #export-panel {
       position: fixed;
@@ -406,6 +464,23 @@
       <button class="export-btn secondary" id="export-clear">Clear</button>
     </div>
   </div>
+  <div id="search-panel">
+    <label for="search-column">Search in column</label>
+    <select id="search-column"></select>
+    <label for="search-input">Search query</label>
+    <div class="search-row">
+      <input type="text" id="search-input" placeholder="Enter search term...">
+      <button class="search-btn" id="search-btn">Search</button>
+    </div>
+    <div class="search-row">
+      <label class="partial-match">
+        <input type="checkbox" id="partial-match"> Partial match
+      </label>
+      <button class="search-btn clear" id="clear-search">Clear</button>
+    </div>
+    <div id="search-results"></div>
+  </div>
+
 {% block extra_elements %}{% endblock %}
 
   <!-- Binary data sections -->
@@ -595,9 +670,12 @@ const scatterplot = createScatterplot({
   width: canvas.clientWidth || window.innerWidth,
   height: canvas.clientHeight || window.innerHeight,
   pointSize: metadata.pointSize || 4,
+  pointSizeSelected: 8,  // 2x size when selected
   opacity: metadata.opacity ?? 0.85,
+  opacityInactiveScale: 0.5,  // Dim non-selected points when selection active
   backgroundColor: metadata.backgroundColor || [0, 0, 0, 1],
   pointColor: fallbackPointColor,
+  pointOutlineWidth: 2,
   colorBy: null,
   lassoInitiator: false,
 });
@@ -1071,7 +1149,7 @@ exportCloseBtn.addEventListener('click', () => {
   hideExportPanel();
 });
 
-// Keyboard shortcut: Escape closes card stack
+// Keyboard shortcut: Escape closes card stack and search
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (pinnedCards.length > 0) {
@@ -1079,8 +1157,111 @@ document.addEventListener('keydown', (e) => {
       currentCardIndex = 0;
       renderCardStack();
     }
+    // Also clear search
+    if (searchMatches.length > 0) {
+      clearSearch();
+    }
   }
 });
+
+// ============================================
+// Search System
+// ============================================
+
+const searchColumn = document.getElementById('search-column');
+const searchInput = document.getElementById('search-input');
+const searchBtn = document.getElementById('search-btn');
+const clearSearchBtn = document.getElementById('clear-search');
+const partialMatchCheckbox = document.getElementById('partial-match');
+const searchResults = document.getElementById('search-results');
+
+let searchMatches = [];
+
+// Populate search column dropdown with string columns only
+function buildSearchColumnOptions() {
+  searchColumn.innerHTML = '';
+  for (const name of labelOptions) {
+    const col = columns[name];
+    if (!col) continue;
+    // Only include string columns (check first value)
+    const firstVal = col.values[0];
+    if (typeof firstVal !== 'string') continue;
+
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    searchColumn.appendChild(opt);
+  }
+  // Add SMILES column if present and not already in labelOptions
+  const smilesCol = metadata.smilesColumn;
+  if (smilesCol && !labelOptions.includes(smilesCol)) {
+    const col = columns[smilesCol];
+    if (col && typeof col.values[0] === 'string') {
+      const opt = document.createElement('option');
+      opt.value = smilesCol;
+      opt.textContent = smilesCol + ' (SMILES)';
+      searchColumn.appendChild(opt);
+    }
+  }
+}
+buildSearchColumnOptions();
+
+// Search function
+function performSearch() {
+  const colName = searchColumn.value;
+  const query = searchInput.value.trim();
+  const partial = partialMatchCheckbox.checked;
+
+  if (!query || !colName) {
+    searchResults.textContent = '';
+    clearMarkers();
+    return;
+  }
+
+  const col = columns[colName];
+  if (!col) {
+    searchResults.textContent = 'Column not found';
+    return;
+  }
+
+  const matches = [];
+  const queryLower = query.toLowerCase();
+
+  for (let i = 0; i < col.values.length; i++) {
+    const val = String(col.values[i] ?? '');
+    const valLower = val.toLowerCase();
+
+    if (partial) {
+      if (valLower.includes(queryLower)) matches.push(i);
+    } else {
+      if (valLower === queryLower) matches.push(i);
+    }
+  }
+
+  searchMatches = matches;
+
+  if (matches.length === 0) {
+    searchResults.textContent = 'No matches found';
+    scatterplot.select([]);
+  } else {
+    searchResults.textContent = matches.length.toLocaleString() + ' match(es) found';
+    scatterplot.select(matches);  // Highlights points and triggers export panel for 2+ matches
+  }
+}
+
+function clearSearch() {
+  searchInput.value = '';
+  searchResults.textContent = '';
+  searchMatches = [];
+  scatterplot.select([]);
+}
+
+// Event handlers
+searchBtn.addEventListener('click', performSearch);
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') performSearch();
+});
+clearSearchBtn.addEventListener('click', clearSearch);
 
 {% block extra_runtime %}{% endblock %}
 `;
