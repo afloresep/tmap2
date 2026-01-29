@@ -34,6 +34,14 @@ Design Principles
 
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
+from pathlib import Path
+import sysconfig
+
+# In editable installs, Python modules load from src/ but compiled extensions
+# live in site-packages. Extend __path__ so imports can find the extensions.
+_platlib_tmap = Path(sysconfig.get_paths()["platlib"]) / "tmap"
+if _platlib_tmap.is_dir() and str(_platlib_tmap) not in __path__:
+    __path__.append(str(_platlib_tmap))
 
 if TYPE_CHECKING:
     from tmap.index.encoders.minhash import MinHash, WeightedMinHash
