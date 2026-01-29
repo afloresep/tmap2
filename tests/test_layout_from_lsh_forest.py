@@ -8,17 +8,20 @@ import numpy as np
 import pytest
 
 from tmap import MinHash, LSHForest
-from tmap.layout import (
-    OGDF_AVAILABLE,
-    layout_from_lsh_forest,
-    layout_from_knn_graph,
-    LayoutConfig,
-    ScalingType,
-    Placer,
-    Merger,
-)
+from tmap.layout import OGDF_AVAILABLE
 
 pytestmark = pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF not available")
+
+# Conditional imports - only available when OGDF is built
+if OGDF_AVAILABLE:
+    from tmap.layout import (
+        layout_from_lsh_forest,
+        layout_from_knn_graph,
+        LayoutConfig,
+        ScalingType,
+        Placer,
+        Merger,
+    )
 
 
 # =============================================================================

@@ -7,7 +7,9 @@ from tmap.layout import OGDF_AVAILABLE
 
 pytestmark = pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
 
-from tmap.layout import LayoutConfig, layout_from_edge_list  # noqa: E402
+# Conditional imports - only available when OGDF is built
+if OGDF_AVAILABLE:
+    from tmap.layout import LayoutConfig, layout_from_edge_list
 
 
 def _edge_set(s, t):
