@@ -20,6 +20,8 @@ from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from tmap.graph.types import Tree
+    from tmap.index.types import KNNGraph
+    from tmap.index.lsh_forest import LSHForest
 
 # =============================================================================
 # Load C++ extension
@@ -209,6 +211,155 @@ def layout_from_tree(
     )
 
 
+def layout_from_lsh_forest(
+    lsh_forest: "LSHForest",
+    config: "LayoutConfig | None" = None,
+    create_mst: bool = True,
+) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.uint32], NDArray[np.uint32]]:
+    """
+    Compute 2D layout directly from LSHForest.
+
+    This is the recommended high-level API that matches original TMAP behavior.
+    It builds the k-NN graph internally using config.k and config.kc, then
+    passes the full k-NN graph to OGDF for MST computation and layout.
+
+    This approach ensures better connectivity than pre-computing the MST in Python,
+    because OGDF's MST algorithm operates on the full k-NN graph.
+
+    Parameters
+    ----------
+    lsh_forest : LSHForest
+        Indexed LSHForest with signatures
+    config : LayoutConfig, optional
+        Layout configuration. Uses config.k and config.kc for k-NN construction.
+    create_mst : bool, default True
+        If True, compute MST before layout (recommended for tree visualization)
+
+    Returns
+    -------
+    x, y, s, t : ndarrays
+        x, y: Node coordinates (float32)
+        s, t: Edge source/target indices (uint32) - edges in the final layout
+
+    Example
+    -------
+    >>> from tmap import MinHash, LSHForest
+    >>> from tmap.layout import layout_from_lsh_forest, LayoutConfig
+    >>>
+    >>> # Build LSHForest
+    >>> mh = MinHash(num_perm=128)
+    >>> sigs = mh.batch_from_binary_array(fingerprints)
+    >>> lsh = LSHForest(d=128)
+    >>> lsh.batch_add(sigs)
+    >>> lsh.index()
+    >>>
+    >>> # Compute layout with custom config
+    >>> cfg = LayoutConfig()
+    >>> cfg.k = 20
+    >>> cfg.kc = 50
+    >>> cfg.node_size = 1/30
+    >>> cfg.mmm_repeats = 2
+    >>> x, y, s, t = layout_from_lsh_forest(lsh, cfg)
+    """
+    require_ogdf()
+
+    if config is None:
+        config = LayoutConfig()
+
+    # Build k-NN graph using config parameters
+    knn = lsh_forest.get_knn_graph(k=config.k, kc=config.kc)
+
+    # Convert k-NN to edge list
+    edges = _knn_to_edge_list(knn)
+
+    # Call layout with full k-NN graph - OGDF will compute MST
+    result = _cpp_layout_from_edge_list(
+        knn.n_nodes, edges, config, create_mst=create_mst
+    )
+
+    return (
+        np.array(result.x, dtype=np.float32),
+        np.array(result.y, dtype=np.float32),
+        np.array(result.s, dtype=np.uint32),
+        np.array(result.t, dtype=np.uint32),
+    )
+
+
+def layout_from_knn_graph(
+    knn: "KNNGraph",
+    config: "LayoutConfig | None" = None,
+    create_mst: bool = True,
+) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.uint32], NDArray[np.uint32]]:
+    """
+    Compute 2D layout from a k-NN graph.
+
+    This is useful when you've already computed the k-NN graph separately
+    but want OGDF to compute the MST (recommended for better connectivity).
+
+    Parameters
+    ----------
+    knn : KNNGraph
+        k-NN graph from LSHForest.get_knn_graph()
+    config : LayoutConfig, optional
+        Layout configuration
+    create_mst : bool, default True
+        If True, compute MST before layout
+
+    Returns
+    -------
+    x, y, s, t : ndarrays
+        Coordinates and edge topology
+    """
+    require_ogdf()
+
+    if config is None:
+        config = LayoutConfig()
+
+    edges = _knn_to_edge_list(knn)
+
+    result = _cpp_layout_from_edge_list(
+        knn.n_nodes, edges, config, create_mst=create_mst
+    )
+
+    return (
+        np.array(result.x, dtype=np.float32),
+        np.array(result.y, dtype=np.float32),
+        np.array(result.s, dtype=np.uint32),
+        np.array(result.t, dtype=np.uint32),
+    )
+
+
+def _knn_to_edge_list(knn: "KNNGraph") -> list[tuple[int, int, float]]:
+    """
+    Convert KNNGraph to edge list for OGDF.
+
+    Creates undirected edges from k-NN (which is directed: i -> neighbors[i]).
+    Filters out self-loops and invalid entries.
+    """
+    edges = []
+    seen = set()  # Avoid duplicate undirected edges
+
+    n = knn.n_nodes
+    k = knn.k
+
+    for i in range(n):
+        for j_idx in range(k):
+            j = int(knn.indices[i, j_idx])
+            dist = float(knn.distances[i, j_idx])
+
+            # Skip invalid entries and self-loops
+            if j < 0 or j == i:
+                continue
+
+            # Create canonical edge (smaller, larger) to avoid duplicates
+            edge_key = (min(i, j), max(i, j))
+            if edge_key not in seen:
+                seen.add(edge_key)
+                edges.append((i, j, dist))
+
+    return edges
+
+
 __all__ = [
     "_AVAILABLE",
     "require_ogdf",
@@ -218,4 +369,6 @@ __all__ = [
     "ScalingType",
     "layout_from_edge_list",
     "layout_from_tree",
+    "layout_from_lsh_forest",
+    "layout_from_knn_graph",
 ]
