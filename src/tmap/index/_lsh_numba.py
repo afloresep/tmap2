@@ -276,6 +276,304 @@ if NUMBA_AVAILABLE:
 
         return result_indices, result_distances
 
+    # =========================================================================
+    # LSH Forest Hash Band Functions (for custom implementation)
+    # =========================================================================
+
+    @numba.njit(cache=True)
+    def _hash_band(values: NDArray[np.uint64]) -> np.uint64:
+        """
+        Hash k uint64 values into a single uint64 using polynomial rolling hash.
+
+        Uses Knuth's multiplicative hash with position mixing for good distribution.
+        """
+        # Golden ratio prime for mixing
+        GOLDEN = np.uint64(0x9E3779B97F4A7C15)
+        h = np.uint64(0)
+        for i in range(len(values)):
+            # Mix value with position-dependent rotation
+            v = values[i]
+            v ^= v >> np.uint64(33)
+            v *= GOLDEN
+            v ^= v >> np.uint64(33)
+            h ^= v + GOLDEN + (h << np.uint64(6)) + (h >> np.uint64(2))
+        return h
+
+    @numba.njit(parallel=True, cache=True)
+    def compute_hash_bands(
+        signatures: NDArray[np.uint64],
+        l: int,
+        k: int,
+    ) -> NDArray[np.uint64]:
+        """
+        Compute L hash bands for all N signatures in parallel.
+
+        Each band hashes k consecutive values from the signature.
+        This is the core LSH operation - similar signatures will have
+        matching bands with high probability.
+
+        Args:
+            signatures: (N, d) uint64 array of MinHash signatures
+            l: Number of bands (prefix trees)
+            k: Band width (d // l)
+
+        Returns:
+            hash_bands: (N, l) uint64 array of hash values per band
+        """
+        n = signatures.shape[0]
+        hash_bands = np.empty((n, l), dtype=np.uint64)
+
+        for i in prange(n):
+            for band in range(l):
+                start = band * k
+                end = start + k
+                # Inline hash computation for speed
+                GOLDEN = np.uint64(0x9E3779B97F4A7C15)
+                h = np.uint64(0)
+                for j in range(start, end):
+                    v = signatures[i, j]
+                    v ^= v >> np.uint64(33)
+                    v *= GOLDEN
+                    v ^= v >> np.uint64(33)
+                    h ^= v + GOLDEN + (h << np.uint64(6)) + (h >> np.uint64(2))
+                hash_bands[i, band] = h
+
+        return hash_bands
+
+    @numba.njit(parallel=True, cache=True)
+    def compute_hash_bands_weighted(
+        signatures: NDArray[np.uint64],
+        l: int,
+        k: int,
+    ) -> NDArray[np.uint64]:
+        """
+        Compute L hash bands for weighted MinHash signatures.
+
+        For weighted MinHash, only uses the first column (k values) for LSH lookup,
+        consistent with datasketch behavior.
+
+        Args:
+            signatures: (N, d, 2) uint64 array of weighted MinHash signatures
+            l: Number of bands
+            k: Band width
+
+        Returns:
+            hash_bands: (N, l) uint64 array of hash values
+        """
+        n = signatures.shape[0]
+        hash_bands = np.empty((n, l), dtype=np.uint64)
+
+        for i in prange(n):
+            for band in range(l):
+                start = band * k
+                end = start + k
+                GOLDEN = np.uint64(0x9E3779B97F4A7C15)
+                h = np.uint64(0)
+                for j in range(start, end):
+                    # Only use first column for weighted MinHash LSH
+                    v = signatures[i, j, 0]
+                    v ^= v >> np.uint64(33)
+                    v *= GOLDEN
+                    v ^= v >> np.uint64(33)
+                    h ^= v + GOLDEN + (h << np.uint64(6)) + (h >> np.uint64(2))
+                hash_bands[i, band] = h
+
+        return hash_bands
+
+    @numba.njit(cache=True)
+    def _binary_search_left(arr: NDArray[np.uint64], value: np.uint64) -> int:
+        """Binary search for leftmost position where arr[i] >= value."""
+        lo, hi = 0, len(arr)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if arr[mid] < value:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
+    @numba.njit(cache=True)
+    def _binary_search_right(arr: NDArray[np.uint64], value: np.uint64) -> int:
+        """Binary search for leftmost position where arr[i] > value."""
+        lo, hi = 0, len(arr)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if arr[mid] <= value:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
+    @numba.njit(cache=True)
+    def query_single_band(
+        query_hash: np.uint64,
+        sorted_hashes: NDArray[np.uint64],
+        sorted_indices: NDArray[np.int32],
+    ) -> NDArray[np.int32]:
+        """
+        Query a single band's hash table using binary search.
+
+        Args:
+            query_hash: Hash value of the query's band
+            sorted_hashes: Sorted array of hash values for this band
+            sorted_indices: Corresponding signature indices (sorted by hash)
+
+        Returns:
+            Array of matching signature indices (may be empty)
+        """
+        if len(sorted_hashes) == 0:
+            return np.empty(0, dtype=np.int32)
+
+        # Find range of matching hashes
+        left = _binary_search_left(sorted_hashes, query_hash)
+        right = _binary_search_right(sorted_hashes, query_hash)
+
+        if left >= right:
+            return np.empty(0, dtype=np.int32)
+
+        return sorted_indices[left:right].copy()
+
+    @numba.njit(cache=True)
+    def query_lsh_forest_single(
+        query_bands: NDArray[np.uint64],
+        sorted_hashes_list: tuple,
+        sorted_indices_list: tuple,
+        max_results: int,
+    ) -> NDArray[np.int32]:
+        """
+        Query LSH forest for a single signature.
+
+        Searches all bands and collects unique candidates up to max_results.
+        Uses the LSH Forest algorithm: start with longest prefix match,
+        progressively relax until enough candidates found.
+
+        Args:
+            query_bands: (l,) array of hash values for query
+            sorted_hashes_list: Tuple of L sorted hash arrays
+            sorted_indices_list: Tuple of L sorted index arrays
+            max_results: Maximum number of candidates to return
+
+        Returns:
+            Array of candidate indices (unique, up to max_results)
+        """
+        l = len(query_bands)
+
+        # Collect candidates from all bands
+        # Use a fixed-size array and track seen indices
+        candidates = np.empty(max_results * l, dtype=np.int32)
+        n_candidates = 0
+
+        # Simple seen tracking - for small result sets this is fast enough
+        seen = np.zeros(max_results * l * 2, dtype=np.int32)
+        seen_count = 0
+
+        for band in range(l):
+            matches = query_single_band(
+                query_bands[band],
+                sorted_hashes_list[band],
+                sorted_indices_list[band],
+            )
+
+            for j in range(len(matches)):
+                idx = matches[j]
+                # Check if already seen (linear search - ok for small sets)
+                is_seen = False
+                for s in range(seen_count):
+                    if seen[s] == idx:
+                        is_seen = True
+                        break
+
+                if not is_seen:
+                    if n_candidates < max_results:
+                        candidates[n_candidates] = idx
+                        n_candidates += 1
+                    if seen_count < len(seen):
+                        seen[seen_count] = idx
+                        seen_count += 1
+
+                    if n_candidates >= max_results:
+                        return candidates[:n_candidates]
+
+        return candidates[:n_candidates]
+
+    @numba.njit(parallel=True, cache=True)
+    def query_lsh_forest_batch(
+        query_bands: NDArray[np.uint64],
+        sorted_hashes_flat: NDArray[np.uint64],
+        sorted_indices_flat: NDArray[np.int32],
+        band_offsets: NDArray[np.int64],
+        max_results: int,
+    ) -> tuple[NDArray[np.int32], NDArray[np.int32]]:
+        """
+        Query LSH forest for multiple signatures in parallel.
+
+        Uses flattened arrays for Numba compatibility.
+
+        Args:
+            query_bands: (n_queries, l) array of hash values
+            sorted_hashes_flat: Flattened sorted hashes for all bands
+            sorted_indices_flat: Flattened sorted indices for all bands
+            band_offsets: (l+1,) offsets into flat arrays for each band
+            max_results: Maximum candidates per query
+
+        Returns:
+            candidates: (n_queries, max_results) padded with -1
+            counts: (n_queries,) number of valid candidates per query
+        """
+        n_queries = query_bands.shape[0]
+        l = query_bands.shape[1]
+
+        candidates = np.full((n_queries, max_results), -1, dtype=np.int32)
+        counts = np.zeros(n_queries, dtype=np.int32)
+
+        for q in prange(n_queries):
+            # Track seen indices for this query
+            seen = np.zeros(max_results * 2, dtype=np.int32)
+            seen_count = 0
+            n_cand = 0
+
+            for band in range(l):
+                # Get this band's slice of the flat arrays
+                start = band_offsets[band]
+                end = band_offsets[band + 1]
+                band_hashes = sorted_hashes_flat[start:end]
+                band_indices = sorted_indices_flat[start:end]
+
+                query_hash = query_bands[q, band]
+
+                # Binary search for matching range
+                left = _binary_search_left(band_hashes, query_hash)
+                right = _binary_search_right(band_hashes, query_hash)
+
+                # Add unique matches
+                for i in range(left, right):
+                    idx = band_indices[i]
+
+                    # Check if seen
+                    is_seen = False
+                    for s in range(seen_count):
+                        if seen[s] == idx:
+                            is_seen = True
+                            break
+
+                    if not is_seen:
+                        if n_cand < max_results:
+                            candidates[q, n_cand] = idx
+                            n_cand += 1
+                        if seen_count < len(seen):
+                            seen[seen_count] = idx
+                            seen_count += 1
+
+                        if n_cand >= max_results:
+                            break
+
+                if n_cand >= max_results:
+                    break
+
+            counts[q] = n_cand
+
+        return candidates, counts
+
 else:
     # Fallback implementations when Numba is not available
 
@@ -381,3 +679,137 @@ else:
             result_distances[q, :n_valid] = distances[valid_top_k]
 
         return result_indices, result_distances
+
+    # Fallback LSH Forest functions
+
+    def compute_hash_bands(
+        signatures: NDArray[np.uint64],
+        l: int,
+        k: int,
+    ) -> NDArray[np.uint64]:
+        """Compute hash bands (fallback)."""
+        n = signatures.shape[0]
+        hash_bands = np.empty((n, l), dtype=np.uint64)
+        GOLDEN = np.uint64(0x9E3779B97F4A7C15)
+
+        for i in range(n):
+            for band in range(l):
+                start = band * k
+                end = start + k
+                h = np.uint64(0)
+                for j in range(start, end):
+                    v = signatures[i, j]
+                    v ^= v >> np.uint64(33)
+                    v *= GOLDEN
+                    v ^= v >> np.uint64(33)
+                    h ^= v + GOLDEN + (h << np.uint64(6)) + (h >> np.uint64(2))
+                hash_bands[i, band] = h
+
+        return hash_bands
+
+    def compute_hash_bands_weighted(
+        signatures: NDArray[np.uint64],
+        l: int,
+        k: int,
+    ) -> NDArray[np.uint64]:
+        """Compute hash bands for weighted signatures (fallback)."""
+        n = signatures.shape[0]
+        hash_bands = np.empty((n, l), dtype=np.uint64)
+        GOLDEN = np.uint64(0x9E3779B97F4A7C15)
+
+        for i in range(n):
+            for band in range(l):
+                start = band * k
+                end = start + k
+                h = np.uint64(0)
+                for j in range(start, end):
+                    v = signatures[i, j, 0]
+                    v ^= v >> np.uint64(33)
+                    v *= GOLDEN
+                    v ^= v >> np.uint64(33)
+                    h ^= v + GOLDEN + (h << np.uint64(6)) + (h >> np.uint64(2))
+                hash_bands[i, band] = h
+
+        return hash_bands
+
+    def query_single_band(
+        query_hash: np.uint64,
+        sorted_hashes: NDArray[np.uint64],
+        sorted_indices: NDArray[np.int32],
+    ) -> NDArray[np.int32]:
+        """Query single band (fallback)."""
+        if len(sorted_hashes) == 0:
+            return np.empty(0, dtype=np.int32)
+
+        left = np.searchsorted(sorted_hashes, query_hash, side="left")
+        right = np.searchsorted(sorted_hashes, query_hash, side="right")
+
+        if left >= right:
+            return np.empty(0, dtype=np.int32)
+
+        return sorted_indices[left:right].copy()
+
+    def query_lsh_forest_single(
+        query_bands: NDArray[np.uint64],
+        sorted_hashes_list: tuple,
+        sorted_indices_list: tuple,
+        max_results: int,
+    ) -> NDArray[np.int32]:
+        """Query LSH forest for single signature (fallback)."""
+        candidates = set()
+
+        for band in range(len(query_bands)):
+            matches = query_single_band(
+                query_bands[band],
+                sorted_hashes_list[band],
+                sorted_indices_list[band],
+            )
+            candidates.update(matches.tolist())
+            if len(candidates) >= max_results:
+                break
+
+        result = np.array(list(candidates)[:max_results], dtype=np.int32)
+        return result
+
+    def query_lsh_forest_batch(
+        query_bands: NDArray[np.uint64],
+        sorted_hashes_flat: NDArray[np.uint64],
+        sorted_indices_flat: NDArray[np.int32],
+        band_offsets: NDArray[np.int64],
+        max_results: int,
+    ) -> tuple[NDArray[np.int32], NDArray[np.int32]]:
+        """Query LSH forest batch (fallback)."""
+        n_queries = query_bands.shape[0]
+        l = query_bands.shape[1]
+
+        candidates = np.full((n_queries, max_results), -1, dtype=np.int32)
+        counts = np.zeros(n_queries, dtype=np.int32)
+
+        for q in range(n_queries):
+            seen = set()
+            n_cand = 0
+
+            for band in range(l):
+                start = band_offsets[band]
+                end = band_offsets[band + 1]
+                band_hashes = sorted_hashes_flat[start:end]
+                band_indices = sorted_indices_flat[start:end]
+
+                query_hash = query_bands[q, band]
+                left = np.searchsorted(band_hashes, query_hash, side="left")
+                right = np.searchsorted(band_hashes, query_hash, side="right")
+
+                for i in range(left, right):
+                    idx = band_indices[i]
+                    if idx not in seen:
+                        seen.add(idx)
+                        if n_cand < max_results:
+                            candidates[q, n_cand] = idx
+                            n_cand += 1
+
+                if n_cand >= max_results:
+                    break
+
+            counts[q] = n_cand
+
+        return candidates, counts
