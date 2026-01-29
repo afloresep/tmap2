@@ -32,6 +32,10 @@ PYBIND11_MODULE(_tmap_ogdf, m) {
     // LayoutConfig
     py::class_<tmap::LayoutConfig>(m, "LayoutConfig", "Configuration for OGDF layout")
         .def(py::init<>())
+        .def_readwrite("k", &tmap::LayoutConfig::k,
+            "Number of nearest neighbors for k-NN graph (default: 10)")
+        .def_readwrite("kc", &tmap::LayoutConfig::kc,
+            "Query multiplier for LSH (queries k*kc, keeps k) (default: 10)")
         .def_readwrite("fme_iterations", &tmap::LayoutConfig::fme_iterations,
             "FastMultipoleEmbedder iterations (default: 1000)")
         .def_readwrite("fme_precision", &tmap::LayoutConfig::fme_precision,

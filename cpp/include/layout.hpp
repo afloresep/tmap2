@@ -39,6 +39,10 @@ enum class ScalingType {
 
 /// Layout configuration matching original TMAP parameters
 struct LayoutConfig {
+    // k-NN graph construction (used by layout_from_lsh_forest)
+    int k = 10;   // Number of nearest neighbors
+    int kc = 10;  // Query multiplier (queries k*kc candidates, keeps k)
+
     // FastMultipoleEmbedder
     int fme_iterations = 1000;
     int fme_precision = 4;
