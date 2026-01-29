@@ -59,7 +59,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/ogdf
-          key: ogdf-${{ runner.os }}-${{ hashFiles('.github/workflows/tests.yml') }}
+          # Cache key includes workflow hash - any change to this file invalidates cache
+          key: ogdf-fpic-${{ runner.os }}-${{ hashFiles('.github/workflows/tests.yml') }}
 
       - name: Clone and build OGDF
         if: steps.cache-ogdf.outputs.cache-hit != 'true'
@@ -68,7 +69,7 @@ jobs:
           git clone --depth 1 https://github.com/ogdf/ogdf.git
           cd ogdf
           mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           make -j$(nproc)
 
       - name: Install tmap with OGDF
