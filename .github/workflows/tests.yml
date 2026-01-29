@@ -7,7 +7,8 @@ on:
     branches: [main, master]
 
 jobs:
-  pytest:
+  # Fast tests without OGDF (core functionality)
+  pytest-core:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -28,5 +29,56 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[dev]"
 
-      - name: Run tests
-        run: python -m pytest
+      - name: Run tests (without OGDF)
+        run: python -m pytest -v --ignore=tests/test_layout_ogdf.py --ignore=tests/test_layout_from_lsh_forest.py --ignore=tests/test_end_to_end.py
+
+  # Full tests with OGDF layout
+  pytest-ogdf:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ make
+
+      - name: Cache OGDF build
+        id: cache-ogdf
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ogdf
+          key: ogdf-${{ runner.os }}-${{ hashFiles('.github/workflows/tests.yml') }}
+
+      - name: Clone and build OGDF
+        if: steps.cache-ogdf.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp
+          git clone --depth 1 https://github.com/ogdf/ogdf.git
+          cd ogdf
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc)
+
+      - name: Install tmap with OGDF
+        run: |
+          python -m pip install --upgrade pip
+          OGDF_DIR=/tmp/ogdf python -m pip install ".[dev]"
+
+      - name: Verify OGDF extension
+        run: |
+          python -c "from tmap.layout import OGDF_AVAILABLE; print('OGDF:', OGDF_AVAILABLE); assert OGDF_AVAILABLE"
+
+      - name: Run all tests
+        run: python -m pytest -v
