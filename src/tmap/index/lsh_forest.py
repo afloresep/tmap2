@@ -134,6 +134,10 @@ class LSHForest:
         """Number of prefix trees."""
         return self._l
 
+    @property
+    def is_indexed(self) -> int:
+        """Number of prefix trees."""
+        return self._is_indexed 
     # =========================================================================
     # Internal helpers
     # =========================================================================
