@@ -41,15 +41,15 @@ Decorators are functions that wrap other functions. Common uses:
 5. Custom decorators - For logging, caching, validation (example below)
 """
 
+import pickle
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Self
-import pickle
 
 import numpy as np
 from numpy.typing import NDArray
 
-from tmap.index.types import KNNGraph, EdgeList
+from tmap.index.types import EdgeList, KNNGraph
 
 
 class Index(ABC):

@@ -20,13 +20,13 @@ from tqdm import tqdm
 # Check RDKit availability
 try:
     from rdkit import Chem
-    from rdkit.Chem import Descriptors, rdMolDescriptors, rdFingerprintGenerator
+    from rdkit.Chem import Descriptors, rdFingerprintGenerator, rdMolDescriptors
     RDKIT_AVAILABLE = True
 except ImportError:
     RDKIT_AVAILABLE = False
 
-from tmap import MinHash, LSHForest
-from tmap.layout import layout_from_lsh_forest, LayoutConfig, ScalingType
+from tmap import LSHForest, MinHash
+from tmap.layout import LayoutConfig, ScalingType, layout_from_lsh_forest
 from tmap.visualization import TmapViz
 
 
@@ -180,8 +180,9 @@ def create_tmap_from_smiles(
 
 
 # Example SMILES - common drug-like molecules
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
 
 # Get the directory where this script is located
 script_dir = Path(__file__).parent
@@ -221,7 +222,7 @@ if __name__ == "__main__":
         seed=42,
     )
 
-    print(f"\nDone! Open the HTML file in a browser to view the interactive visualization.")
+    print("\nDone! Open the HTML file in a browser to view the interactive visualization.")
     print("  - Pan: Click and drag")
     print("  - Zoom: Scroll wheel")
     print("  - Hover: See molecule structure and properties")

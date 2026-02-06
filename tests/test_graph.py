@@ -12,9 +12,8 @@ Tests cover:
 import numpy as np
 import pytest
 
-from tmap.index.types import KNNGraph
 from tmap.graph import MSTBuilder, Tree
-
+from tmap.index.types import KNNGraph
 
 # =============================================================================
 # Fixtures

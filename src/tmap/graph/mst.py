@@ -43,8 +43,8 @@ from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import minimum_spanning_tree
 
-from tmap.index.types import KNNGraph
 from tmap.graph.types import Tree
+from tmap.index.types import KNNGraph
 
 
 class MSTBuilder:

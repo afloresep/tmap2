@@ -1,18 +1,10 @@
 """
 Type definitions for the index module.
-
-WHY SEPARATE TYPES FILE?
-------------------------
-1. Avoids circular imports (common pain point in Python)
-2. Single source of truth for data structures
-3. Easy to find "what shape is this data?"
-
-These are simple dataclasses/NamedTuples - NOT classes with behavior.
-Keep data and behavior separate when possible (easier to test, reason about).
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import NamedTuple
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -80,10 +72,12 @@ class KNNGraph:
 
     @property
     def n_nodes(self) -> int:
+        """Return the number of nodes in the graph."""
         return self.indices.shape[0]
 
     @property
     def k(self) -> int:
+        """Return the number of neighbors per node."""
         return self.indices.shape[1]
 
     def to_edge_list(self) -> EdgeList:

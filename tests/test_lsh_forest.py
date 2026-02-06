@@ -20,7 +20,6 @@ import pytest
 from tmap.index import LSHForest
 from tmap.index.types import KNNGraph
 
-
 # =============================================================================
 # Fixtures
 # =============================================================================

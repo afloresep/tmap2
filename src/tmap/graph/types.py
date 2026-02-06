@@ -12,8 +12,9 @@ The Tree class is designed for:
 3. Serialization (save/load for persistence)
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator
+
 import numpy as np
 from numpy.typing import NDArray
 

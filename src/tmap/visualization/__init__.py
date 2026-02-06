@@ -7,11 +7,11 @@ TmapViz is the primary class for creating visualizations:
 
     from tmap.visualization import TmapViz
 
-    viz = TmapViz(title="My Data")
-    viz.set_layout(coords)
-    viz.add_column("label", labels, role="label")
-    viz.add_column("value", values, dtype="continuous")
-    viz.set_color("value", colormap="viridis")
+    viz = TmapViz()
+    viz.title = "My Data"
+    viz.set_points(x, y)
+    viz.add_label("label", labels)
+    viz.add_color_layout("value", values, categorical=False)
     viz.save("output.html")
 
 Features:

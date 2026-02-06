@@ -388,7 +388,7 @@ class TestFullPipeline:
 
     def test_full_pipeline_with_minhash(self, clustered_fingerprints):
         """Test full pipeline including MinHash encoding."""
-        from tmap import MinHash, LSHForest
+        from tmap import LSHForest, MinHash
         from tmap.graph.mst import MSTBuilder
         from tmap.layout import ForceDirectedLayout
         from tmap.visualization.tmapviz import TmapViz

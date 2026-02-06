@@ -7,7 +7,7 @@ These tests verify the high-level layout API that matches the original TMAP inte
 import numpy as np
 import pytest
 
-from tmap import MinHash, LSHForest
+from tmap import LSHForest, MinHash
 from tmap.layout import OGDF_AVAILABLE
 
 pytestmark = pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF not available")
@@ -15,12 +15,12 @@ pytestmark = pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF not available")
 # Conditional imports - only available when OGDF is built
 if OGDF_AVAILABLE:
     from tmap.layout import (
-        layout_from_lsh_forest,
-        layout_from_knn_graph,
         LayoutConfig,
-        ScalingType,
-        Placer,
         Merger,
+        Placer,
+        ScalingType,
+        layout_from_knn_graph,
+        layout_from_lsh_forest,
     )
 
 

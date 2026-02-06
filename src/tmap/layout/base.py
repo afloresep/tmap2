@@ -38,10 +38,10 @@ force-directed is usually best because it preserves
 distance relationships.
 """
 
+import pickle
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Self
-import pickle
 
 import numpy as np
 

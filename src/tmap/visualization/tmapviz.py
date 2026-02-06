@@ -52,11 +52,7 @@ def _load_js_sources() -> dict[str, str]:
         return {name: path.read_text(encoding="utf-8") for name, path in vendor_deps.items()}
 
     # Fallback to node_modules (for development)
-    """TODO: remove this once develop is done
-    This is the node_modules that `npm install regl-scatterplot`
-    creates. Not really something to commit, now the vendors take care
-    of that but in weird cases a fallback is okay
-    """
+    # TODO(ISS-006): Remove node_modules fallback once vendored files are stable
     root = _project_root()
     node_deps = {
         "regl": root / "node_modules" / "regl" / "dist" / "regl.min.js",
@@ -143,7 +139,7 @@ def _hex_to_rgba(hex_color: str, alpha: float = 1.0) -> list[float]:
     return [int(hex_color[i : i + 2], 16) / 255.0 for i in (0, 2, 4)] + [alpha]
 
 
-# TODO: Implement categorical=True preserves listed colors when available
+# TODO(ISS-014): Implement categorical=True preserves listed colors when available
 def _colormap_to_hex(name: str) -> list[str]:
     """
     Convert a matplotlib colormap to a list of hex strings.
@@ -234,6 +230,19 @@ def _pack_categorical_binary(values: Sequence[Any]) -> tuple[bytes, list[str]]:
 
 
 class TmapViz:
+    """Interactive scatter-plot visualization backed by regl-scatterplot.
+
+    Supports continuous and categorical color layouts, label tooltips,
+    and optional SMILES molecule rendering. Outputs self-contained HTML.
+
+    Attributes:
+        title: Page title and default filename stem.
+        background_color: Hex background color (default ``"#7A7A7A"``).
+        point_color: Default hex point color (default ``"#4a9eff"``).
+        point_size: Base point radius in pixels (default ``4.0``).
+        opacity: Point opacity in ``[0, 1]`` (default ``0.85``).
+    """
+
     def __init__(self) -> None:
         self.title: str = "MyTMAP"
         self.background_color: str = "#7A7A7A"
@@ -334,6 +343,12 @@ class TmapViz:
         name: str,
         values: list[Any],
     ) -> None:
+        """Add a text-only label column (shown in tooltip, not used for coloring).
+
+        Args:
+            name: Column name displayed in the tooltip header.
+            values: One value per point. Non-string values are converted via ``str()``.
+        """
         if isinstance(values, np.ndarray):
             values = values.tolist()
         else:
@@ -401,15 +416,7 @@ class TmapViz:
         """
         x_arr = np.asarray(x, dtype=np.float64)
         y_arr = np.asarray(y, dtype=np.float64)
-        """
-        ^^^^^^^
-        Not really sure if converting here to np.array is the best idea.
-        JSON requires list so at the end we are doing list -> np.array -> list
-        becasue we need to normalize. Maybe just asking for np.array is cleaner
-        but I feel like a lot of people will be passing it as list and having the
-        type error could be annoying.
-        TODO: profile this to see impact
-        """
+        # TODO(ISS-015): Profile list→ndarray→list round-trip cost for large inputs
 
         if x_arr.shape != y_arr.shape:
             raise ValueError("x and y must have the same shape")

@@ -10,8 +10,8 @@ This module wraps the C++ extension (_tmap_ogdf) and provides:
 from __future__ import annotations
 
 import importlib.util
-import sysconfig
 import sys
+import sysconfig
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,8 +20,8 @@ from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from tmap.graph.types import Tree
-    from tmap.index.types import KNNGraph
     from tmap.index.lsh_forest import LSHForest
+    from tmap.index.types import KNNGraph
 
 # =============================================================================
 # Load C++ extension
@@ -53,12 +53,22 @@ def _load_extension() -> bool:
 
     # Try normal import first
     try:
-        from tmap.layout._tmap_ogdf import ( # type: ignore
+        from tmap.layout._tmap_ogdf import (  # type: ignore
             LayoutConfig as _LC,
+        )
+        from tmap.layout._tmap_ogdf import (
             LayoutResult as _LR,
+        )
+        from tmap.layout._tmap_ogdf import (
             Merger as _M,
+        )
+        from tmap.layout._tmap_ogdf import (
             Placer as _P,
+        )
+        from tmap.layout._tmap_ogdf import (
             ScalingType as _ST,
+        )
+        from tmap.layout._tmap_ogdf import (
             layout_from_edge_list as _lfel,
         )
         # Assign to module-level globals (global declaration above makes this work)
@@ -137,7 +147,7 @@ def require_ogdf() -> None:
 def layout_from_edge_list(
     vertex_count: int,
     edges: list[tuple[int, int, float]],
-    config: "LayoutConfig | None" = None,
+    config: LayoutConfig | None = None,
     create_mst: bool = True,
 ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.uint32], NDArray[np.uint32]]:
     """
@@ -175,8 +185,8 @@ def layout_from_edge_list(
 
 
 def layout_from_tree(
-    tree: "Tree",
-    config: "LayoutConfig | None" = None,
+    tree: Tree,
+    config: LayoutConfig | None = None,
 ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
     """
     Compute 2D layout from a Tree (MST).
@@ -212,8 +222,8 @@ def layout_from_tree(
 
 
 def layout_from_lsh_forest(
-    lsh_forest: "LSHForest",
-    config: "LayoutConfig | None" = None,
+    lsh_forest: LSHForest,
+    config: LayoutConfig | None = None,
     create_mst: bool = True,
 ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.uint32], NDArray[np.uint32]]:
     """
@@ -286,8 +296,8 @@ def layout_from_lsh_forest(
 
 
 def layout_from_knn_graph(
-    knn: "KNNGraph",
-    config: "LayoutConfig | None" = None,
+    knn: KNNGraph,
+    config: LayoutConfig | None = None,
     create_mst: bool = True,
 ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.uint32], NDArray[np.uint32]]:
     """
@@ -329,7 +339,7 @@ def layout_from_knn_graph(
     )
 
 
-def _knn_to_edge_list(knn: "KNNGraph") -> list[tuple[int, int, float]]:
+def _knn_to_edge_list(knn: KNNGraph) -> list[tuple[int, int, float]]:
     """
     Convert KNNGraph to edge list for OGDF.
 

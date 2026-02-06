@@ -18,14 +18,14 @@ import pytest
 
 # Check if visualization dependencies are available
 try:
-    from tmap.visualization import TmapViz, BINARY_THRESHOLD
+    from tmap.visualization import BINARY_THRESHOLD, TmapViz
     from tmap.visualization.binary import (
-        quantize_coords,
+        BinaryContainerWriter,
         dequantize_coords,
+        pack_categorical_column,
         pack_coords,
         pack_numeric_column,
-        pack_categorical_column,
-        BinaryContainerWriter,
+        quantize_coords,
     )
     _VIZ_AVAILABLE = True
 except ImportError as e:

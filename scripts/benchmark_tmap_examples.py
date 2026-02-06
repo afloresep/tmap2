@@ -1,7 +1,10 @@
-from timeit import default_timer as timer
-import numpy as np
-import tmap as tm
 import argparse
+from timeit import default_timer as timer
+
+import numpy as np
+
+import tmap as tm
+
 
 def generate_data_new_tmap(n:int):
     np.random.seed
@@ -110,7 +113,7 @@ if __name__=="__main__":
     parser.add_argument('--tmap', type=str)
     args =parser.parse_args()
 
-    # If old tmap 
+    # If old tmap
     if args.tmap=='old':
         benchmark_old_tmap()
 

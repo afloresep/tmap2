@@ -26,7 +26,7 @@ This is implemented via edge weight modification before MST construction.
 See MSTBuilder.build() for the bias_factor parameter.
 """
 
-from tmap.graph.types import Tree
 from tmap.graph.mst import MSTBuilder
+from tmap.graph.types import Tree
 
 __all__ = ["Tree", "MSTBuilder"]

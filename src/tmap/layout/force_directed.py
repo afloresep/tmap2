@@ -7,19 +7,17 @@ with ModularMultilevelMixer, matching the original TMAP algorithm.
 
 from __future__ import annotations
 
-import numpy as np
-
 from tmap.graph.types import Tree
+from tmap.layout._ogdf import (
+    LayoutConfig,
+    Merger,
+    Placer,
+    ScalingType,
+    layout_from_tree,
+    require_ogdf,
+)
 from tmap.layout.base import Layout
 from tmap.layout.types import Coordinates
-from tmap.layout._ogdf import (
-    require_ogdf,
-    layout_from_tree,
-    LayoutConfig,
-    Placer,
-    Merger,
-    ScalingType,
-)
 
 
 class ForceDirectedLayout(Layout):
@@ -164,7 +162,7 @@ class ForceDirectedLayout(Layout):
         2. Only optimize new nodes
         3. Run fewer iterations
 
-        This is a TODO for future optimization when adding new nodes
+        TODO(ISS-005): Implement true incremental layout instead of full recompute
         """
         # Simple approach: recompute everything
         # The existing layout provides a good starting point conceptually,

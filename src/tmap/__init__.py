@@ -32,10 +32,10 @@ Design Principles
 - Type hints everywhere for IDE support and self-documentation
 """
 
-from importlib import import_module
-from typing import TYPE_CHECKING, Any
-from pathlib import Path
 import sysconfig
+from importlib import import_module
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 # In editable installs, Python modules load from src/ but compiled extensions
 # live in site-packages. Extend __path__ so imports can find the extensions.

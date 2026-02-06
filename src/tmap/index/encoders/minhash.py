@@ -15,23 +15,23 @@ API Compatibility:
     All public methods maintain backward compatibility with the original TMAP API.
 """
 
+import os
 from collections.abc import Collection, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import os
 
 import datasketch.minhash as _datasketch_minhash
 import numpy as np
 from datasketch.weighted_minhash import WeightedMinHashGenerator as _WeightedMinHashGenerator
 from numpy.typing import NDArray
 
-from .base import Encoder
 from ._minhash_numba import (
     NUMBA_AVAILABLE,
-    init_permutations,
-    minhash_batch_from_sparse,
-    minhash_batch_from_dense,
     binary_to_sparse,
+    init_permutations,
+    minhash_batch_from_dense,
+    minhash_batch_from_sparse,
 )
+from .base import Encoder
 
 __all__ = [
     "MinHash",

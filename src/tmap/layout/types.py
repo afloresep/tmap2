@@ -3,6 +3,7 @@ Type definitions for the layout module.
 """
 
 from dataclasses import dataclass
+
 import numpy as np
 from numpy.typing import NDArray
 

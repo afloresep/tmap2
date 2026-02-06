@@ -1,6 +1,7 @@
 """Tests for OGDF layout extension."""
 
 import math
+
 import pytest
 
 from tmap.layout import OGDF_AVAILABLE
