@@ -19,21 +19,20 @@ from __future__ import annotations
 
 import numpy as np
 
-from tmap.layout.types import Coordinates
 from tmap.visualization import TmapViz
 
 
 def generate_spiral_data(
-    n_points: int = 500_000,
+    n_points: int = 100_000,
     n_turns: float = 4.0,
     noise: float = 0.02,
     seed: int = 42,
-) -> tuple[Coordinates, dict[str, np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
     """
     Generate a spiral dataset with synthetic metadata.
 
     Returns:
-        Tuple of (coordinates, metadata dict)
+        Tuple of (x, y, metadata dict)
     """
     rng = np.random.default_rng(seed)
 
@@ -43,11 +42,6 @@ def generate_spiral_data(
 
     x = r * np.cos(t) + rng.normal(0, noise, n_points)
     y = r * np.sin(t) + rng.normal(0, noise, n_points)
-
-    coords = Coordinates(
-        x=x.astype(np.float32),
-        y=y.astype(np.float32),
-    )
 
     # Synthetic metadata
     metadata = {
@@ -65,62 +59,74 @@ def generate_spiral_data(
         ),
     }
 
-    return coords, metadata
+    return x.astype(np.float32), y.astype(np.float32), metadata
 
 
 def main() -> None:
     """Generate visualization demo."""
     print("Generating spiral dataset...")
-    coords, metadata = generate_spiral_data(n_points=500_000)
+    x, y, metadata = generate_spiral_data(n_points=100_000)
+    n_points = len(x)
 
-
-    print(f"Created {coords.n_nodes} points")
+    print(f"Created {n_points} points")
 
     # Create visualization
-    viz = TmapViz(
-        title="TMAP Visualization Demo",
-        point_size=2,
-        opacity=0.85,
-        background_color="#ffffff",
+    viz = TmapViz()
+    viz.title = "TMAP Visualization Demo"
+    viz.point_size = 3.0
+    viz.opacity = 0.85
+    viz.background_color = "#ffffff"
+
+    # Set coordinates
+    viz.set_points(x, y)
+
+    # Add continuous color layouts
+    viz.add_color_layout(
+        name="Activity",
+        values=metadata["activity"].tolist(),
+        categorical=False,
+        color="viridis",
+    )
+    viz.add_color_layout(
+        name="Molecular Weight",
+        values=metadata["mw"].tolist(),
+        categorical=False,
+        color="plasma",
+    )
+    viz.add_color_layout(
+        name="Radius",
+        values=metadata["radius"].tolist(),
+        categorical=False,
+        color="coolwarm",
     )
 
-    # Set layout
-    viz.set_layout(coords)
+    # Add categorical color layouts
+    viz.add_color_layout(
+        name="Cluster",
+        values=metadata["cluster"].tolist(),
+        categorical=True,
+        color="tab10",
+    )
+    viz.add_color_layout(
+        name="Quadrant",
+        values=metadata["quadrant"].tolist(),
+        categorical=True,
+        color="Set2",
+    )
 
-    # Add columns
-    # Labels (shown as primary identifier in tooltip)
-    labels = [f"Point-{i:05d}" for i in range(coords.n_nodes)]
-    viz.add_column("id", labels, role="label")
-
-    # Continuous columns
-    viz.add_column("activity", metadata["activity"], dtype="continuous")
-    viz.add_column("mw", metadata["mw"], dtype="continuous")
-    viz.add_column("radius", metadata["radius"], dtype="continuous")
-
-    # Categorical columns
-    viz.add_column("cluster", metadata["cluster"], dtype="categorical")
-    viz.add_column("quadrant", metadata["quadrant"], dtype="categorical")
-
-    # Set color encoding (try different options)
-    # Option 1: Continuous color
-    # viz.set_color("activity", colormap="viridis")
-
-    # Option 2: Categorical color (uncomment to try)
-    # viz.set_color("cluster", colormap="tab10")
-
-    # Option 3: Diverging colormap (uncomment to try)
-    # viz.set_color("mw", colormap="coolwarm")
+    # Add labels for tooltips
+    labels = [f"Point-{i:05d}" for i in range(n_points)]
+    viz.add_label("ID", labels)
 
     # Save to file
-    output_path = viz.save("visualization_demo.html")
+    output_path = viz.save("./")
     print(f"\nVisualization saved to: {output_path}")
     print("\nOpen in a web browser to interact:")
     print("  - Scroll to zoom")
     print("  - Drag to pan")
     print("  - Hover for tooltips")
     print("  - Shift+drag for lasso selection")
-    print("  - Press 'R' to reset view")
-    print("  - Press 'Escape' to clear selection")
+    print("  - Use dropdown to change color scheme")
 
 
 if __name__ == "__main__":

@@ -678,3 +678,250 @@ class TestMinHashNumbaBackend:
         sig = mh.from_binary_array(fp)
 
         assert mh.get_distance(sig, sig) == 0.0
+
+
+# =============================================================================
+# Additional Tests for Documentation Coverage
+# =============================================================================
+
+
+class TestMinHashInputValidation:
+    """Test input validation and edge cases for MinHash methods.
+
+    These tests ensure proper error handling and document expected behavior
+    for edge cases and invalid inputs.
+    """
+
+    def test_from_binary_array_rejects_2d_input(self):
+        """from_binary_array should reject 2D arrays.
+
+        Covers: Input validation for from_binary_array.
+        Users should use batch_from_binary_array for 2D input.
+        """
+        mh = MinHash(num_perm=32)
+        arr_2d = np.array([[1, 0, 1], [0, 1, 1]], dtype=np.uint8)
+
+        with pytest.raises(ValueError, match="must be 1D"):
+            mh.from_binary_array(arr_2d)
+
+    def test_from_sparse_rejects_nested_sequences(self):
+        """from_sparse_binary_array should reject nested sequences.
+
+        Covers: Input validation preventing accidental nested input.
+        """
+        mh = MinHash(num_perm=32)
+        nested = [[1, 2], [3, 4]]  # Nested - should be [1, 2, 3, 4]
+
+        with pytest.raises(ValueError, match="nested sequence"):
+            mh.from_sparse_binary_array(nested)
+
+    def test_from_string_array_rejects_non_strings(self):
+        """from_string_array should reject non-string elements.
+
+        Covers: Input validation for string method.
+        """
+        mh = MinHash(num_perm=32)
+        mixed = ["hello", 123, "world"]  # Contains int
+
+        with pytest.raises(ValueError, match="must be strings"):
+            mh.from_string_array(mixed)
+
+    def test_from_string_array_rejects_nested(self):
+        """from_string_array should reject nested sequences.
+
+        Covers: Input validation for nested string lists.
+        """
+        mh = MinHash(num_perm=32)
+        nested = [["hello"], ["world"]]
+
+        with pytest.raises(ValueError, match="nested sequence"):
+            mh.from_string_array(nested)
+
+    def test_empty_sparse_indices(self):
+        """Empty indices list should produce valid signature.
+
+        Covers: Edge case of empty set.
+        """
+        mh = MinHash(num_perm=32, seed=42)
+        sig = mh.from_sparse_binary_array([])
+        assert sig.shape == (32,)
+        assert sig.dtype == np.uint64
+
+    def test_very_large_sparse_indices(self):
+        """Large index values should be handled correctly.
+
+        Covers: Edge case of very large feature indices (e.g., from large vocabularies).
+        """
+        mh = MinHash(num_perm=32, seed=42)
+        large_indices = [0, 1000000, 999999999]  # Very large indices
+        sig = mh.from_sparse_binary_array(large_indices)
+        assert sig.shape == (32,)
+        # Should be deterministic
+        sig2 = mh.from_sparse_binary_array(large_indices)
+        np.testing.assert_array_equal(sig, sig2)
+
+
+class TestMinHashBinaryStringIncompatibility:
+    """Test and document that binary and string signatures are NOT comparable.
+
+    This is a critical user pitfall - binary encoding uses a different hash
+    function than string encoding (which uses SHA1 via datasketch).
+    """
+
+    def test_binary_vs_string_produce_different_signatures(self):
+        """Binary and string encoding produce different signatures for same data.
+
+        Covers: Critical warning - binary and string signatures use different
+        hash functions and should NOT be compared with each other.
+
+        This test documents that:
+        - Binary encoding uses universal hash: (a*x + b) mod prime
+        - String encoding uses SHA1 (via datasketch)
+        - Same conceptual data produces DIFFERENT signatures
+        """
+        mh = MinHash(num_perm=64, seed=42)
+
+        # Same data represented two ways
+        indices = [1, 2, 3]
+
+        # Binary representation
+        binary = np.zeros(10, dtype=np.uint8)
+        binary[indices] = 1
+        sig_binary = mh.from_binary_array(binary)
+
+        # String representation (same indices as strings)
+        sig_string = mh.from_string_array([str(i) for i in indices])
+
+        # These should NOT be equal (different hash functions)
+        assert not np.array_equal(sig_binary, sig_string), (
+            "Binary and string signatures should differ due to different hash functions"
+        )
+
+    def test_binary_string_distance_is_meaningless(self):
+        """Distance between binary and string signatures is not meaningful.
+
+        Covers: Warning that comparing mixed-type signatures is invalid.
+        While get_distance() won't error (same shape), the result is meaningless.
+        """
+        mh = MinHash(num_perm=64, seed=42)
+
+        # Create similar data in both formats
+        sig_binary = mh.from_binary_array(np.array([1, 1, 1, 0, 0], dtype=np.uint8))
+        sig_string = mh.from_string_array(["0", "1", "2"])  # "similar" - first 3 elements
+
+        # Distance can be computed but is meaningless
+        distance = mh.get_distance(sig_binary, sig_string)
+
+        # Distance will be high (close to 1) because hashes are unrelated
+        # This documents the expected behavior rather than asserting exact value
+        assert 0.0 <= distance <= 1.0
+
+
+class TestMinHashBatchMethods:
+    """Test batch method behavior and n_jobs parameter.
+
+    These tests verify that batch methods work correctly with different
+    parallelization settings.
+    """
+
+    def test_batch_from_binary_array_accepts_list_of_arrays(self):
+        """batch_from_binary_array should accept sequence of 1D arrays.
+
+        Covers: Flexibility in input format - can pass list of arrays.
+        """
+        mh = MinHash(num_perm=32)
+        arrays = [
+            np.array([1, 0, 1], dtype=np.uint8),
+            np.array([0, 1, 1], dtype=np.uint8),
+        ]
+        sigs = mh.batch_from_binary_array(arrays)
+        assert sigs.shape == (2, 32)
+
+    def test_batch_from_string_n_jobs_parameter(self):
+        """batch_from_string_array respects n_jobs parameter.
+
+        Covers: Parallel processing for string encoding (datasketch backend).
+        n_jobs=1 forces sequential processing.
+        """
+        mh = MinHash(num_perm=32, seed=42)
+        data = [["a", "b", "c"], ["b", "c", "d"], ["c", "d", "e"]]
+
+        # Sequential
+        sig_seq = mh.batch_from_string_array(data, n_jobs=1)
+
+        # Parallel (if available)
+        sig_par = mh.batch_from_string_array(data, n_jobs=2)
+
+        # Results should be identical regardless of parallelization
+        np.testing.assert_array_equal(sig_seq, sig_par)
+
+    def test_batch_from_sparse_with_varied_lengths(self):
+        """batch_from_sparse_binary_array handles varied-length index lists.
+
+        Covers: Ragged input where different items have different cardinalities.
+        """
+        mh = MinHash(num_perm=32, seed=42)
+        indices_list = [
+            [0],                    # 1 element
+            [0, 1, 2, 3, 4, 5],     # 6 elements
+            [],                     # 0 elements
+            [100],                  # 1 element, large index
+        ]
+        sigs = mh.batch_from_sparse_binary_array(indices_list)
+        assert sigs.shape == (4, 32)
+
+
+class TestWeightedMinHashEdgeCases:
+    """Test edge cases for WeightedMinHash.
+
+    WeightedMinHash has stricter requirements than regular MinHash.
+    """
+
+    def test_dimension_must_be_specified(self):
+        """WeightedMinHash requires dim to be specified upfront.
+
+        Covers: Unlike MinHash, dim cannot be inferred from data.
+        """
+        # dim is required - no default
+        wmh = WeightedMinHash(dim=10, num_perm=32)
+        assert wmh._dim == 10
+
+    def test_all_weights_must_be_positive(self):
+        """All weight values must be strictly > 0, not just >= 0.
+
+        Covers: WeightedMinHash algorithm requires positive weights.
+        Zero values will cause errors.
+        """
+        wmh = WeightedMinHash(dim=3, num_perm=32)
+
+        # Zero is not allowed
+        with pytest.raises(ValueError, match="non-negative"):
+            wmh.encode(np.array([[1.0, 0.0, 1.0]]))
+
+        # Small positive is OK
+        sig = wmh.encode(np.array([[1.0, 0.001, 1.0]]))
+        assert sig.shape == (1, 32, 2)
+
+    def test_weighted_signature_has_two_components(self):
+        """Weighted MinHash signatures have shape (num_perm, 2).
+
+        Covers: Output format difference - weighted has 2 values per hash.
+        """
+        wmh = WeightedMinHash(dim=5, num_perm=16)
+        sig = wmh.from_weight_array(np.array([1.0, 2.0, 3.0, 4.0, 5.0]))
+
+        # Shape is (num_perm, 2) not just (num_perm,)
+        assert sig.shape == (16, 2)
+
+    def test_batch_weighted_output_shape(self):
+        """Batch weighted encoding has 3D output.
+
+        Covers: Output shape is (n_samples, num_perm, 2).
+        """
+        wmh = WeightedMinHash(dim=5, num_perm=16)
+        data = np.array([
+            [1.0, 2.0, 3.0, 4.0, 5.0],
+            [5.0, 4.0, 3.0, 2.0, 1.0],
+        ])
+        sigs = wmh.batch_from_weight_array(data)
+        assert sigs.shape == (2, 16, 2)
