@@ -1,129 +1,229 @@
-# TMAP2 (Python)
+# TMAP 
 
-Tree-based visualization for high-dimensional data, built as a modular pipeline:
+> **🚧 UNDER ACTIVE DEVELOPMENT 🚧**
+>
+> This is a modernized reimplementation of the original TMAP library. Core features are working, but the API may change before v1.0.
+> Production users should continue using the [original TMAP](https://github.com/reymond-group/tmap) until this project reaches stability.
 
-`Raw Data → [Index] → k-NN Graph → [Graph] → MST → [Layout] → Coordinates → [Visualization] → Output`
+**TMAP** (Tree-MAP) creates beautiful, interactive visualizations of high-dimensional data by organizing similar items into tree structures. Perfect for chemical space, embeddings, or any high-dimensional dataset.
 
-This repo is currently **alpha/WIP**. The core goal is a clean, swappable architecture (Strategy pattern + composition)
-with deterministic, reproducible behavior.
+```text
+Your Data → MinHash → LSHForest → k-NN Graph → MST → OGDF Layout → Interactive Visualization
+```
 
-## What’s Implemented
+[![Tests](https://github.com/afloresep/tmap2/actions/workflows/tests.yml/badge.svg)](https://github.com/afloresep/tmap2/actions/workflows/tests.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-- `MinHash` / `WeightedMinHash` encoders (wrapper around `datasketch`)
-- `MSTBuilder` (minimum spanning tree from a k-NN graph) with optional “bias toward close neighbors”
-- Core data types (`KNNGraph`, `Tree`, `Coordinates`) and pipeline skeleton (`TreeMap`)
+## What's Working
 
-## Requirements
+**Core Pipeline**
 
-- Python **3.12+** (see `pyproject.toml`)
+- ✅ `MinHash` / `WeightedMinHash` encoding (via datasketch)
+- ✅ `LSHForest` for fast approximate k-NN search
+- ✅ MST (Minimum Spanning Tree) construction with bias control
+- ✅ OGDF-based graph layout (FastMultipoleEmbedder + Multilevel Mixer)
+- ✅ Interactive HTML visualizations with WebGL rendering
 
-## Install (Fresh Environment)
+**Features**
 
-From the repo root:
+- ✅ Deterministic, reproducible layouts (fixed seeds)
+- ✅ Handles large datasets (10M+ points with binary encoding)
+- ✅ Multiple color schemes and categorical/continuous data
+- ✅ Easier API, removed Faerun dependency
+- ✅ Improved Visualization: Lasso selection, exporting functions, (partial) search on labels
+- ✅ Removed C++ backend (except for OGDF) while being 3x faster
+- ✅ Many more!
+
+**In Progress**
+
+- 🚧 Performance benchmarks vs. original TMAP
+- 🚧 Additional layout algorithms
+- 🚧 Adding new points to existing TMAPs
+- 🚧 Adding edges to TMAPs
+
+## 📦 Installation
+
+### Requirements
+
+- Python **3.12+**
+- For layout functionality: OGDF library (automatically built during install)
+
+### Quick Install
 
 ```bash
+# Create virtual environment
 python -m venv .venv
 source .venv/bin/activate  # macOS/Linux
 # .\.venv\Scripts\Activate.ps1  # Windows (PowerShell)
 
+# Install
 python -m pip install -U pip
-
-# Dev install (recommended): tests, linting, + datasketch for MinHash encoders
 python -m pip install -e ".[dev]"
 ```
 
-Notes:
-- The import name is `tmap`. If you also need the original C++ `tmap` package, use a separate virtualenv to avoid
-  conflicts.
-- Optional extras are available via `.[faiss]`, `.[annoy]`, `.[viz]`, or `.[all]` (see `pyproject.toml`).
+**Notes:**
 
-## Quickstart
+- The import name is `tmap`. If you need the original C++ `tmap` package, use a separate virtualenv to avoid conflicts.
+- Optional extras: `.[faiss]`, `.[annoy]`, `.[viz]`, or `.[all]` (see `pyproject.toml`)
+- OGDF will be built automatically if not found. Ensure you have `cmake`, `g++`, and `make` installed.
 
-### MinHash signatures
+## 🚀 Quick Start
+
+### Complete Example: Molecular Visualization
 
 ```python
+from tmap import MinHash, LSHForest
+from tmap.layout import layout_from_lsh_forest, LayoutConfig
+from tmap.visualization import TmapViz
 import numpy as np
-from tmap import MinHash
 
-# Binary feature matrix: (n_samples, n_features)
-X = (np.random.random((3, 10)) < 0.2).astype(np.uint8)
+# 1. Encode your binary data (e.g., molecular fingerprints)
+fingerprints = np.random.randint(0, 2, (1000, 2048), dtype=np.uint8)
 
 mh = MinHash(num_perm=128, seed=42)
-signatures = mh.encode(X)
-print(signatures.shape)  # (3, 128)
+signatures = mh.batch_from_binary_array(fingerprints)
 
-print(mh.get_distance(signatures[0], signatures[1]))
+# 2. Build LSH Forest index
+lsh = LSHForest(d=128, l=64)
+lsh.batch_add(signatures)
+lsh.index()
+
+# 3. Compute layout
+cfg = LayoutConfig()
+cfg.k = 20              # k-nearest neighbors
+cfg.kc = 50             # Search multiplier
+cfg.fme_iterations = 1000
+cfg.deterministic = True
+cfg.seed = 42
+
+x, y, s, t = layout_from_lsh_forest(lsh, cfg)
+
+# 4. Create interactive visualization
+viz = TmapViz()
+viz.title = "My TMAP"
+viz.set_points(x, y)
+
+# Add color by some property
+viz.add_color_layout("Property", your_property_values, categorical=False)
+
+# Save (auto-selects binary mode for large datasets)
+viz.save("output.html")
 ```
 
-### MST from a k-NN graph
+### Simpler Example: Just the Layout
 
 ```python
 import numpy as np
+from tmap import MinHash, LSHForest
+from tmap.layout import layout_from_lsh_forest, LayoutConfig
 
-from tmap.graph.mst import MSTBuilder
-from tmap.index.types import KNNGraph
+# Binary data
+X = np.random.randint(0, 2, (100, 512), dtype=np.uint8)
 
-# 4 nodes, k=2 neighbors per node
-indices = np.array(
-    [
-        [1, 2],
-        [0, 3],
-        [0, 3],
-        [1, 2],
-    ],
-    dtype=np.int32,
-)
-distances = np.array(
-    [
-        [0.1, 0.2],
-        [0.1, 0.3],
-        [0.2, 0.4],
-        [0.3, 0.4],
-    ],
-    dtype=np.float32,
-)
+# Encode → Index → Layout
+mh = MinHash(num_perm=128, seed=42)
+sigs = mh.batch_from_binary_array(X)
 
-knn = KNNGraph(indices=indices, distances=distances)
-tree = MSTBuilder(bias_factor=0.1).build(knn)
+lsh = LSHForest(d=128, l=64)
+lsh.batch_add(sigs)
+lsh.index()
 
-print(tree.edges.shape)    # (n_nodes - 1, 2)
-print(tree.weights.shape)  # (n_nodes - 1,)
+cfg = LayoutConfig(k=10, seed=42, deterministic=True)
+x, y, s, t = layout_from_lsh_forest(lsh, cfg)
+
+# x, y = node coordinates
+# s, t = tree edges (source, target indices)
 ```
 
-## Run
+## 📚 Examples & Tutorials
 
-### Tests
+Check out the [`examples/`](examples/) directory for complete, runnable examples:
+
+- **[`smiles_tmap.py`](examples/smiles_tmap.py)** - Full pipeline: SMILES → Fingerprints → TMAP visualization with molecular properties
+- **[`visualization_demo.py`](examples/visualization_demo.py)** - Visualization API examples with different configurations
+
+Run the molecular example:
 
 ```bash
+pip install rdkit tqdm  # Additional dependencies
+python examples/smiles_tmap.py
+```
+
+This creates an interactive HTML file with:
+
+- Pan & zoom navigation
+- Hover to see molecule structures (via SMILES rendering)
+- Multiple color schemes (molecular weight, LogP, ring count)
+- Responsive design
+
+## 📖 Documentation
+
+Comprehensive guides are available in the [`docs/`](docs/) directory:
+
+| Guide | Description |
+|-------|-------------|
+| [**Documentation Index**](docs/index.md) | Start here! Overview and getting started |
+| [MinHash Guide](docs/minhash_guide.md) | Understanding MinHash encoding and choosing parameters |
+| [LSHForest Guide](docs/lshforest_guide.md) | Building the index, query methods, k-NN construction |
+| [Graph Guide](docs/graph_guide.md) | MST construction, tree traversal, bias factor tuning |
+| [Layout Guide](docs/layout_guide.md) | OGDF layout configuration, parameter tuning, determinism |
+| [Visualization Guide](docs/visualization_guide.md) | Creating interactive visualizations with TmapViz |
+| [API Reference](docs/api_reference.md) | Complete API documentation |
+
+## 🧪 Development
+
+### Running Tests
+
+```bash
+# Run all tests
 pytest -v
+
+# Run specific test file
+pytest tests/test_lshforest.py -v
+
+# Run without OGDF tests (faster)
+pytest -v --ignore=tests/test_layout_ogdf.py
+```
+
+### Code Quality
+
+```bash
+# Format code
+ruff format src/ tests/
+
+# Lint
+ruff check src/ tests/
+
+# Type check
+mypy src/
 ```
 
 ### Benchmarks
 
 ```bash
+# Benchmark new implementation
 python scripts/benchmark_new_tmap.py
-```
 
-To compare against the original `tmap` package, run the old benchmark in a separate environment:
-
-```bash
+# Compare with original (requires separate venv with old tmap)
 python scripts/benchmark_old_tmap.py
 ```
 
-## Development
+## 🏗️ Architecture
 
-```bash
-ruff check src/ tests/
-ruff format src/ tests/
-mypy src/
+TMAP2 is built with a modular, composable architecture:
+
+```python
+# Each stage is independent and swappable
+Data → Encoder (MinHash) → Index (LSHForest) → Graph (MST) → Layout (OGDF) → Viz (TmapViz)
 ```
 
-## Docs
+**Key Design Principles:**
 
-- Design notes: `docs/design_patterns.md`
-- LSH Forest plan: `docs/LSH_FOREST_IMPLEMENTATION.md`
-- Original paper: `docs/tmap_paper.pdf`
+- **Deterministic**: Same input + seed = same output
+- **Type-safe**: Full type hints, validated with mypy
+- **Testable**: High test coverage with clear test cases
+- **Extensible**: Strategy pattern allows swapping implementations
 
-## License
+## 📄 License
 
-MIT
+MIT License - see [LICENSE](LICENSE) file for details.
