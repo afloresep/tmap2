@@ -2,9 +2,14 @@ name: Tests
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, visualization]
   pull_request:
     branches: [main, master]
+
+# Cancel in-progress runs when a new push is made
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # Fast tests without OGDF (core functionality)
@@ -83,3 +88,19 @@ jobs:
 
       - name: Run all tests
         run: python -m pytest -v
+
+  # This job is required to pass for PRs to be mergeable
+  # It depends on all other jobs succeeding
+  all-tests-pass:
+    name: All Tests Pass
+    needs: [pytest-core, pytest-ogdf]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          if [ "${{ needs.pytest-core.result }}" != "success" ] || [ "${{ needs.pytest-ogdf.result }}" != "success" ]; then
+            echo "❌ One or more test jobs failed"
+            exit 1
+          fi
+          echo "✅ All tests passed successfully"
