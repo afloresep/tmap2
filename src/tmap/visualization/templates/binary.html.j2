@@ -681,6 +681,66 @@ const scatterplot = createScatterplot({
 });
 
 const zeroArray = new Float32Array(n);
+const NAN_FALLBACK_COLOR = '#000000';
+
+function buildContinuousMapping(rawValues, baseCmap) {
+  const nums = new Float64Array(rawValues.length);
+  const missing = new Array(rawValues.length);
+  let min = Infinity;
+  let max = -Infinity;
+  let hasNaN = false;
+
+  for (let i = 0; i < rawValues.length; i++) {
+    const raw = rawValues[i];
+    const v = Number(raw);
+    nums[i] = v;
+    const isMissing = raw === null || raw === undefined || !Number.isFinite(v);
+    missing[i] = isMissing;
+    if (isMissing) {
+      hasNaN = true;
+      continue;
+    }
+
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+
+  if (min === Infinity) {
+    min = 0;
+    max = 0;
+  }
+
+  const range = max === min ? 1 : max - min;
+  const w = new Float32Array(rawValues.length);
+
+  if (!hasNaN) {
+    for (let i = 0; i < rawValues.length; i++) {
+      w[i] = (nums[i] - min) / range;
+    }
+    return {
+      cmap: baseCmap,
+      w,
+      min,
+      max,
+      hasNaN: false,
+    };
+  }
+
+  const baseCount = Math.max(1, baseCmap.length);
+  const offset = 1 / baseCount;
+  const scale = baseCount > 1 ? (baseCount - 1) / baseCount : 0;
+  for (let i = 0; i < rawValues.length; i++) {
+    w[i] = missing[i] ? 0 : ((nums[i] - min) / range) * scale + offset;
+  }
+
+  return {
+    cmap: [NAN_FALLBACK_COLOR, ...baseCmap],
+    w,
+    min,
+    max,
+    hasNaN: true,
+  };
+}
 
 function applyColor(columnName) {
   const col = columns[columnName];
@@ -705,22 +765,9 @@ function applyColor(columnName) {
     scatterplot.set({ colorBy: 'valueA', pointColor: cmap });
     scatterplot.draw({ x, y, z, w: zeroArray });
   } else {
-    const values = col.values;
-    let min = Infinity, max = -Infinity;
-    for (let i = 0; i < n; i++) {
-      const v = values[i];
-      if (Number.isFinite(v)) {
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-    }
-    const range = max === min ? 1 : max - min;
-    const w = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      w[i] = (values[i] - min) / range;
-    }
-    scatterplot.set({ colorBy: 'valueB', pointColor: cmap });
-    scatterplot.draw({ x, y, z: zeroArray, w });
+    const mapping = buildContinuousMapping(col.values, cmap);
+    scatterplot.set({ colorBy: 'valueB', pointColor: mapping.cmap });
+    scatterplot.draw({ x, y, z: zeroArray, w: mapping.w });
   }
   updateLegend(columnName);
 }
@@ -774,18 +821,17 @@ function updateLegend(columnName) {
     }
     legendContent.innerHTML = html;
   } else {
-    const values = col.values;
-    let min = Infinity, max = -Infinity;
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
-      if (Number.isFinite(v)) {
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-    }
-    legendContent.innerHTML =
+    const mapping = buildContinuousMapping(col.values, cmap);
+    let legendHtml =
       '<div class="legend-gradient" style="background:' + buildGradient(cmap) + '"></div>' +
-      '<div class="legend-range"><span>' + formatValue(min) + '</span><span>' + formatValue(max) + '</span></div>';
+      '<div class="legend-range"><span>' + formatValue(mapping.min) + '</span><span>' +
+      formatValue(mapping.max) + '</span></div>';
+    if (mapping.hasNaN) {
+      legendHtml +=
+        '<div class="legend-item"><span class="legend-swatch" style="background:' +
+        NAN_FALLBACK_COLOR + '"></span><span>NaN</span></div>';
+    }
+    legendContent.innerHTML = legendHtml;
   }
   legend.classList.remove('hidden');
 }

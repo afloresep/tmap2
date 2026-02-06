@@ -95,6 +95,9 @@ viz.add_color_layout(
 - Diverging: `coolwarm`, `RdYlBu`, `RdBu`
 - Single-hue: `Blues`, `Reds`, `Greens`
 
+**NaN behavior:** If a continuous column contains `NaN`, TmapViz emits a warning and
+renders those points in black (`#000000`) by default.
+
 ### Color Layouts (Categorical)
 
 For discrete groups or categories:

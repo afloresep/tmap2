@@ -10,6 +10,9 @@ Tests cover:
 - Binary container format utilities
 """
 
+import json
+import re
+
 import numpy as np
 import pytest
 
@@ -588,15 +591,26 @@ class TestEdgeCases:
         assert isinstance(html, str)
 
     def test_nan_values_in_continuous(self, viz_with_data):
-        """Should handle NaN in continuous values."""
+        """Should warn and handle NaN in continuous values."""
         viz, data = viz_with_data
         values = np.array([1.0, np.nan, 3.0, np.nan] * 25)
 
-        viz.add_color_layout("with_nan", values)
+        with pytest.warns(UserWarning, match="contains NaN values"):
+            viz.add_color_layout("with_nan", values)
 
-        # Should not raise, NaN will be serialized
+        # Should not raise, NaN values are rendered in black client-side
         html = viz.render()
         assert isinstance(html, str)
+
+        # Payload JSON in HTML should be valid JSON (NaN -> null)
+        match = re.search(
+            r'<script id="payload" type="application/json">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match is not None
+        payload = json.loads(match.group(1))
+        assert payload["columns"]["with_nan"]["values"][1] is None
 
 
 # =============================================================================

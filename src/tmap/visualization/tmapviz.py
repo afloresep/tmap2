@@ -3,10 +3,12 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, List, Literal, Optional, Sequence
+from typing import Any, Literal
 
 import numpy as np
 from matplotlib import colormaps
@@ -52,7 +54,7 @@ def _load_js_sources() -> dict[str, str]:
     # Fallback to node_modules (for development)
     """TODO: remove this once develop is done
     This is the node_modules that `npm install regl-scatterplot`
-    creates. Not really something to commit, now the vendors take care 
+    creates. Not really something to commit, now the vendors take care
     of that but in weird cases a fallback is okay
     """
     root = _project_root()
@@ -93,7 +95,7 @@ def _runtime_base64() -> dict[str, str]:
 
 
 @lru_cache(maxsize=1)
-def _get_jinja_env() -> "Environment":
+def _get_jinja_env() -> Environment:
     """Get or create a cached Jinja2 environment for templates."""
     if not _JINJA_AVAILABLE:
         raise ImportError(
@@ -154,13 +156,38 @@ def _colormap_to_hex(name: str) -> list[str]:
     return hex_colors
 
 
+def _contains_nan(values: Sequence[Any]) -> bool:
+    """Return True when values contain at least one NaN."""
+    try:
+        arr = np.asarray(values, dtype=np.float64)
+    except (TypeError, ValueError):
+        return False
+    return bool(np.isnan(arr).any())
+
+
+def _to_json_safe(value: Any) -> Any:
+    """Convert values to JSON-safe types, mapping non-finite numbers to null."""
+    if isinstance(value, np.ndarray):
+        return [_to_json_safe(v) for v in value.tolist()]
+    if isinstance(value, dict):
+        return {k: _to_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_safe(v) for v in value]
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        f = float(value)
+        return f if np.isfinite(f) else None
+    return value
+
+
 @dataclass
 class Column:
     name: str
     values: Sequence[int | np.floating | str]
     role: Literal["layout", "label", "layout+label", "smiles"]
     dtype: Literal["continuous", "categorical", "label", "smiles"]
-    color: Optional[str] = None
+    color: str | None = None
 
 
 def _pack_coords_binary(points: np.ndarray, bits: int = 16) -> bytes:
@@ -215,20 +242,20 @@ class TmapViz:
         self.opacity: float = 0.85
 
         # Store both formats for flexibility
-        self._points: List[list[float]] = []
-        self._points_array: Optional[np.ndarray] = None  # Shape: (n, 2)
-        self._layout_keys: List[str] = []
-        self._labels_keys: List[str] = []
-        self._smiles_column: Optional[str] = None
+        self._points: list[list[float]] = []
+        self._points_array: np.ndarray | None = None  # Shape: (n, 2)
+        self._layout_keys: list[str] = []
+        self._labels_keys: list[str] = []
+        self._smiles_column: str | None = None
         self._columns: dict[str, Column] = {}
 
     def add_color_layout(
         self,
         name: str,
-        values: List[Any],
+        values: list[Any],
         categorical: bool = False,
         add_as_label: bool = True,
-        color: Optional[str] = None,
+        color: str | None = None,
     ) -> None:
 
         import matplotlib
@@ -279,6 +306,15 @@ class TmapViz:
                     f"Categorical layout '{name}' has {unique_count} unique values but "
                     f"colormap '{color}' only provides {cmap_size} colors."
                 )
+
+        if not categorical and _contains_nan(values):
+            warnings.warn(
+                f"Continuous layout '{name}' contains NaN values. "
+                "NaN points will be rendered in black (#000000).",
+                UserWarning,
+                stacklevel=2,
+            )
+
         if name not in self._layout_keys:
             self._layout_keys.append(name)
 
@@ -296,7 +332,7 @@ class TmapViz:
     def add_label(
         self,
         name: str,
-        values: List[Any],
+        values: list[Any],
     ) -> None:
         if isinstance(values, np.ndarray):
             values = values.tolist()
@@ -310,7 +346,7 @@ class TmapViz:
     def add_smiles(
         self,
         name: str,
-        values: List[str],
+        values: list[str],
     ) -> None:
         """Add a SMILES column for molecular structure visualization.
 
@@ -343,19 +379,19 @@ class TmapViz:
         return len(self._points) if self._points else 0
 
     @property
-    def layouts(self) -> List[Column]:
+    def layouts(self) -> list[Column]:
         """Return layouts added."""
         return [self._columns[layout] for layout in self._layout_keys]
 
     @property
-    def labels(self) -> List[Column]:
+    def labels(self) -> list[Column]:
         """Return labels added."""
         return [self._columns[labels] for labels in self._labels_keys]
 
     def set_points(
         self,
-        x: List[np.floating] | NDArray[np.floating],
-        y: List[np.floating] | NDArray[np.floating],
+        x: list[np.floating] | NDArray[np.floating],
+        y: list[np.floating] | NDArray[np.floating],
     ) -> None:
         """
         Store and normalize point coordinates.
@@ -379,7 +415,8 @@ class TmapViz:
             raise ValueError("x and y must have the same shape")
         if x_arr.ndim != 1 or y_arr.ndim != 1:
             raise ValueError(
-                f"Both x and y should be 1 dimensional arrays, Got x: {x_arr.ndim}D and y: {y_arr.ndim}D"
+                f"Both x and y should be 1 dimensional arrays,\
+                Got x: {x_arr.ndim}D and y: {y_arr.ndim}D"
             )
 
         normalized_coords = _normalize_coords(x_arr, y_arr)
@@ -460,7 +497,11 @@ class TmapViz:
         }
 
         runtime = _runtime_base64()
-        payload_json = json.dumps(payload, separators=(",", ":"))
+        payload_json = json.dumps(
+            _to_json_safe(payload),
+            separators=(",", ":"),
+            allow_nan=False,
+        )
 
         # Render using Jinja2 template
         env = _get_jinja_env()
@@ -575,7 +616,11 @@ class TmapViz:
         }
 
         runtime = _runtime_base64()
-        header_json = json.dumps(header, separators=(",", ":"))
+        header_json = json.dumps(
+            _to_json_safe(header),
+            separators=(",", ":"),
+            allow_nan=False,
+        )
 
         # Filter out string columns from binary data (they're in header)
         columns_b64_filtered = {

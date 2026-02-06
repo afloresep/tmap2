@@ -532,6 +532,63 @@ const scatterplot = createScatterplot({
 const x = coords.map((p) => p[0]);
 const y = coords.map((p) => p[1]);
 const zeroArray = new Array(x.length).fill(0);
+const NAN_FALLBACK_COLOR = '#000000';
+
+function buildContinuousMapping(rawValues, baseCmap) {
+  const nums = new Array(rawValues.length);
+  const missing = new Array(rawValues.length);
+  let min = Infinity;
+  let max = -Infinity;
+  let hasNaN = false;
+
+  for (let i = 0; i < rawValues.length; i++) {
+    const raw = rawValues[i];
+    const v = Number(raw);
+    nums[i] = v;
+    const isMissing = raw === null || raw === undefined || !Number.isFinite(v);
+    missing[i] = isMissing;
+    if (isMissing) {
+      hasNaN = true;
+      continue;
+    }
+
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+
+  if (min === Infinity) {
+    min = 0;
+    max = 0;
+  }
+
+  const range = max === min ? 1 : max - min;
+
+  if (!hasNaN) {
+    return {
+      cmap: baseCmap,
+      w: nums.map((v) => ((v - min) / range)),
+      min,
+      max,
+      hasNaN: false,
+    };
+  }
+
+  const baseCount = Math.max(1, baseCmap.length);
+  const offset = 1 / baseCount;
+  const scale = baseCount > 1 ? (baseCount - 1) / baseCount : 0;
+  const w = nums.map((v, i) => {
+    if (missing[i]) return 0;
+    return ((v - min) / range) * scale + offset;
+  });
+
+  return {
+    cmap: [NAN_FALLBACK_COLOR, ...baseCmap],
+    w,
+    min,
+    max,
+    hasNaN: true,
+  };
+}
 
 function applyColor(columnName) {
   const col = columns[columnName];
@@ -555,20 +612,9 @@ function applyColor(columnName) {
     scatterplot.set({ colorBy: 'valueA', pointColor: cmap });
     scatterplot.draw({ x, y, z, w: zeroArray });
   } else {
-    const nums = col.values.map(Number);
-    let min = Infinity;
-    let max = -Infinity;
-    for (let i = 0; i < nums.length; i++) {
-      const v = nums[i];
-      if (Number.isFinite(v)) {
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-    }
-    const range = max === min ? 1 : max - min;
-    const w = nums.map((v) => ((v - min) / range));
-    scatterplot.set({ colorBy: 'valueB', pointColor: cmap });
-    scatterplot.draw({ x, y, z: zeroArray, w });
+    const mapping = buildContinuousMapping(col.values, cmap);
+    scatterplot.set({ colorBy: 'valueB', pointColor: mapping.cmap });
+    scatterplot.draw({ x, y, z: zeroArray, w: mapping.w });
   }
   updateLegend(columnName);
 }
@@ -633,25 +679,18 @@ function updateLegend(columnName) {
     }
     legendContent.innerHTML = html;
   } else {
-    const nums = col.values.map(Number);
-    let min = Infinity;
-    let max = -Infinity;
-    for (let i = 0; i < nums.length; i++) {
-      const v = nums[i];
-      if (Number.isFinite(v)) {
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-    }
-    if (min === Infinity) {
-      min = 0;
-      max = 0;
-    }
+    const mapping = buildContinuousMapping(col.values, cmap);
     const gradient = buildGradient(cmap);
-    legendContent.innerHTML =
+    let legendHtml =
       '<div class="legend-gradient" style="background: ' + gradient + ';"></div>' +
-      '<div class="legend-range"><span>' + formatValue(min) + '</span><span>' +
-      formatValue(max) + '</span></div>';
+      '<div class="legend-range"><span>' + formatValue(mapping.min) + '</span><span>' +
+      formatValue(mapping.max) + '</span></div>';
+    if (mapping.hasNaN) {
+      legendHtml +=
+        '<div class="legend-item"><span class="legend-swatch" style="background: ' +
+        NAN_FALLBACK_COLOR + ';"></span><span class="legend-label">NaN</span></div>';
+    }
+    legendContent.innerHTML = legendHtml;
   }
 
   legend.classList.remove('hidden');
