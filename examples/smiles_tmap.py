@@ -173,15 +173,9 @@ def create_tmap_from_smiles(
     # Add index labels
     viz.add_label("Index", [str(i) for i in range(n)])
 
-    # Save visualization
-    if not output_path.endswith('.html'):
-        output_path = output_path + '.html'
-
-    html = viz.render()
-    with open(output_path, "w") as f:
-        f.write(html)
-
-    print(f"\nSaved visualization to: {output_path}")
+    # Save visualization (auto-selects binary mode for large datasets)
+    saved_path = viz.save(output_path)
+    print(f"\nSaved visualization to: {saved_path}")
     return x, y
 
 
