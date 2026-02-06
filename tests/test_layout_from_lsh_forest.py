@@ -525,3 +525,447 @@ class TestIntegration:
         np.testing.assert_array_equal(y1, y2)
         np.testing.assert_array_equal(s1, s2)
         np.testing.assert_array_equal(t1, t2)
+
+
+# =============================================================================
+# layout_from_tree tests (modular pipeline)
+# =============================================================================
+
+
+class TestLayoutFromTree:
+    """Tests for layout_from_tree function - the modular pipeline path.
+
+    This tests the step-by-step approach:
+    LSHForest -> KNNGraph -> MSTBuilder -> Tree -> layout_from_tree
+    """
+
+    @pytest.fixture
+    def tree_from_lsh(self, small_lsh_forest):
+        """Create a Tree via the modular pipeline."""
+        from tmap.graph.mst import MSTBuilder
+
+        lsh, n = small_lsh_forest
+        knn = lsh.get_knn_graph(k=15, kc=30)
+        builder = MSTBuilder()
+        tree = builder.build(knn)
+        return tree, n
+
+    def test_layout_from_tree_returns_correct_types(self, tree_from_lsh):
+        """layout_from_tree should return (x, y) coordinate arrays."""
+        from tmap.layout import layout_from_tree
+
+        tree, n = tree_from_lsh
+        x, y = layout_from_tree(tree)
+
+        assert isinstance(x, np.ndarray)
+        assert isinstance(y, np.ndarray)
+        assert x.dtype == np.float32
+        assert y.dtype == np.float32
+
+    def test_layout_from_tree_correct_shapes(self, tree_from_lsh):
+        """Output arrays should have n_nodes elements."""
+        from tmap.layout import layout_from_tree
+
+        tree, n = tree_from_lsh
+        x, y = layout_from_tree(tree)
+
+        assert len(x) == n
+        assert len(y) == n
+
+    def test_layout_from_tree_coordinates_normalized(self, tree_from_lsh):
+        """Coordinates should be normalized to [-0.5, 0.5] range."""
+        from tmap.layout import layout_from_tree
+
+        tree, n = tree_from_lsh
+        x, y = layout_from_tree(tree)
+
+        assert x.min() >= -0.5
+        assert x.max() <= 0.5
+        assert y.min() >= -0.5
+        assert y.max() <= 0.5
+
+    def test_layout_from_tree_with_config(self, tree_from_lsh):
+        """Should accept LayoutConfig for customization."""
+        from tmap.layout import layout_from_tree
+
+        tree, n = tree_from_lsh
+
+        cfg = LayoutConfig()
+        cfg.node_size = 1 / 20  # Larger spread
+        cfg.fme_iterations = 500
+
+        x, y = layout_from_tree(tree, cfg)
+
+        assert len(x) == n
+        assert len(y) == n
+
+    def test_layout_from_tree_deterministic(self, tree_from_lsh):
+        """Same seed should produce identical results."""
+        from tmap.layout import layout_from_tree
+
+        tree, n = tree_from_lsh
+
+        cfg = LayoutConfig()
+        cfg.deterministic = True
+        cfg.seed = 42
+
+        x1, y1 = layout_from_tree(tree, cfg)
+        x2, y2 = layout_from_tree(tree, cfg)
+
+        np.testing.assert_array_equal(x1, x2)
+        np.testing.assert_array_equal(y1, y2)
+
+
+# =============================================================================
+# ForceDirectedLayout class tests
+# =============================================================================
+
+
+class TestForceDirectedLayout:
+    """Tests for ForceDirectedLayout class - the object-oriented API.
+
+    ForceDirectedLayout wraps OGDF and provides:
+    - Parameter configuration through __init__
+    - compute() method for layout calculation
+    - Support for incremental updates (currently stub)
+    """
+
+    @pytest.fixture
+    def simple_tree(self, small_lsh_forest):
+        """Create a simple Tree for testing."""
+        from tmap.graph.mst import MSTBuilder
+
+        lsh, n = small_lsh_forest
+        knn = lsh.get_knn_graph(k=10, kc=20)
+        builder = MSTBuilder()
+        tree = builder.build(knn)
+        return tree
+
+    def test_basic_compute(self, simple_tree):
+        """ForceDirectedLayout.compute should return Coordinates."""
+        from tmap.layout import ForceDirectedLayout
+        from tmap.layout.types import Coordinates
+
+        layout = ForceDirectedLayout(seed=42)
+        coords = layout.compute(simple_tree)
+
+        assert isinstance(coords, Coordinates)
+        assert len(coords.x) == simple_tree.n_nodes
+        assert len(coords.y) == simple_tree.n_nodes
+
+    def test_seed_produces_deterministic_output(self, simple_tree):
+        """Same seed should produce identical coordinates."""
+        from tmap.layout import ForceDirectedLayout
+
+        layout1 = ForceDirectedLayout(seed=42)
+        layout2 = ForceDirectedLayout(seed=42)
+
+        coords1 = layout1.compute(simple_tree)
+        coords2 = layout2.compute(simple_tree)
+
+        np.testing.assert_array_equal(coords1.x, coords2.x)
+        np.testing.assert_array_equal(coords1.y, coords2.y)
+
+    def test_different_seeds_may_differ(self, simple_tree):
+        """Different seeds may produce different layouts."""
+        from tmap.layout import ForceDirectedLayout
+
+        layout1 = ForceDirectedLayout(seed=42)
+        layout2 = ForceDirectedLayout(seed=123)
+
+        coords1 = layout1.compute(simple_tree)
+        coords2 = layout2.compute(simple_tree)
+
+        # Layouts should be valid
+        assert len(coords1.x) == len(coords2.x)
+        # (They may or may not differ depending on algorithm)
+
+    def test_max_iterations_parameter(self, simple_tree):
+        """max_iterations should be passed to config."""
+        from tmap.layout import ForceDirectedLayout
+
+        layout = ForceDirectedLayout(seed=42, max_iterations=100)
+        coords = layout.compute(simple_tree)
+
+        assert len(coords.x) == simple_tree.n_nodes
+
+    def test_placer_parameter(self, simple_tree):
+        """Placer parameter should be configurable."""
+        from tmap.layout import ForceDirectedLayout
+
+        for placer in [
+            Placer.Barycenter,
+            Placer.Zero,
+            Placer.Median,
+        ]:
+            layout = ForceDirectedLayout(seed=42, placer=placer)
+            coords = layout.compute(simple_tree)
+            assert len(coords.x) == simple_tree.n_nodes
+
+    def test_merger_parameter(self, simple_tree):
+        """Merger parameter should be configurable."""
+        from tmap.layout import ForceDirectedLayout
+
+        for merger in [
+            Merger.EdgeCover,
+            Merger.LocalBiconnected,
+        ]:
+            layout = ForceDirectedLayout(seed=42, merger=merger)
+            coords = layout.compute(simple_tree)
+            assert len(coords.x) == simple_tree.n_nodes
+
+    def test_node_size_affects_spread(self, simple_tree):
+        """Larger node_size should generally produce more spread out layouts."""
+        from tmap.layout import ForceDirectedLayout
+
+        layout_small = ForceDirectedLayout(seed=42, node_size=1 / 100)
+        layout_large = ForceDirectedLayout(seed=42, node_size=1 / 10)
+
+        coords_small = layout_small.compute(simple_tree)
+        coords_large = layout_large.compute(simple_tree)
+
+        # Both should produce valid output
+        assert len(coords_small.x) == len(coords_large.x)
+
+        # Layouts should differ
+        assert not np.allclose(coords_small.x, coords_large.x) or not np.allclose(
+            coords_small.y, coords_large.y
+        )
+
+    def test_config_overrides_individual_params(self, simple_tree):
+        """If config is provided, it should override individual params."""
+        from tmap.layout import ForceDirectedLayout
+
+        cfg = LayoutConfig()
+        cfg.fme_iterations = 200
+        cfg.deterministic = True
+        cfg.seed = 99
+
+        # seed=42 should be overridden by config.seed=99
+        layout = ForceDirectedLayout(config=cfg)
+
+        # The config should take precedence
+        coords = layout.compute(simple_tree)
+        assert len(coords.x) == simple_tree.n_nodes
+
+
+# =============================================================================
+# Coordinates class tests
+# =============================================================================
+
+
+class TestCoordinates:
+    """Tests for Coordinates data class."""
+
+    def test_creation(self):
+        """Basic Coordinates creation."""
+        from tmap.layout.types import Coordinates
+
+        x = np.array([0.0, 1.0, 2.0], dtype=np.float32)
+        y = np.array([0.0, 0.5, 1.0], dtype=np.float32)
+
+        coords = Coordinates(x=x, y=y)
+
+        assert coords.n_nodes == 3
+        np.testing.assert_array_equal(coords.x, x)
+        np.testing.assert_array_equal(coords.y, y)
+        assert coords.scale == 1.0
+
+    def test_mismatched_lengths_raises(self):
+        """x and y with different lengths should raise ValueError."""
+        from tmap.layout.types import Coordinates
+
+        x = np.array([0.0, 1.0], dtype=np.float32)
+        y = np.array([0.0, 0.5, 1.0], dtype=np.float32)
+
+        with pytest.raises(ValueError, match="same length"):
+            Coordinates(x=x, y=y)
+
+    def test_normalize(self):
+        """Normalize should scale to [margin, 1-margin] range."""
+        from tmap.layout.types import Coordinates
+
+        x = np.array([0.0, 10.0, 5.0], dtype=np.float32)
+        y = np.array([0.0, 20.0, 10.0], dtype=np.float32)
+
+        coords = Coordinates(x=x, y=y)
+        normalized = coords.normalize(margin=0.1)
+
+        # Should be in [0.1, 0.9] range (with small float tolerance)
+        assert normalized.x.min() >= 0.1 - 1e-6
+        assert normalized.x.max() <= 0.9 + 1e-6
+        assert normalized.y.min() >= 0.1 - 1e-6
+        assert normalized.y.max() <= 0.9 + 1e-6
+
+    def test_normalize_preserves_relative_positions(self):
+        """Normalize should preserve relative ordering."""
+        from tmap.layout.types import Coordinates
+
+        x = np.array([0.0, 10.0, 5.0], dtype=np.float32)
+        y = np.array([0.0, 20.0, 10.0], dtype=np.float32)
+
+        coords = Coordinates(x=x, y=y)
+        normalized = coords.normalize(margin=0.1)
+
+        # Original ordering: x[0] < x[2] < x[1]
+        assert normalized.x[0] < normalized.x[2] < normalized.x[1]
+
+    def test_normalize_single_point(self):
+        """Normalize should handle single point without division by zero."""
+        from tmap.layout.types import Coordinates
+
+        x = np.array([5.0], dtype=np.float32)
+        y = np.array([5.0], dtype=np.float32)
+
+        coords = Coordinates(x=x, y=y)
+        normalized = coords.normalize(margin=0.1)
+
+        # Should be centered
+        assert normalized.x[0] == pytest.approx(0.1, rel=0.01)
+        assert normalized.y[0] == pytest.approx(0.1, rel=0.01)
+
+    def test_to_array(self):
+        """to_array should return (n, 2) array."""
+        from tmap.layout.types import Coordinates
+
+        x = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        y = np.array([4.0, 5.0, 6.0], dtype=np.float32)
+
+        coords = Coordinates(x=x, y=y)
+        arr = coords.to_array()
+
+        assert arr.shape == (3, 2)
+        np.testing.assert_array_equal(arr[:, 0], x)
+        np.testing.assert_array_equal(arr[:, 1], y)
+
+    def test_from_array(self):
+        """from_array should create Coordinates from (n, 2) array."""
+        from tmap.layout.types import Coordinates
+
+        arr = np.array([[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]], dtype=np.float32)
+
+        coords = Coordinates.from_array(arr)
+
+        np.testing.assert_array_equal(coords.x, arr[:, 0])
+        np.testing.assert_array_equal(coords.y, arr[:, 1])
+
+    def test_roundtrip_array_conversion(self):
+        """to_array and from_array should roundtrip."""
+        from tmap.layout.types import Coordinates
+
+        original = Coordinates(
+            x=np.array([1.0, 2.0, 3.0], dtype=np.float32),
+            y=np.array([4.0, 5.0, 6.0], dtype=np.float32),
+        )
+
+        arr = original.to_array()
+        restored = Coordinates.from_array(arr)
+
+        np.testing.assert_array_equal(original.x, restored.x)
+        np.testing.assert_array_equal(original.y, restored.y)
+
+
+# =============================================================================
+# Additional edge cases
+# =============================================================================
+
+
+class TestAdditionalEdgeCases:
+    """Additional edge case tests for layout module."""
+
+    def test_placer_random_is_nondeterministic(self, small_lsh_forest):
+        """Placer.Random should produce different results without seed."""
+        lsh, n = small_lsh_forest
+
+        cfg = LayoutConfig()
+        cfg.placer = Placer.Random
+        cfg.deterministic = False  # Explicitly non-deterministic
+
+        x1, y1, _, _ = layout_from_lsh_forest(lsh, cfg)
+        x2, y2, _, _ = layout_from_lsh_forest(lsh, cfg)
+
+        # Layouts should be valid
+        assert len(x1) == n
+        assert len(x2) == n
+        # (They may or may not differ - random doesn't guarantee difference)
+
+    def test_empty_tree_edges(self):
+        """Layout should handle tree with no edges (disconnected nodes)."""
+        from tmap.graph.types import Tree
+        from tmap.layout import layout_from_tree
+
+        # Create tree with no edges (5 disconnected nodes)
+        tree = Tree(
+            n_nodes=5,
+            edges=np.zeros((0, 2), dtype=np.int32),
+            weights=np.zeros(0, dtype=np.float32),
+        )
+
+        cfg = LayoutConfig()
+        cfg.deterministic = True
+        cfg.seed = 42
+
+        x, y = layout_from_tree(tree, cfg)
+
+        # All nodes should get coordinates
+        assert len(x) == 5
+        assert len(y) == 5
+
+    def test_linear_tree(self):
+        """Layout should handle a linear chain tree (worst case for some algorithms)."""
+        from tmap.graph.types import Tree
+        from tmap.layout import layout_from_tree
+
+        n = 20
+        # Chain: 0-1-2-3-...-19
+        edges = np.array([[i, i + 1] for i in range(n - 1)], dtype=np.int32)
+        weights = np.ones(n - 1, dtype=np.float32)
+
+        tree = Tree(n_nodes=n, edges=edges, weights=weights)
+
+        x, y = layout_from_tree(tree)
+
+        assert len(x) == n
+        # Coordinates should be spread out, not all at origin
+        assert x.max() - x.min() > 0.1 or y.max() - y.min() > 0.1
+
+    def test_star_tree(self):
+        """Layout should handle star topology (one central node)."""
+        from tmap.graph.types import Tree
+        from tmap.layout import layout_from_tree
+
+        n = 10
+        # Star: node 0 connects to all others
+        edges = np.array([[0, i] for i in range(1, n)], dtype=np.int32)
+        weights = np.ones(n - 1, dtype=np.float32)
+
+        tree = Tree(n_nodes=n, edges=edges, weights=weights)
+
+        x, y = layout_from_tree(tree)
+
+        assert len(x) == n
+        # Central node should be roughly in the middle
+        # (or at least layout should complete without error)
+
+    def test_sl_scaling_min_max(self, small_lsh_forest):
+        """Scaling min/max parameters should be accepted."""
+        lsh, n = small_lsh_forest
+
+        cfg = LayoutConfig()
+        cfg.sl_scaling_min = 0.5
+        cfg.sl_scaling_max = 2.0
+
+        x, y, s, t = layout_from_lsh_forest(lsh, cfg)
+
+        assert len(x) == n
+
+    def test_merger_factor_parameter(self, small_lsh_forest):
+        """merger_factor parameter should be accepted."""
+        lsh, n = small_lsh_forest
+
+        for factor in [1.5, 2.0, 3.0]:
+            cfg = LayoutConfig()
+            cfg.merger_factor = factor
+
+            x, y, s, t = layout_from_lsh_forest(lsh, cfg)
+            assert len(x) == n

@@ -574,3 +574,372 @@ class TestLSHForestIntegration:
             if neighbors:
                 min_dist = neighbors[0][0]
                 assert min_dist < 0.8  # Not completely random
+
+
+# =============================================================================
+# Additional Tests for Documentation Coverage
+# =============================================================================
+
+
+class TestLSHForestIncrementalOperations:
+    """Test incremental add/index operations.
+
+    These tests verify that the LSH Forest correctly handles
+    adding data in multiple batches with re-indexing.
+    """
+
+    def test_incremental_add_then_reindex(self):
+        """Adding after index() and re-indexing should work correctly.
+
+        Covers: Common workflow of incrementally adding data.
+        """
+        rng = np.random.default_rng(42)
+        sig1 = rng.integers(0, 2**63, size=(50, 128), dtype=np.uint64)
+        sig2 = rng.integers(0, 2**63, size=(50, 128), dtype=np.uint64)
+
+        lsh = LSHForest(d=128, l=8)
+
+        # First batch
+        lsh.batch_add(sig1)
+        lsh.index()
+        assert lsh.size == 50
+        assert lsh.is_clean
+
+        # Second batch - index becomes dirty
+        lsh.batch_add(sig2)
+        assert not lsh.is_clean  # Needs reindex
+
+        # Re-index
+        lsh.index()
+        assert lsh.size == 100  # Both batches included
+        assert lsh.is_clean
+
+        # Queries should work on full dataset
+        knn = lsh.get_knn_graph(k=5, kc=10)
+        assert knn.n_nodes == 100
+
+    def test_single_add_multiple_times(self):
+        """Adding single signatures one at a time should work.
+
+        Covers: Edge case of many single-item adds.
+        """
+        rng = np.random.default_rng(42)
+        signatures = rng.integers(0, 2**63, size=(10, 64), dtype=np.uint64)
+
+        lsh = LSHForest(d=64, l=8)
+
+        for sig in signatures:
+            lsh.add(sig)
+
+        lsh.index()
+        assert lsh.size == 10
+
+    def test_index_empty_forest(self):
+        """Calling index() on empty forest should not error.
+
+        Covers: Edge case of indexing with no data.
+        """
+        lsh = LSHForest(d=128, l=8)
+        lsh.index()  # Should not raise
+
+        assert lsh.size == 0
+        assert lsh.is_clean
+
+    def test_query_empty_forest_returns_empty(self):
+        """Querying empty forest should return empty results.
+
+        Covers: Edge case of querying empty index.
+        """
+        rng = np.random.default_rng(42)
+        query = rng.integers(0, 2**63, size=(128,), dtype=np.uint64)
+
+        lsh = LSHForest(d=128, l=8)
+        lsh.index()
+
+        candidates = lsh.query(query, k=10)
+        assert len(candidates) == 0
+
+
+class TestLSHForestSinglePoint:
+    """Test behavior with single-point index.
+
+    Edge cases for minimum viable index.
+    """
+
+    def test_single_point_knn_graph(self):
+        """k-NN graph with single point should have no neighbors.
+
+        Covers: Edge case where self is excluded, leaving no neighbors.
+        """
+        rng = np.random.default_rng(42)
+        sig = rng.integers(0, 2**63, size=(1, 128), dtype=np.uint64)
+
+        lsh = LSHForest(d=128, l=8)
+        lsh.batch_add(sig)
+        lsh.index()
+
+        knn = lsh.get_knn_graph(k=5, kc=10)
+        assert knn.n_nodes == 1
+        # All neighbors should be invalid (-1) since self is excluded
+        assert np.all(knn.indices[0] == -1)
+
+    def test_single_point_query_linear_scan_by_id(self):
+        """query_linear_scan_by_id with single point returns empty.
+
+        Covers: Edge case - self excluded, no other points.
+        """
+        rng = np.random.default_rng(42)
+        sig = rng.integers(0, 2**63, size=(1, 128), dtype=np.uint64)
+
+        lsh = LSHForest(d=128, l=8)
+        lsh.batch_add(sig)
+        lsh.index()
+
+        results = lsh.query_linear_scan_by_id(0, k=5, kc=10)
+        assert results == []
+
+
+class TestKNNGraphMethods:
+    """Test KNNGraph class methods.
+
+    Covers: KNNGraph.to_edge_list() and properties.
+    """
+
+    def test_knn_graph_properties(self):
+        """Test KNNGraph n_nodes and k properties.
+
+        Covers: Basic property access.
+        """
+        rng = np.random.default_rng(42)
+        signatures = rng.integers(0, 2**63, size=(20, 128), dtype=np.uint64)
+
+        lsh = LSHForest(d=128, l=8)
+        lsh.batch_add(signatures)
+        lsh.index()
+
+        knn = lsh.get_knn_graph(k=5, kc=10)
+
+        assert knn.n_nodes == 20
+        assert knn.k == 5
+
+    def test_knn_graph_to_edge_list(self):
+        """Test KNNGraph.to_edge_list() conversion.
+
+        Covers: Converting k-NN graph to edge list format.
+        """
+        rng = np.random.default_rng(42)
+
+        # Create similar signatures so LSH can find neighbors
+        # Start with a base and create variations
+        base = rng.integers(0, 2**63, size=(128,), dtype=np.uint64)
+        signatures = []
+        for i in range(10):
+            sig = base.copy()
+            # Only modify 20% of values - keeps them similar
+            mask = rng.choice(128, size=25, replace=False)
+            sig[mask] = rng.integers(0, 2**63, size=25, dtype=np.uint64)
+            signatures.append(sig)
+        signatures = np.array(signatures, dtype=np.uint64)
+
+        lsh = LSHForest(d=128, l=8)
+        lsh.batch_add(signatures)
+        lsh.index()
+
+        knn = lsh.get_knn_graph(k=3, kc=20)
+        edge_list = knn.to_edge_list()
+
+        assert edge_list.n_nodes == 10
+        # With similar signatures, should have some edges
+        assert len(edge_list.edges) > 0
+
+        # Check edge format
+        for edge in edge_list.edges:
+            assert 0 <= edge.source < 10
+            assert 0 <= edge.target < 10
+            assert 0.0 <= edge.weight <= 1.0
+
+    def test_knn_graph_to_edge_list_excludes_invalid(self):
+        """to_edge_list() should exclude invalid (-1) neighbors.
+
+        Covers: Sparse k-NN graphs where some neighbors are missing.
+        """
+        rng = np.random.default_rng(42)
+        # Small dataset where some points may not find all k neighbors
+        signatures = rng.integers(0, 2**63, size=(5, 64), dtype=np.uint64)
+
+        lsh = LSHForest(d=64, l=4)
+        lsh.batch_add(signatures)
+        lsh.index()
+
+        knn = lsh.get_knn_graph(k=10, kc=5)  # k > n_nodes-1, so some invalid
+        edge_list = knn.to_edge_list()
+
+        # No edge should have -1 as source or target
+        for edge in edge_list.edges:
+            assert edge.source >= 0
+            assert edge.target >= 0
+
+
+class TestLSHForestWeightedPersistence:
+    """Test save/load with weighted MinHash signatures."""
+
+    def test_weighted_save_load_roundtrip(self, weighted_signatures):
+        """Save/load should preserve weighted index state.
+
+        Covers: Persistence with weighted=True mode.
+        """
+        lsh = LSHForest(d=128, l=8, weighted=True)
+        lsh.batch_add(weighted_signatures)
+        lsh.index()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "weighted_lsh.pkl"
+            lsh.save(str(path))
+
+            loaded = LSHForest.load(str(path))
+
+            # Check configuration preserved
+            assert loaded._weighted == True
+            assert loaded.d == 128
+            assert loaded.l == 8
+            assert loaded.size == 50
+
+            # Check queries work
+            query_result_orig = lsh.query(weighted_signatures[0], k=5)
+            query_result_loaded = loaded.query(weighted_signatures[0], k=5)
+            np.testing.assert_array_equal(query_result_orig, query_result_loaded)
+
+
+class TestLSHForestEdgeCases:
+    """Test various edge cases and boundary conditions."""
+
+    def test_k_larger_than_dataset(self):
+        """Requesting k larger than n_nodes should return what's available.
+
+        Covers: Edge case where k > n_points - 1.
+        """
+        rng = np.random.default_rng(42)
+        signatures = rng.integers(0, 2**63, size=(5, 128), dtype=np.uint64)
+
+        lsh = LSHForest(d=128, l=8)
+        lsh.batch_add(signatures)
+        lsh.index()
+
+        # Request k=20 when only 5 points exist (4 possible neighbors per point)
+        knn = lsh.get_knn_graph(k=20, kc=10)
+
+        assert knn.indices.shape == (5, 20)
+        # Most will be -1 (invalid)
+        valid_per_row = np.sum(knn.indices >= 0, axis=1)
+        assert np.all(valid_per_row <= 4)  # At most n-1 valid neighbors
+
+    def test_l_equals_d(self):
+        """l == d should work (each band is 1 element).
+
+        Covers: Boundary case where bands are minimal size.
+        """
+        rng = np.random.default_rng(42)
+        signatures = rng.integers(0, 2**63, size=(10, 32), dtype=np.uint64)
+
+        lsh = LSHForest(d=32, l=32)  # l == d
+        lsh.batch_add(signatures)
+        lsh.index()
+
+        knn = lsh.get_knn_graph(k=3, kc=10)
+        assert knn.n_nodes == 10
+
+    def test_clear_then_add_new_data(self):
+        """clear() then add new data should work.
+
+        Covers: Reset and reuse workflow.
+        """
+        rng = np.random.default_rng(42)
+        sig1 = rng.integers(0, 2**63, size=(20, 128), dtype=np.uint64)
+        sig2 = rng.integers(0, 2**63, size=(30, 128), dtype=np.uint64)
+
+        lsh = LSHForest(d=128, l=8)
+
+        # First use
+        lsh.batch_add(sig1)
+        lsh.index()
+        assert lsh.size == 20
+
+        # Clear and reuse
+        lsh.clear()
+        assert lsh.size == 0
+
+        lsh.batch_add(sig2)
+        lsh.index()
+        assert lsh.size == 30  # New data, not 50
+
+    def test_get_hash_returns_copy(self):
+        """get_hash() should return a copy, not a reference.
+
+        Covers: Ensure returned signature can't modify internal state.
+        """
+        rng = np.random.default_rng(42)
+        signatures = rng.integers(0, 2**63, size=(5, 64), dtype=np.uint64)
+
+        lsh = LSHForest(d=64, l=8)
+        lsh.batch_add(signatures)
+        lsh.index()
+
+        # Get hash and modify it
+        retrieved = lsh.get_hash(0)
+        original_value = retrieved[0]
+        retrieved[0] = 12345
+
+        # Internal state should be unchanged
+        retrieved_again = lsh.get_hash(0)
+        assert retrieved_again[0] == original_value
+
+
+class TestLSHForestQueryMethods:
+    """Additional tests for query method variations."""
+
+    def test_query_with_kc_effect(self):
+        """Higher kc should potentially find better neighbors.
+
+        Covers: kc parameter affects search quality.
+        """
+        rng = np.random.default_rng(42)
+        signatures = rng.integers(0, 2**63, size=(100, 128), dtype=np.uint64)
+
+        lsh = LSHForest(d=128, l=8)
+        lsh.batch_add(signatures)
+        lsh.index()
+
+        # Low kc
+        results_low_kc = lsh.query_linear_scan(signatures[0], k=5, kc=5)
+
+        # High kc (more candidates checked)
+        results_high_kc = lsh.query_linear_scan(signatures[0], k=5, kc=50)
+
+        # Both should return valid results
+        assert len(results_low_kc) <= 5
+        assert len(results_high_kc) <= 5
+
+        # Results should be sorted by distance
+        if len(results_high_kc) > 1:
+            distances = [r[0] for r in results_high_kc]
+            assert distances == sorted(distances)
+
+    def test_linear_scan_with_list_indices(self):
+        """linear_scan should accept list of indices.
+
+        Covers: Input flexibility for indices parameter.
+        """
+        rng = np.random.default_rng(42)
+        signatures = rng.integers(0, 2**63, size=(20, 128), dtype=np.uint64)
+
+        lsh = LSHForest(d=128, l=8)
+        lsh.batch_add(signatures)
+        lsh.index()
+
+        # Pass list instead of numpy array
+        indices_list = [0, 1, 2, 3, 4]
+        results = lsh.linear_scan(signatures[0], indices_list, k=3)
+
+        assert len(results) <= 3
+        for dist, idx in results:
+            assert idx in indices_list
