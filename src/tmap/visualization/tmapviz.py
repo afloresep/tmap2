@@ -396,10 +396,17 @@ class TmapViz:
     def render(self, template_name: str = "base.html.j2") -> str:
         """Return the full HTML string for the visualization.
 
+        Note: Most users should use save() instead, which handles file I/O
+        and automatically selects the optimal encoding. This method is useful
+        for advanced use cases like serving HTML directly in web applications.
+
         Args:
             template_name: Name of the Jinja2 template to use.
                            Default is "base.html.j2". Other options include
                            future templates like "smiles.html.j2".
+
+        Returns:
+            HTML string ready to be written to a file or served
         """
         if not self._points:
             raise ValueError("Call set_points() before rendering.")
@@ -471,6 +478,9 @@ class TmapViz:
     def render_binary(self, template_name: str = "binary.html.j2") -> str:
         """Return HTML string using binary encoding for large datasets.
 
+        Note: Most users should use save() instead, which automatically selects
+        binary mode when appropriate. This method is for advanced use cases.
+
         This method uses:
         - Uint16 quantized coordinates (4x smaller than JSON)
         - Gzip-compressed typed arrays
@@ -480,6 +490,9 @@ class TmapViz:
 
         Args:
             template_name: Name of the Jinja2 template to use.
+
+        Returns:
+            HTML string with binary-encoded data
         """
         if self._points_array is None:
             raise ValueError("Call set_points() before rendering.")
@@ -592,24 +605,46 @@ class TmapViz:
     ) -> Path:
         """Write HTML to disk and return the path.
 
+        This is the primary method for saving visualizations. It automatically
+        selects binary mode for large datasets (>500k points by default).
+
         Args:
-            path: Directory to save the file
+            path: Either a full file path (ending in .html) or a directory path.
+                  - If a file path: saves to that exact location
+                  - If a directory: uses self.title as the filename
             binary_threshold: Point count above which binary mode is used.
                               Default is 500,000 points.
             force_binary: If True, always use binary mode regardless of size.
 
         Returns:
             Path to the saved file
+
+        Examples:
+            >>> viz.save("output.html")  # Saves to output.html
+            >>> viz.save("results/")     # Saves to results/{title}.html
+            >>> viz.save("results/viz.html")  # Saves to results/viz.html
         """
-        import os
+        path = Path(path)
 
-        if not (self.title).endswith(".html"):
-            title = self.title + ".html"
+        # Determine if path is a file or directory
+        if str(path).endswith('.html'):
+            # Full file path provided
+            output_path = path
+        elif path.is_dir() or (not path.exists() and not str(path).endswith('.html')):
+            # Directory provided (existing or will be created) - use title as filename
+            if not self.title.endswith(".html"):
+                filename = self.title + ".html"
+            else:
+                filename = self.title
+            output_path = path / filename
         else:
-            title = self.title
+            # Assume it's a file path without .html extension
+            output_path = Path(str(path) + ".html")
 
-        output_path = Path(os.path.join(path, title))
+        # Create parent directory if needed
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Auto-select rendering mode based on dataset size
         n_points = len(self._points) if self._points else 0
         use_binary = force_binary or n_points > binary_threshold
 
