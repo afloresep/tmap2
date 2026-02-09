@@ -40,6 +40,7 @@
       background: rgba(0, 0, 0, 0.4);
       font-size: 14px;
       letter-spacing: 0.4px;
+      z-index: 120;
     }
     #controls {
       position: fixed;
@@ -51,6 +52,7 @@
       font-size: 13px;
       color: #fff;
       min-width: 160px;
+      z-index: 120;
     }
     #controls label {
       font-size: 12px;
@@ -80,6 +82,7 @@
       max-width: 240px;
       max-height: 240px;
       overflow: auto;
+      z-index: 120;
     }
     #legend.hidden { display: none; }
     #legend-title {
@@ -121,6 +124,7 @@
       width: 240px;
       display: none;
       box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      z-index: 130;
     }
     #tooltip.visible { display: block; }
     #tooltip .label { font-weight: 700; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -489,6 +493,9 @@
 {% for name, data in columns_b64.items() %}
   <script id="tmap-col-{{ name }}" type="application/octet-stream">{{ data }}</script>
 {% endfor %}
+{% if edges_b64 %}
+  <script id="tmap-edges" type="application/octet-stream">{{ edges_b64 }}</script>
+{% endif %}
 
   <!-- fflate for decompression (UMD build) -->
   <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.min.js"></script>
@@ -595,6 +602,19 @@ const quantizedCoords = decodeGzipBase64(coordsB64, coordDtype);
 const { x, y } = dequantizeCoords(quantizedCoords, coordBits);
 const n = x.length;
 
+// Decode edges
+const edgesEl = document.getElementById('tmap-edges');
+let edgesS = [], edgesT = [];
+const nEdges = (metadata.nEdges || 0);
+if (edgesEl && nEdges > 0) {
+  const edgesRaw = decodeGzipBase64(edgesEl.textContent, 'uint32');
+  edgesS = edgesRaw.subarray(0, nEdges);
+  edgesT = edgesRaw.subarray(nEdges, 2 * nEdges);
+}
+const hasEdges = edgesS.length > 0 && metadata.showEdges !== false;
+const E = edgesS.length;
+const N = n;
+
 updateProgress(40, 'Decoding columns...');
 
 // Decode columns
@@ -662,6 +682,34 @@ const legend = document.getElementById('legend');
 const legendTitle = document.getElementById('legend-title');
 const legendContent = document.getElementById('legend-content');
 
+function createLinearScale(initialDomain, initialRange) {
+  let d0 = initialDomain[0];
+  let d1 = initialDomain[1];
+  let r0 = initialRange[0];
+  let r1 = initialRange[1];
+  const scale = (value) => {
+    const denom = d1 - d0;
+    if (denom === 0) return r0;
+    return r0 + ((value - d0) / denom) * (r1 - r0);
+  };
+  scale.domain = (nextDomain) => {
+    if (nextDomain === undefined) return [d0, d1];
+    d0 = nextDomain[0];
+    d1 = nextDomain[1];
+    return scale;
+  };
+  scale.range = (nextRange) => {
+    if (nextRange === undefined) return [r0, r1];
+    r0 = nextRange[0];
+    r1 = nextRange[1];
+    return scale;
+  };
+  return scale;
+}
+
+const edgeXScale = createLinearScale([-1, 1], [0, canvas.clientWidth || window.innerWidth]);
+const edgeYScale = createLinearScale([-1, 1], [canvas.clientHeight || window.innerHeight, 0]);
+
 const initialColor = layoutOptions[0] || '';
 const fallbackPointColor = metadata.pointColor || '#4a9eff';
 
@@ -678,9 +726,63 @@ const scatterplot = createScatterplot({
   pointOutlineWidth: 2,
   colorBy: null,
   lassoInitiator: false,
+  xScale: edgeXScale,
+  yScale: edgeYScale,
 });
 
 const zeroArray = new Float32Array(n);
+
+// === Edge Canvas Overlay ===
+let redrawEdges = function() {};
+
+if (hasEdges) {
+  canvas.style.position = 'fixed';
+  canvas.style.top = '0';
+  canvas.style.left = '0';
+  canvas.style.zIndex = '2';
+
+  const edgeCanvas = document.createElement('canvas');
+  edgeCanvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:1;';
+  canvas.parentNode.insertBefore(edgeCanvas, canvas);
+  let edgeCtx = edgeCanvas.getContext('2d');
+
+  function resizeEdgeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    edgeCanvas.width = window.innerWidth * dpr;
+    edgeCanvas.height = window.innerHeight * dpr;
+    edgeCtx = edgeCanvas.getContext('2d');
+    edgeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resizeEdgeCanvas();
+
+  redrawEdges = function() {
+    const canvasRect = canvas.getBoundingClientRect();
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    edgeCtx.clearRect(0, 0, w, h);
+    edgeCtx.beginPath();
+    edgeCtx.strokeStyle = 'rgba(220, 220, 220, 0.5)';
+    edgeCtx.lineWidth = 2;
+
+    for (let i = 0; i < E; i++) {
+      const sx = canvasRect.left + edgeXScale(x[edgesS[i]]);
+      const sy = canvasRect.top + edgeYScale(y[edgesS[i]]);
+      const tx = canvasRect.left + edgeXScale(x[edgesT[i]]);
+      const ty = canvasRect.top + edgeYScale(y[edgesT[i]]);
+      edgeCtx.moveTo(sx, sy);
+      edgeCtx.lineTo(tx, ty);
+    }
+
+    edgeCtx.stroke();
+  };
+
+  scatterplot.subscribe('view', redrawEdges);
+
+  window.addEventListener('resize', () => {
+    resizeEdgeCanvas();
+    redrawEdges();
+  });
+}
 const NAN_FALLBACK_COLOR = '#000000';
 
 function buildContinuousMapping(rawValues, baseCmap) {
@@ -746,7 +848,9 @@ function applyColor(columnName) {
   const col = columns[columnName];
   if (!col) {
     scatterplot.set({ colorBy: null, pointColor: fallbackPointColor });
-    scatterplot.draw({ x, y });
+    scatterplot.draw({ x, y }).then(() => {
+      redrawEdges();
+    });
     updateLegend('');
     return;
   }
@@ -763,11 +867,15 @@ function applyColor(columnName) {
       z[i] = mapping.get(v);
     }
     scatterplot.set({ colorBy: 'valueA', pointColor: cmap });
-    scatterplot.draw({ x, y, z, w: zeroArray });
+    scatterplot.draw({ x, y, z, w: zeroArray }).then(() => {
+      redrawEdges();
+    });
   } else {
     const mapping = buildContinuousMapping(col.values, cmap);
     scatterplot.set({ colorBy: 'valueB', pointColor: mapping.cmap });
-    scatterplot.draw({ x, y, z: zeroArray, w: mapping.w });
+    scatterplot.draw({ x, y, z: zeroArray, w: mapping.w }).then(() => {
+      redrawEdges();
+    });
   }
   updateLegend(columnName);
 }
@@ -899,6 +1007,7 @@ colorSelect.addEventListener('change', (e) => applyColor(e.target.value));
 // Initial render
 updateProgress(95, 'Rendering...');
 applyColor(initialColor || '');
+redrawEdges();
 
 // Hide loading
 updateProgress(100, 'Complete!');
@@ -1130,7 +1239,6 @@ function hideExportPanel() {
   exportPanel.classList.add('hidden');
 }
 
-// Listen for scatterplot selection events
 // Listen for scatterplot selection events (only show export for multi-select, not single click)
 scatterplot.subscribe('select', (selection) => {
   const indices = selection.points || selection;

@@ -14,7 +14,10 @@ Usage:
     coords = create_tmap_from_smiles(my_smiles_list, "output.html")
 """
 
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 
 # Check RDKit availability
@@ -58,7 +61,8 @@ def smiles_to_fingerprints(
     valid_indices = []
     mols = []
 
-    for i, smi in tqdm(enumerate(smiles_list), desc='Generating Fingerprints', total=len(smiles_list)):
+    for i, smi in tqdm(enumerate(smiles_list),
+                       desc='Generating Fingerprints', total=len(smiles_list)):
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             fp = morgan_gen.GetFingerprintAsNumPy(mol)
@@ -179,10 +183,6 @@ def create_tmap_from_smiles(
     return x, y
 
 
-# Example SMILES - common drug-like molecules
-from pathlib import Path
-
-import pandas as pd
 
 # Get the directory where this script is located
 script_dir = Path(__file__).parent

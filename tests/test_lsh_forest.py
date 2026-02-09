@@ -798,7 +798,7 @@ class TestLSHForestWeightedPersistence:
             loaded = LSHForest.load(str(path))
 
             # Check configuration preserved
-            assert loaded._weighted == True
+            assert loaded._weighted
             assert loaded.d == 128
             assert loaded.l == 8
             assert loaded.size == 50
