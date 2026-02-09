@@ -582,6 +582,7 @@ const NAN_FALLBACK_COLOR = '#000000';
 // === Edge Canvas Overlay ===
 const E = edgesS.length;
 let redrawEdges = function() {};
+let edgeNeedsRedraw = hasEdges;
 
 if (hasEdges) {
   canvas.style.position = 'fixed';
@@ -624,12 +625,19 @@ if (hasEdges) {
     }
 
     edgeCtx.stroke();
+    edgeNeedsRedraw = false;
   };
 
-  scatterplot.subscribe('view', redrawEdges);
+  scatterplot.subscribe('drawing', (event) => {
+    if (!edgeNeedsRedraw && !(event && event.isViewChanged)) {
+      return;
+    }
+    redrawEdges();
+  });
 
   window.addEventListener('resize', () => {
     resizeEdgeCanvas();
+    edgeNeedsRedraw = true;
     redrawEdges();
   });
 }
@@ -694,6 +702,7 @@ function applyColor(columnName) {
   const col = columns[columnName];
   if (!col) {
     scatterplot.set({ colorBy: null, pointColor: fallbackPointColor });
+    edgeNeedsRedraw = true;
     scatterplot.draw({ x, y }).then(() => {
       redrawEdges();
     });
@@ -711,12 +720,14 @@ function applyColor(columnName) {
       if (!mapping.has(v)) mapping.set(v, mapping.size);
       z[i] = mapping.get(v);
     }
+    edgeNeedsRedraw = true;
     scatterplot.set({ colorBy: 'valueA', pointColor: cmap });
     scatterplot.draw({ x, y, z, w: zeroArray }).then(() => {
       redrawEdges();
     });
   } else {
     const mapping = buildContinuousMapping(col.values, cmap);
+    edgeNeedsRedraw = true;
     scatterplot.set({ colorBy: 'valueB', pointColor: mapping.cmap });
     scatterplot.draw({ x, y, z: zeroArray, w: mapping.w }).then(() => {
       redrawEdges();
