@@ -139,6 +139,36 @@ def _hex_to_rgba(hex_color: str, alpha: float = 1.0) -> list[float]:
     return [int(hex_color[i : i + 2], 16) / 255.0 for i in (0, 2, 4)] + [alpha]
 
 
+def _normalize_hex_color(color: str) -> str:
+    """Normalize color to #rrggbb format."""
+    if not isinstance(color, str):
+        raise ValueError("Color must be a hex string like '#rrggbb'.")
+
+    normalized = color.strip().lstrip("#")
+    if len(normalized) == 3:
+        normalized = "".join(ch * 2 for ch in normalized)
+
+    if len(normalized) != 6:
+        raise ValueError(f"Invalid hex color: {color!r}")
+
+    try:
+        int(normalized, 16)
+    except ValueError as exc:
+        raise ValueError(f"Invalid hex color: {color!r}") from exc
+
+    return f"#{normalized.lower()}"
+
+
+def _hex_to_css_rgba(hex_color: str, alpha: float = 1.0) -> str:
+    """Convert #RRGGBB + alpha to a CSS rgba(...) color string."""
+    rgb = _hex_to_rgba(hex_color, alpha)
+    r, g, b = (int(round(channel * 255)) for channel in rgb[:3])
+    alpha_str = f"{alpha:.6f}".rstrip("0").rstrip(".")
+    if alpha_str == "":
+        alpha_str = "0"
+    return f"rgba({r}, {g}, {b}, {alpha_str})"
+
+
 # TODO(ISS-014): Implement categorical=True preserves listed colors when available
 def _colormap_to_hex(name: str) -> list[str]:
     """
@@ -241,6 +271,9 @@ class TmapViz:
         point_color: Default hex point color (default ``"#4a9eff"``).
         point_size: Base point radius in pixels (default ``4.0``).
         opacity: Point opacity in ``[0, 1]`` (default ``0.85``).
+        edge_color: Edge hex color (default ``"#000000"``).
+        edge_opacity: Edge opacity in ``[0, 1]`` (default ``0.5``).
+        edge_width: Edge width in CSS pixels (default ``2.0``).
     """
 
     def __init__(self) -> None:
@@ -250,9 +283,16 @@ class TmapViz:
         self.point_size: float = 4.0
         self.opacity: float = 0.85
 
+        self.edge_color: str = "#000000"
+        self.edge_opacity: float = 0.5
+        self.edge_width: float = 2.0
+
+
         # Store both formats for flexibility
         self._points: list[list[float]] = []
         self._points_array: np.ndarray | None = None  # Shape: (n, 2)
+        self._edges_s: np.ndarray | None = None
+        self._edges_t: np.ndarray | None = None
         self._layout_keys: list[str] = []
         self._labels_keys: list[str] = []
         self._smiles_column: str | None = None
@@ -403,6 +443,76 @@ class TmapViz:
         """Return labels added."""
         return [self._columns[labels] for labels in self._labels_keys]
 
+    def set_edges(
+        self,
+        s: list[int] | NDArray[np.unsignedinteger],
+        t: list[int] | NDArray[np.unsignedinteger],
+    ) -> None:
+        """Set MST edge source/target index arrays.
+
+        Args:
+            s: Source vertex indices for each edge.
+            t: Target vertex indices for each edge.
+
+        Raises:
+            ValueError: If arrays differ in length, are not 1-D, or contain
+                indices outside ``[0, n_points)``.
+        """
+        s_arr = np.asarray(s, dtype=np.uint32)
+        t_arr = np.asarray(t, dtype=np.uint32)
+
+        if s_arr.ndim != 1 or t_arr.ndim != 1:
+            raise ValueError(
+                f"Edge arrays must be 1-dimensional. "
+                f"Got s: {s_arr.ndim}D and t: {t_arr.ndim}D"
+            )
+
+        if s_arr.shape != t_arr.shape:
+            raise ValueError(
+                f"Edge arrays must have the same length. "
+                f"Got s: {len(s_arr)} and t: {len(t_arr)}"
+            )
+
+        if self.n_points > 0:
+            max_idx = self.n_points
+            if s_arr.size > 0 and (s_arr.max() >= max_idx or t_arr.max() >= max_idx):
+                raise ValueError(
+                    f"Edge indices must be < n_points ({max_idx}). "
+                    f"Got max(s)={s_arr.max()}, max(t)={t_arr.max()}"
+                )
+
+        self._edges_s = s_arr
+        self._edges_t = t_arr
+
+    def set_edge_style(
+        self,
+        color: str | None = None,
+        width: float | None = None,
+        opacity: float | None = None,
+    ) -> None:
+        """Set edge rendering style for visualization templates.
+
+        Args:
+            color: Hex color string for edges (``#rgb`` or ``#rrggbb``).
+            width: Edge line width in CSS pixels. Must be > 0.
+            opacity: Edge opacity in ``[0, 1]``.
+        """
+        if color is not None:
+            self.edge_color = _normalize_hex_color(color)
+
+        if width is not None:
+            width_value = float(width)
+            if not np.isfinite(width_value) or width_value <= 0:
+                raise ValueError(f"Edge width must be > 0. Got {width!r}")
+            self.edge_width = width_value
+
+        if opacity is not None:
+            opacity_value = float(opacity)
+            if not np.isfinite(opacity_value) or not 0.0 <= opacity_value <= 1.0:
+                raise ValueError(f"Edge opacity must be in [0, 1]. Got {opacity!r}")
+            self.edge_opacity = opacity_value
+
+
     def set_points(
         self,
         x: list[np.floating] | NDArray[np.floating],
@@ -488,12 +598,21 @@ class TmapViz:
         label_options = [name for name in self._labels_keys if name in self._columns]
         initial_color = layout_options[0] if layout_options else None
 
+        edges_payload: dict[str, Any] = {}
+        if self._edges_s is not None and self._edges_t is not None:
+            edges_payload = {
+                "s": self._edges_s.tolist(),
+                "t": self._edges_t.tolist(),
+            }
+
         payload = {
             "title": self.title,
             "points": self._points,
             "pointColor": self.point_color,
             "pointSize": self.point_size,
             "opacity": self.opacity,
+            "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
+            "edgeWidth": self.edge_width,
             "backgroundColor": _hex_to_rgba(self.background_color),
             "columns": columns_payload,
             "layoutOptions": layout_options,
@@ -501,6 +620,7 @@ class TmapViz:
             "initialColor": initial_color,
             "colormaps": colormaps_payload,
             "smilesColumn": self._smiles_column,
+            "edges": edges_payload,
         }
 
         runtime = _runtime_base64()
@@ -600,6 +720,15 @@ class TmapViz:
             if colormap_name and colormap_name not in colormaps_payload:
                 colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
 
+        # Pack edges if present
+        edges_b64 = ""
+        n_edges = 0
+        if self._edges_s is not None and self._edges_t is not None:
+            n_edges = len(self._edges_s)
+            edges_combined = np.concatenate([self._edges_s, self._edges_t]).astype(np.uint32)
+            edges_compressed = gzip.compress(edges_combined.tobytes(), compresslevel=6)
+            edges_b64 = base64.b64encode(edges_compressed).decode("ascii")
+
         # Build header/metadata
         layout_options = list(self._layout_keys)
         label_options = [name for name in self._labels_keys if name in self._columns]
@@ -614,11 +743,14 @@ class TmapViz:
                 "pointColor": self.point_color,
                 "pointSize": self.point_size,
                 "opacity": self.opacity,
+                "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
+                "edgeWidth": self.edge_width,
                 "backgroundColor": _hex_to_rgba(self.background_color),
                 "layoutOptions": layout_options,
                 "labelOptions": label_options,
                 "colormaps": colormaps_payload,
                 "smilesColumn": self._smiles_column,
+                "nEdges": n_edges,
             },
         }
 
@@ -644,6 +776,7 @@ class TmapViz:
             header_json=header_json,
             coords_b64=coords_b64,
             columns_b64=columns_b64_filtered,
+            edges_b64=edges_b64,
             runtime_regl=runtime["regl"],
             runtime_pubsub=runtime["pubsub"],
             runtime_scatterplot=runtime["scatterplot"],

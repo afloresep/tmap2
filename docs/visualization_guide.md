@@ -71,6 +71,29 @@ viz.set_points(coords.x, coords.y)
 
 **Note:** Coordinates are automatically normalized to [-1, 1] for WebGL rendering.
 
+### Tree Edges and Edge Style
+
+If your layout function returns edge arrays (`s`, `t`), pass them to `TmapViz` to
+render MST edges in the HTML visualization.
+
+```python
+# Typical layout output includes edges
+x, y, s, t = layout_from_lsh_forest(lsh, cfg)
+
+viz.set_points(x, y)
+viz.set_edges(s, t)            # Enable edge rendering from layout edges
+viz.show_edges = True          # Default True; set False to hide edges
+
+# Optional edge appearance tuning
+viz.set_edge_style(
+    color="#000000",           # Hex color (#rgb or #rrggbb)
+    width=2.0,                 # Line width in CSS pixels
+    opacity=0.5,               # Edge alpha in [0, 1]
+)
+```
+
+For large datasets, keep edge width moderate and use binary mode when possible.
+
 ---
 
 ## Adding Data Columns
@@ -250,6 +273,8 @@ viz.opacity = 0.8
 
 # Set coordinates
 viz.set_points(x, y)
+viz.set_edges(s, t)
+viz.set_edge_style(color="#111111", width=1.5, opacity=0.35)
 
 # Add continuous coloring by activity
 viz.add_color_layout("Activity", activities, categorical=False, color="viridis")
@@ -277,6 +302,10 @@ viz.save("./")
 | `point_color` | str | "#4a9eff" | Default point color (hex) |
 | `point_size` | float | 4.0 | Point radius in pixels |
 | `opacity` | float | 0.85 | Point opacity [0-1] |
+| `show_edges` | bool | True | Render edges when edge arrays are set |
+| `edge_color` | str | "#000000" | Edge color (hex) |
+| `edge_width` | float | 2.0 | Edge line width in pixels |
+| `edge_opacity` | float | 0.5 | Edge opacity [0-1] |
 
 ### add_color_layout Parameters
 
@@ -287,6 +316,21 @@ viz.save("./")
 | `categorical` | bool | False | True for discrete, False for continuous |
 | `add_as_label` | bool | True | Show in tooltip |
 | `color` | str | auto | Colormap name |
+
+### set_edges Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `s` | list/ndarray | required | Source point indices for edges |
+| `t` | list/ndarray | required | Target point indices for edges |
+
+### set_edge_style Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `color` | str | None | Edge color override (`#rgb` or `#rrggbb`) |
+| `width` | float | None | Edge width override (must be > 0) |
+| `opacity` | float | None | Edge opacity override in [0, 1] |
 
 ### save Parameters
 

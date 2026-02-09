@@ -612,6 +612,12 @@ if (edgesEl && nEdges > 0) {
   edgesT = edgesRaw.subarray(nEdges, 2 * nEdges);
 }
 const hasEdges = edgesS.length > 0 && metadata.showEdges !== false;
+const parsedEdgeWidth = Number(metadata.edgeWidth);
+const edgeWidth = Number.isFinite(parsedEdgeWidth) && parsedEdgeWidth > 0 ? parsedEdgeWidth : 2;
+const edgeStrokeStyle = metadata.edgeStrokeStyle || 'rgba(0, 0, 0, 0.5)';
+const edgeLineCap = ['butt', 'round', 'square'].includes(metadata.edgeLineCap)
+  ? metadata.edgeLineCap
+  : 'round';
 const E = edgesS.length;
 const N = n;
 
@@ -761,8 +767,10 @@ if (hasEdges) {
     const h = window.innerHeight;
     edgeCtx.clearRect(0, 0, w, h);
     edgeCtx.beginPath();
-    edgeCtx.strokeStyle = 'rgba(220, 220, 220, 0.5)';
-    edgeCtx.lineWidth = 2;
+    edgeCtx.strokeStyle = edgeStrokeStyle;
+    edgeCtx.lineWidth = edgeWidth;
+    edgeCtx.lineCap = edgeLineCap;
+    edgeCtx.lineJoin = 'round';
 
     for (let i = 0; i < E; i++) {
       const sx = canvasRect.left + edgeXScale(x[edgesS[i]]);

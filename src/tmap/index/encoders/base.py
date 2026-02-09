@@ -27,8 +27,8 @@ class Encoder(ABC):
             raise ValueError("Vector must contain only non-negative values")
 
     def _validate_binary_vector(self,data):
-        if not all(i in [0,1] for i in data): raise ValueError("Vector must be binary")
-
+        if not all(i in [0,1] for i in data):
+            raise ValueError("Vector must be binary")
 
 
 

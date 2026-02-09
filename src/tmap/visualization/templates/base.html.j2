@@ -28,6 +28,7 @@
       background: rgba(0, 0, 0, 0.4);
       font-size: 14px;
       letter-spacing: 0.4px;
+      z-index: 120;
     }
     #controls {
       position: fixed;
@@ -39,6 +40,7 @@
       font-size: 13px;
       color: #fff;
       min-width: 160px;
+      z-index: 120;
     }
     #controls label {
       font-size: 12px;
@@ -72,6 +74,7 @@
       max-width: 240px;
       max-height: 240px;
       overflow: auto;
+      z-index: 120;
     }
     #legend.hidden { display: none; }
     #legend-title {
@@ -121,6 +124,7 @@
       width: 240px;
       display: none;
       box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      z-index: 130;
     }
     #tooltip.visible { display: block; }
     #tooltip .label {
@@ -495,6 +499,17 @@ const initialColor = layoutOptions.includes(payload.initialColor)
 const hasLayouts = layoutOptions.length > 0;
 const fallbackPointColor = hasLayouts ? (payload.pointColor || '#4a9eff') : '#000000';
 
+// Edge data
+const edgesS = (payload.edges && payload.edges.s) || [];
+const edgesT = (payload.edges && payload.edges.t) || [];
+const hasEdges = edgesS.length > 0 && payload.showEdges !== false;
+const parsedEdgeWidth = Number(payload.edgeWidth);
+const edgeWidth = Number.isFinite(parsedEdgeWidth) && parsedEdgeWidth > 0 ? parsedEdgeWidth : 2;
+const edgeStrokeStyle = payload.edgeStrokeStyle || 'rgba(0, 0, 0, 0.5)';
+const edgeLineCap = ['butt', 'round', 'square'].includes(payload.edgeLineCap)
+  ? payload.edgeLineCap
+  : 'round';
+
 const labelOnlyOptions = labelOptions.filter((name) => {
   const col = columns[name];
   return col && col.role === 'label';
@@ -514,6 +529,34 @@ const legend = document.getElementById('legend');
 const legendTitle = document.getElementById('legend-title');
 const legendContent = document.getElementById('legend-content');
 
+function createLinearScale(initialDomain, initialRange) {
+  let d0 = initialDomain[0];
+  let d1 = initialDomain[1];
+  let r0 = initialRange[0];
+  let r1 = initialRange[1];
+  const scale = (value) => {
+    const denom = d1 - d0;
+    if (denom === 0) return r0;
+    return r0 + ((value - d0) / denom) * (r1 - r0);
+  };
+  scale.domain = (nextDomain) => {
+    if (nextDomain === undefined) return [d0, d1];
+    d0 = nextDomain[0];
+    d1 = nextDomain[1];
+    return scale;
+  };
+  scale.range = (nextRange) => {
+    if (nextRange === undefined) return [r0, r1];
+    r0 = nextRange[0];
+    r1 = nextRange[1];
+    return scale;
+  };
+  return scale;
+}
+
+const edgeXScale = createLinearScale([-1, 1], [0, canvas.clientWidth || window.innerWidth]);
+const edgeYScale = createLinearScale([-1, 1], [canvas.clientHeight || window.innerHeight, 0]);
+
 const scatterplot = createScatterplot({
   canvas,
   width: canvas.clientWidth || window.innerWidth,
@@ -527,12 +570,69 @@ const scatterplot = createScatterplot({
   pointOutlineWidth: 2,
   colorBy: null,
   lassoInitiator: false,
+  xScale: edgeXScale,
+  yScale: edgeYScale,
 });
 
 const x = coords.map((p) => p[0]);
 const y = coords.map((p) => p[1]);
 const zeroArray = new Array(x.length).fill(0);
 const NAN_FALLBACK_COLOR = '#000000';
+
+// === Edge Canvas Overlay ===
+const E = edgesS.length;
+let redrawEdges = function() {};
+
+if (hasEdges) {
+  canvas.style.position = 'fixed';
+  canvas.style.top = '0';
+  canvas.style.left = '0';
+  canvas.style.zIndex = '2';
+
+  const edgeCanvas = document.createElement('canvas');
+  edgeCanvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:1;';
+  canvas.parentNode.insertBefore(edgeCanvas, canvas);
+  let edgeCtx = edgeCanvas.getContext('2d');
+
+  function resizeEdgeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    edgeCanvas.width = window.innerWidth * dpr;
+    edgeCanvas.height = window.innerHeight * dpr;
+    edgeCtx = edgeCanvas.getContext('2d');
+    edgeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resizeEdgeCanvas();
+
+  redrawEdges = function() {
+    const canvasRect = canvas.getBoundingClientRect();
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    edgeCtx.clearRect(0, 0, w, h);
+    edgeCtx.beginPath();
+    edgeCtx.strokeStyle = edgeStrokeStyle;
+    edgeCtx.lineWidth = edgeWidth;
+    edgeCtx.lineCap = edgeLineCap;
+    edgeCtx.lineJoin = 'round';
+
+    for (let i = 0; i < E; i++) {
+      const sx = canvasRect.left + edgeXScale(x[edgesS[i]]);
+      const sy = canvasRect.top + edgeYScale(y[edgesS[i]]);
+      const tx = canvasRect.left + edgeXScale(x[edgesT[i]]);
+      const ty = canvasRect.top + edgeYScale(y[edgesT[i]]);
+      edgeCtx.moveTo(sx, sy);
+      edgeCtx.lineTo(tx, ty);
+    }
+
+    edgeCtx.stroke();
+  };
+
+  scatterplot.subscribe('view', redrawEdges);
+
+  window.addEventListener('resize', () => {
+    resizeEdgeCanvas();
+    redrawEdges();
+  });
+}
 
 function buildContinuousMapping(rawValues, baseCmap) {
   const nums = new Array(rawValues.length);
@@ -594,7 +694,9 @@ function applyColor(columnName) {
   const col = columns[columnName];
   if (!col) {
     scatterplot.set({ colorBy: null, pointColor: fallbackPointColor });
-    scatterplot.draw({ x, y });
+    scatterplot.draw({ x, y }).then(() => {
+      redrawEdges();
+    });
     updateLegend('');
     return;
   }
@@ -610,11 +712,15 @@ function applyColor(columnName) {
       z[i] = mapping.get(v);
     }
     scatterplot.set({ colorBy: 'valueA', pointColor: cmap });
-    scatterplot.draw({ x, y, z, w: zeroArray });
+    scatterplot.draw({ x, y, z, w: zeroArray }).then(() => {
+      redrawEdges();
+    });
   } else {
     const mapping = buildContinuousMapping(col.values, cmap);
     scatterplot.set({ colorBy: 'valueB', pointColor: mapping.cmap });
-    scatterplot.draw({ x, y, z: zeroArray, w: mapping.w });
+    scatterplot.draw({ x, y, z: zeroArray, w: mapping.w }).then(() => {
+      redrawEdges();
+    });
   }
   updateLegend(columnName);
 }
@@ -764,6 +870,7 @@ if (initialColor) {
 colorSelect.addEventListener('change', (e) => applyColor(e.target.value));
 
 applyColor(initialColor || '');
+redrawEdges();
 
 // ============================================
 // Card Stack System (single-click pinned cards)
