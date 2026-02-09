@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 
 class Edge(NamedTuple):
     """Single edge: (source_node, target_node, weight/distance)."""
+
     source: int
     target: int
     weight: float
@@ -33,6 +34,7 @@ class EdgeList:
             n_nodes=3,
         )
     """
+
     edges: list[Edge] | list[tuple[int, int, float]]
     n_nodes: int
     labels: list[str] | None = None  # Optional node labels
@@ -43,10 +45,7 @@ class EdgeList:
             raise ValueError(f"n_nodes must be positive, got {self.n_nodes}")
         # Convert tuples to Edge namedtuples for consistency
         if self.edges and isinstance(self.edges[0], tuple):
-            object.__setattr__(
-                self, 'edges',
-                [Edge(*e) for e in self.edges]
-            )
+            object.__setattr__(self, "edges", [Edge(*e) for e in self.edges])
 
 
 @dataclass(slots=True)
@@ -67,18 +66,19 @@ class KNNGraph:
     - These arrays are simpler and faster for our use case
     - Easy to convert to scipy.sparse if needed later
     """
-    indices: NDArray[np.int32]      # Shape: (n_nodes, k)
+
+    indices: NDArray[np.int32]  # Shape: (n_nodes, k)
     distances: NDArray[np.float32]  # Shape: (n_nodes, k)
 
     @property
     def n_nodes(self) -> int:
         """Return the number of nodes in the graph."""
-        return self.indices.shape[0]
+        return int(self.indices.shape[0])
 
     @property
     def k(self) -> int:
         """Return the number of neighbors per node."""
-        return self.indices.shape[1]
+        return int(self.indices.shape[1])
 
     def to_edge_list(self) -> EdgeList:
         """Convert to EdgeList format (useful for debugging/export)."""

@@ -40,8 +40,8 @@ Don't over-engineer upfront.
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import minimum_spanning_tree
+from scipy.sparse import csr_matrix  # type: ignore[import-untyped]
+from scipy.sparse.csgraph import minimum_spanning_tree  # type: ignore[import-untyped]
 
 from tmap.graph.types import Tree
 from tmap.index.types import KNNGraph

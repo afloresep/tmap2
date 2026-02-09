@@ -427,9 +427,7 @@ class TestLSHForestPersistence:
             assert loaded.is_clean == indexed_forest.is_clean
 
             # Check signatures preserved
-            np.testing.assert_array_equal(
-                loaded.get_hash(0), indexed_forest.get_hash(0)
-            )
+            np.testing.assert_array_equal(loaded.get_hash(0), indexed_forest.get_hash(0))
 
             # Check queries work
             result_orig = indexed_forest.query(random_signatures[0], k=5)

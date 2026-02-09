@@ -29,21 +29,27 @@ def simple_knn():
         |    |
         3 -- 4
     """
-    indices = np.array([
-        [1, 3],   # Node 0: neighbors 1, 3
-        [0, 2],   # Node 1: neighbors 0, 2
-        [1, 4],   # Node 2: neighbors 1, 4
-        [0, 4],   # Node 3: neighbors 0, 4
-        [3, 2],   # Node 4: neighbors 3, 2
-    ], dtype=np.int32)
+    indices = np.array(
+        [
+            [1, 3],  # Node 0: neighbors 1, 3
+            [0, 2],  # Node 1: neighbors 0, 2
+            [1, 4],  # Node 2: neighbors 1, 4
+            [0, 4],  # Node 3: neighbors 0, 4
+            [3, 2],  # Node 4: neighbors 3, 2
+        ],
+        dtype=np.int32,
+    )
 
-    distances = np.array([
-        [0.1, 0.2],   # Node 0
-        [0.1, 0.15],  # Node 1
-        [0.15, 0.25], # Node 2
-        [0.2, 0.1],   # Node 3
-        [0.1, 0.25],  # Node 4
-    ], dtype=np.float32)
+    distances = np.array(
+        [
+            [0.1, 0.2],  # Node 0
+            [0.1, 0.15],  # Node 1
+            [0.15, 0.25],  # Node 2
+            [0.2, 0.1],  # Node 3
+            [0.1, 0.25],  # Node 4
+        ],
+        dtype=np.float32,
+    )
 
     return KNNGraph(indices=indices, distances=distances)
 
@@ -93,21 +99,27 @@ def disconnected_knn():
     Component 1: nodes 0, 1, 2
     Component 2: nodes 3, 4
     """
-    indices = np.array([
-        [1, 2],    # Node 0: only connected to 1, 2
-        [0, 2],    # Node 1: only connected to 0, 2
-        [0, 1],    # Node 2: only connected to 0, 1
-        [4, -1],   # Node 3: only connected to 4
-        [3, -1],   # Node 4: only connected to 3
-    ], dtype=np.int32)
+    indices = np.array(
+        [
+            [1, 2],  # Node 0: only connected to 1, 2
+            [0, 2],  # Node 1: only connected to 0, 2
+            [0, 1],  # Node 2: only connected to 0, 1
+            [4, -1],  # Node 3: only connected to 4
+            [3, -1],  # Node 4: only connected to 3
+        ],
+        dtype=np.int32,
+    )
 
-    distances = np.array([
-        [0.1, 0.2],
-        [0.1, 0.15],
-        [0.2, 0.15],
-        [0.1, 2.0],  # 2.0 = invalid marker
-        [0.1, 2.0],
-    ], dtype=np.float32)
+    distances = np.array(
+        [
+            [0.1, 0.2],
+            [0.1, 0.15],
+            [0.2, 0.15],
+            [0.1, 2.0],  # 2.0 = invalid marker
+            [0.1, 2.0],
+        ],
+        dtype=np.float32,
+    )
 
     return KNNGraph(indices=indices, distances=distances)
 

@@ -31,6 +31,7 @@ from numpy.typing import NDArray
 MAGIC = b"TMAP"
 VERSION = 1
 
+
 # Section types
 class SectionType(IntEnum):
     COORDS = 1
@@ -42,6 +43,7 @@ class SectionType(IntEnum):
 @dataclass
 class SectionEntry:
     """Entry in the section table."""
+
     section_type: SectionType
     name: str  # Column name (empty for coords/metadata)
     offset: int  # Byte offset from start of file
@@ -50,7 +52,7 @@ class SectionEntry:
     dtype: str  # 'uint16', 'float32', 'int32', 'string'
 
 
-def quantize_coords(coords: NDArray[np.float64], bits: int = 16) -> NDArray[np.uint16]:
+def quantize_coords(coords: NDArray[np.float64], bits: int = 16) -> NDArray[Any]:
     """Quantize normalized [-1, 1] coordinates to unsigned integers.
 
     Args:
@@ -62,20 +64,14 @@ def quantize_coords(coords: NDArray[np.float64], bits: int = 16) -> NDArray[np.u
     """
     if bits == 16:
         max_val = 65535
-        dtype = np.uint16
-    elif bits == 32:
+        return ((coords.astype(np.float64) + 1.0) * (max_val / 2.0)).astype(np.uint16)
+    if bits == 32:
         max_val = 4294967295
-        dtype = np.uint32
-    else:
-        raise ValueError(f"bits must be 16 or 32, got {bits}")
-
-    # Map [-1, 1] to [0, max_val]
-    # coords in [-1, 1] -> (coords + 1) / 2 in [0, 1] -> * max_val
-    quantized = ((coords.astype(np.float64) + 1.0) * (max_val / 2.0)).astype(dtype)
-    return quantized
+        return ((coords.astype(np.float64) + 1.0) * (max_val / 2.0)).astype(np.uint32)
+    raise ValueError(f"bits must be 16 or 32, got {bits}")
 
 
-def dequantize_coords(quantized: NDArray, bits: int = 16) -> NDArray[np.float32]:
+def dequantize_coords(quantized: NDArray[Any], bits: int = 16) -> NDArray[np.float32]:
     """Dequantize coordinates back to float32.
 
     This is primarily for verification; the JS worker does this.
@@ -116,7 +112,7 @@ def pack_coords(
 
 
 def pack_numeric_column(
-    values: NDArray,
+    values: NDArray[Any],
     dtype: str = "float32",
 ) -> tuple[bytes, int]:
     """Pack a numeric column as gzip-compressed typed array.
@@ -153,9 +149,9 @@ def pack_categorical_column(
         (compressed_indices, uncompressed_size, dictionary)
     """
     # Build dictionary
-    unique_values = []
+    unique_values: list[str] = []
     value_to_idx: dict[str, int] = {}
-    indices = np.empty(len(values), dtype=np.uint32)
+    indices: NDArray[np.uint32] = np.empty(len(values), dtype=np.uint32)
 
     for i, v in enumerate(values):
         s = str(v)
@@ -200,7 +196,7 @@ class BinaryContainerWriter:
     def add_numeric_column(
         self,
         name: str,
-        values: NDArray,
+        values: NDArray[Any],
         dtype: str = "float32",
     ) -> None:
         """Add a numeric column section."""
@@ -349,7 +345,7 @@ class BinaryContainerWriter:
 
 def create_binary_payload(
     points: NDArray[np.float64],
-    columns: dict[str, tuple[NDArray | list, str]],  # name -> (values, dtype)
+    columns: dict[str, tuple[NDArray[Any] | list[Any], str]],  # name -> (values, dtype)
     metadata: dict[str, Any],
     coord_bits: int = 16,
 ) -> dict[str, bytes]:

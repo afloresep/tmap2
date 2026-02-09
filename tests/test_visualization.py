@@ -27,14 +27,14 @@ try:
         pack_numeric_column,
         quantize_coords,
     )
+
     _VIZ_AVAILABLE = True
 except ImportError as e:
     _VIZ_AVAILABLE = False
     _IMPORT_ERROR = e
 
 pytestmark = pytest.mark.skipif(
-    not _VIZ_AVAILABLE,
-    reason="Visualization dependencies not available (jinja2 required)"
+    not _VIZ_AVAILABLE, reason="Visualization dependencies not available (jinja2 required)"
 )
 
 

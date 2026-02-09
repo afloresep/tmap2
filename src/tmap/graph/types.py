@@ -38,9 +38,10 @@ class Tree:
     - Less memory for large trees
     - Easy to serialize (np.save)
     """
+
     n_nodes: int
-    edges: NDArray[np.int32]       # Shape: (n_edges, 2) where n_edges = n_nodes - 1
-    weights: NDArray[np.float32]   # Shape: (n_edges,)
+    edges: NDArray[np.int32]  # Shape: (n_edges, 2) where n_edges = n_nodes - 1
+    weights: NDArray[np.float32]  # Shape: (n_edges,)
     root: int = 0
 
     # Built on demand (not stored/serialized)
@@ -77,10 +78,7 @@ class Tree:
 
         For tree traversal from root downward.
         """
-        return [
-            neighbor for neighbor, _ in self._adjacency[node]
-            if neighbor != parent
-        ]
+        return [neighbor for neighbor, _ in self._adjacency[node] if neighbor != parent]
 
     def bfs(self, start: int | None = None) -> Iterator[tuple[int, int | None, int]]:
         """
@@ -94,8 +92,8 @@ class Tree:
         - Layout algorithms that work top-down
         """
         start = start if start is not None else self.root
-        visited = {start}
-        queue = [(start, None, 0)]  # (node, parent, depth)
+        visited: set[int] = {start}
+        queue: list[tuple[int, int | None, int]] = [(start, None, 0)]  # (node, parent, depth)
 
         while queue:
             node, parent, depth = queue.pop(0)
@@ -117,8 +115,8 @@ class Tree:
         - Post-order processing (children before parent)
         """
         start = start if start is not None else self.root
-        visited = {start}
-        stack = [(start, None, 0)]
+        visited: set[int] = {start}
+        stack: list[tuple[int, int | None, int]] = [(start, None, 0)]
 
         while stack:
             node, parent, depth = stack.pop()
@@ -136,7 +134,7 @@ class Tree:
         Returns array where result[i] = number of nodes in subtree rooted at i.
         Useful for layout algorithms that need to allocate space.
         """
-        sizes = np.ones(self.n_nodes, dtype=np.int32)
+        sizes: NDArray[np.int32] = np.ones(self.n_nodes, dtype=np.int32)
 
         # Process in reverse BFS order (leaves first)
         traversal = list(self.bfs())

@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 from matplotlib import colormaps
@@ -95,8 +95,7 @@ def _get_jinja_env() -> Environment:
     """Get or create a cached Jinja2 environment for templates."""
     if not _JINJA_AVAILABLE:
         raise ImportError(
-            "Jinja2 is required for template rendering. "
-            "Install with: pip install tmap[viz]"
+            "Jinja2 is required for template rendering. Install with: pip install tmap[viz]"
         )
     return Environment(
         loader=PackageLoader("tmap.visualization", "templates"),
@@ -128,7 +127,7 @@ def _normalize_coords(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 
     x_norm = (x - x_center) / scale
     y_norm = (y - y_center) / scale
-    return np.stack([x_norm, y_norm], axis=1).astype(np.float64)
+    return cast(NDArray[np.float64], np.stack([x_norm, y_norm], axis=1).astype(np.float64))
 
 
 def _hex_to_rgba(hex_color: str, alpha: float = 1.0) -> list[float]:
@@ -220,19 +219,17 @@ def _pack_coords_binary(points: np.ndarray, bits: int = 16) -> bytes:
     """Pack normalized [-1,1] coordinates as gzip-compressed quantized integers."""
     if bits == 16:
         max_val = 65535
-        dtype = np.uint16
+        quantized = ((points.astype(np.float64) + 1.0) * (max_val / 2.0)).astype(np.uint16)
     else:
         max_val = 4294967295
-        dtype = np.uint32
-
-    # Quantize: [-1, 1] -> [0, max_val]
-    quantized = ((points.astype(np.float64) + 1.0) * (max_val / 2.0)).astype(dtype)
+        quantized = ((points.astype(np.float64) + 1.0) * (max_val / 2.0)).astype(np.uint32)
     raw = quantized.flatten().tobytes()
     return gzip.compress(raw, compresslevel=6)
 
 
 def _pack_numeric_binary(values: np.ndarray, dtype: str = "float32") -> bytes:
     """Pack numeric column as gzip-compressed typed array."""
+    arr: NDArray[np.float32] | NDArray[np.int32]
     if dtype == "float32":
         arr = values.astype(np.float32)
     elif dtype == "int32":
@@ -246,7 +243,7 @@ def _pack_categorical_binary(values: Sequence[Any]) -> tuple[bytes, list[str]]:
     """Pack categorical column using dictionary encoding."""
     unique_values: list[str] = []
     value_to_idx: dict[str, int] = {}
-    indices = np.empty(len(values), dtype=np.uint32)
+    indices: NDArray[np.uint32] = np.empty(len(values), dtype=np.uint32)
 
     for i, v in enumerate(values):
         s = str(v)
@@ -287,7 +284,6 @@ class TmapViz:
         self.edge_opacity: float = 0.5
         self.edge_width: float = 2.0
 
-
         # Store both formats for flexibility
         self._points: list[list[float]] = []
         self._points_array: np.ndarray | None = None  # Shape: (n, 2)
@@ -316,20 +312,21 @@ class TmapViz:
 
         # Default to continuous because it will give less issues and having to pass
         # always the type can be annoying...
-        _column_dtype = "categorical" if categorical else "continuous"
+        _column_dtype: Literal["categorical", "continuous"] = (
+            "categorical" if categorical else "continuous"
+        )
 
         # Default colors
         if color is None:
             color = "tab10" if categorical else "viridis"
 
         if color not in COLORMAPS:
-            raise ValueError(
-                f"Color option not found. Choose from {list(matplotlib.colormaps)}"
-            )
+            raise ValueError(f"Color option not found. Choose from {list(matplotlib.colormaps)}")
 
-        if color not in set(matplotlib.colormaps).difference(
-            set(matplotlib.color_sequences)
-        ) and not categorical:
+        if (
+            color not in set(matplotlib.colormaps).difference(set(matplotlib.color_sequences))
+            and not categorical
+        ):
             raise ValueError(
                 f"Continuous layout requires a color scheme from "
                 f"{set(matplotlib.colormaps).difference(set(matplotlib.color_sequences))}"
@@ -370,7 +367,7 @@ class TmapViz:
         if add_as_label:
             if name not in self._labels_keys:
                 self._labels_keys.append(name)
-            role = "layout+label"
+            role: Literal["layout", "layout+label"] = "layout+label"
         else:
             if name in self._labels_keys:
                 self._labels_keys.remove(name)
@@ -463,14 +460,12 @@ class TmapViz:
 
         if s_arr.ndim != 1 or t_arr.ndim != 1:
             raise ValueError(
-                f"Edge arrays must be 1-dimensional. "
-                f"Got s: {s_arr.ndim}D and t: {t_arr.ndim}D"
+                f"Edge arrays must be 1-dimensional. Got s: {s_arr.ndim}D and t: {t_arr.ndim}D"
             )
 
         if s_arr.shape != t_arr.shape:
             raise ValueError(
-                f"Edge arrays must have the same length. "
-                f"Got s: {len(s_arr)} and t: {len(t_arr)}"
+                f"Edge arrays must have the same length. Got s: {len(s_arr)} and t: {len(t_arr)}"
             )
 
         if self.n_points > 0:
@@ -511,7 +506,6 @@ class TmapViz:
             if not np.isfinite(opacity_value) or not 0.0 <= opacity_value <= 1.0:
                 raise ValueError(f"Edge opacity must be in [0, 1]. Got {opacity!r}")
             self.edge_opacity = opacity_value
-
 
     def set_points(
         self,
@@ -763,8 +757,7 @@ class TmapViz:
 
         # Filter out string columns from binary data (they're in header)
         columns_b64_filtered = {
-            k: v for k, v in columns_b64.items()
-            if columns_meta[k]["dtype"] != "string"
+            k: v for k, v in columns_b64.items() if columns_meta[k]["dtype"] != "string"
         }
 
         env = _get_jinja_env()
@@ -812,10 +805,10 @@ class TmapViz:
         path = Path(path)
 
         # Determine if path is a file or directory
-        if str(path).endswith('.html'):
+        if str(path).endswith(".html"):
             # Full file path provided
             output_path = path
-        elif path.is_dir() or (not path.exists() and not str(path).endswith('.html')):
+        elif path.is_dir() or (not path.exists() and not str(path).endswith(".html")):
             # Directory provided (existing or will be created) - use title as filename
             if not self.title.endswith(".html"):
                 filename = self.title + ".html"

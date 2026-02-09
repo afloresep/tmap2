@@ -28,6 +28,7 @@ Available colormaps:
 - Diverging: coolwarm, RdYlBu
 - Categorical: tab10, tab20, Set1, Set2, Dark2, Paired
 """
+
 from tmap.visualization.tmapviz import BINARY_THRESHOLD, TmapViz
 
 __all__ = ["TmapViz", "BINARY_THRESHOLD"]

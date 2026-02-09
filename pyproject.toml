@@ -69,6 +69,13 @@ ignore = ["E741", "E743", "N806"]
 python_version = "3.12"
 strict = true
 
+[[tool.mypy.overrides]]
+module = [
+    "tmap.index._lsh_numba",
+    "tmap.index.encoders._minhash_numba",
+]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --cov=tmap"

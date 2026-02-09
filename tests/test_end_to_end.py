@@ -440,7 +440,9 @@ class TestFullPipeline:
                     idx = cluster_id * 5 + i
                     sig = template.copy()
                     modify_mask = rng.random(d) < 0.05
-                    sig[modify_mask] = rng.integers(0, 2**63, size=np.sum(modify_mask), dtype=np.uint64)
+                    sig[modify_mask] = rng.integers(
+                        0, 2**63, size=np.sum(modify_mask), dtype=np.uint64
+                    )
                     sigs[idx] = sig
             return sigs
 

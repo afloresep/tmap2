@@ -3,4 +3,4 @@ from .minhash import (
     WeightedMinHash,
 )
 
-__all__ = ["MinHash", "WeightedMinHash" ]
+__all__ = ["MinHash", "WeightedMinHash"]
