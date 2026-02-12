@@ -1,45 +1,4 @@
-"""
-Abstract base class for nearest-neighbor indices.
-
-INHERITANCE EXPLAINED
----------------------
-Python's ABC module lets you define "contracts" - methods that MUST exist.
-
-    class Index(ABC):
-        @abstractmethod
-        def build(self, data): ...
-
-Any class inheriting from Index MUST implement build(), or Python raises
-TypeError when you try to instantiate it. This catches bugs early.
-
-
-WHEN TO USE @abstractmethod vs REGULAR METHODS
-----------------------------------------------
-@abstractmethod: "Subclass MUST override this"
-    - Core functionality that varies per implementation
-    - No sensible default exists
-
-Regular method: "Subclass CAN override this"
-    - Shared logic that works for all implementations
-    - Provide a default, let subclasses customize if needed
-
-
-DECORATORS EXPLAINED
---------------------
-Decorators are functions that wrap other functions. Common uses:
-
-1. @property - Makes a method act like an attribute
-   instance.is_built  # calls is_built() but looks like attribute
-
-2. @abstractmethod - Marks method as "must implement"
-
-3. @classmethod - Method receives class, not instance
-   Index.from_file(path)  # creates instance from file
-
-4. @staticmethod - Method receives nothing (pure function in class namespace)
-
-5. Custom decorators - For logging, caching, validation (example below)
-"""
+## Provisional, not definitive base method
 
 from abc import ABC, abstractmethod
 from pathlib import Path
