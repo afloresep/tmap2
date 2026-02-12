@@ -197,15 +197,14 @@ class LSHForest:
         """
         Add multiple MinHash signatures to the LSH forest (optimized).
 
-        This is now very fast - just appends signatures to a list.
-        The actual hash computation is deferred to index().
-
         Args:
             signatures: MinHash vectors of shape (n, d) or (n, d, 2) for weighted
 
         Note:
             Call index() after adding signatures to build/update the index.
         """
+        # This is now very fast - just appends signatures to a list.
+        # The actual hash computation is deferred to index().
         self._validate_signature_shape(signatures, batch=True)
 
         n_samples = signatures.shape[0]

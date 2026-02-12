@@ -1,46 +1,3 @@
-"""
-Abstract base class for nearest-neighbor indices.
-
-INHERITANCE EXPLAINED
----------------------
-Python's ABC module lets you define "contracts" - methods that MUST exist.
-
-    class Index(ABC):
-        @abstractmethod
-        def build(self, data): ...
-
-Any class inheriting from Index MUST implement build(), or Python raises
-TypeError when you try to instantiate it. This catches bugs early.
-
-
-WHEN TO USE @abstractmethod vs REGULAR METHODS
-----------------------------------------------
-@abstractmethod: "Subclass MUST override this"
-    - Core functionality that varies per implementation
-    - No sensible default exists
-
-Regular method: "Subclass CAN override this"
-    - Shared logic that works for all implementations
-    - Provide a default, let subclasses customize if needed
-
-
-DECORATORS EXPLAINED
---------------------
-Decorators are functions that wrap other functions. Common uses:
-
-1. @property - Makes a method act like an attribute
-   instance.is_built  # calls is_built() but looks like attribute
-
-2. @abstractmethod - Marks method as "must implement"
-
-3. @classmethod - Method receives class, not instance
-   Index.from_file(path)  # creates instance from file
-
-4. @staticmethod - Method receives nothing (pure function in class namespace)
-
-5. Custom decorators - For logging, caching, validation (example below)
-"""
-
 import pickle
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -55,34 +12,13 @@ from tmap.index.types import EdgeList, KNNGraph
 class Index(ABC):
     """
     Abstract base class for nearest-neighbor search.
-
-    DESIGN DECISIONS:
-    1. Two build paths: from vectors OR from pre-computed edges
-       - from_vectors(): When you have raw data (embeddings, fingerprints)
-       - from_edges(): When you already have distances (generic input!)
-
-    2. Separate build() and query() - build once, query many times
-
-    3. State tracking (_is_built) - fail fast if used wrong
-
-    YOUR IMPLEMENTATION CHECKLIST:
-    - [ ] Override _build_from_vectors() if your index supports raw vectors
-    - [ ] Override _build_from_edges() if your index supports edge input
-    - [ ] Override _query_single() for single-point queries
-    - [ ] Override _query_batch() for efficient batch queries
-    - [ ] Override _save_implementation() and _load_implementation() for persistence
     """
-
     def __init__(self, seed: int | None = None) -> None:
         """
         Initialize the index.
 
         Args:
             seed: Random seed for reproducibility. If None, non-deterministic.
-
-        WHY SEED IN BASE CLASS?
-        All NN algorithms have randomness (hashing, tree construction).
-        Putting seed here ensures ALL implementations support reproducibility.
         """
         self._seed = seed
         self._is_built = False
@@ -122,9 +58,6 @@ class Index(ABC):
     def build_from_edges(self, edges: EdgeList) -> Self:
         """
         Build index from pre-computed edges/distances.
-
-        THIS IS THE GENERIC ENTRY POINT.
-        Users can visualize ANYTHING if they provide edges.
 
         Args:
             edges: EdgeList with (source, target, distance) tuples
@@ -181,17 +114,9 @@ class Index(ABC):
         self._check_is_built()
         return self._query_single(point, k)
 
-    # =========================================================================
-    # PERSISTENCE - Save/load index to disk
-    # =========================================================================
-
     def save(self, path: str | Path) -> None:
         """
         Save index to disk.
-
-        WHY SEPARATE _save_implementation?
-        Base class handles common stuff (metadata, validation).
-        Subclass handles format-specific stuff (FAISS binary, Annoy trees).
         """
         self._check_is_built()
         path = Path(path)
@@ -214,9 +139,6 @@ class Index(ABC):
         """
         Load index from disk.
 
-        @classmethod means this receives the CLASS, not an instance.
-        Useful for "factory" methods that create instances.
-
         Usage:
             index = FaissIndex.load("my_index.faiss")
         """
@@ -230,10 +152,6 @@ class Index(ABC):
         instance._is_built = True
         return instance
 
-    # =========================================================================
-    # PROPERTIES - Computed attributes
-    # =========================================================================
-
     @property
     def is_built(self) -> bool:
         """Whether the index has been built and is ready for queries."""
@@ -243,10 +161,6 @@ class Index(ABC):
     def n_nodes(self) -> int:
         """Number of nodes/points in the index."""
         return self._n_nodes
-
-    # =========================================================================
-    # ABSTRACT METHODS - Subclasses MUST implement these
-    # =========================================================================
 
     @abstractmethod
     def _build_from_vectors(
@@ -285,10 +199,6 @@ class Index(ABC):
     def _load_implementation(self, path: Path) -> None:
         """Load index-specific data. Override this."""
         ...
-
-    # =========================================================================
-    # HELPER METHODS - Shared validation logic
-    # =========================================================================
 
     def _validate_vectors(self, vectors: NDArray[Any]) -> None:
         """Validate input vectors. Called before building."""

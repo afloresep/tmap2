@@ -1,18 +1,6 @@
 """
 Abstract base class for layout algorithms.
 
-STRATEGY PATTERN IN ACTION
---------------------------
-The Layout ABC defines WHAT a layout must do:
-    - compute(tree) -> coordinates
-    - support incremental updates (for insertion)
-    - be deterministic given a seed
-
-Concrete classes define HOW:
-    - ForceDirectedLayout: Iterative force simulation
-    - RadialLayout: Concentric circles from root
-    - HierarchicalLayout: Top-down levels
-
 CHOOSING A LAYOUT ALGORITHM
 ---------------------------
 1. Force-directed (default recommendation):
@@ -170,10 +158,6 @@ class Layout(ABC):
 
         return self._compute_incremental(tree, existing_coords, new_nodes)
 
-    # =========================================================================
-    # ABSTRACT METHODS - You must implement these
-    # =========================================================================
-
     @abstractmethod
     def _compute_initial(self, tree: Tree) -> Coordinates:
         """
@@ -199,10 +183,6 @@ class Layout(ABC):
         2. Full: Use existing as initial, run global optimization
         """
         ...
-
-    # =========================================================================
-    # PERSISTENCE
-    # =========================================================================
 
     def save(self, path: str | Path) -> None:
         """Save layout parameters and cached state."""
