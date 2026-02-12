@@ -179,6 +179,13 @@ class MSTBuilder:
         """Extract edge list from sparse MST matrix."""
         # Get non-zero entries
         rows, cols = mst.nonzero()
+
+        if len(rows) == 0:
+            return (
+                np.empty((0, 2), dtype=np.int32),
+                np.empty(0, dtype=np.float32),
+            )
+
         weights = np.array(mst[rows, cols]).ravel()
 
         # Stack into edge array

@@ -618,18 +618,10 @@ class TestTreeSubtreeSizes:
 class TestMSTBuilderEdgeCases:
     """Test edge cases for MSTBuilder."""
 
-    @pytest.mark.xfail(
-        reason="BUG ISS-009: MSTBuilder._sparse_to_edges crashes on empty sparse matrix",
-        raises=ValueError,
-    )
     def test_single_node_graph(self):
         """Single node graph should produce tree with 0 edges.
 
         Covers: Minimum viable graph.
-
-        BUG ISS-009: MSTBuilder._sparse_to_edges() fails when sparse matrix is empty.
-        The line `weights = np.array(mst[rows, cols]).ravel()` returns a matrix
-        object instead of an array when there are no edges.
         """
         indices = np.array([[-1]], dtype=np.int32)  # No neighbors
         distances = np.array([[2.0]], dtype=np.float32)  # Invalid
@@ -674,17 +666,10 @@ class TestMSTBuilderEdgeCases:
         assert tree.n_nodes == 2
         assert len(tree.edges) == 1
 
-    @pytest.mark.xfail(
-        reason="BUG ISS-009: MSTBuilder._sparse_to_edges crashes on empty sparse matrix",
-        raises=ValueError,
-    )
     def test_all_invalid_neighbors(self):
         """Graph with all -1 neighbors should produce tree with 0 edges.
 
         Covers: Completely disconnected graph.
-
-        BUG ISS-009: Same issue as test_single_node_graph - empty sparse matrix
-        causes crash in _sparse_to_edges().
         """
         indices = np.array([[-1, -1], [-1, -1], [-1, -1]], dtype=np.int32)
         distances = np.array([[2.0, 2.0], [2.0, 2.0], [2.0, 2.0]], dtype=np.float32)
