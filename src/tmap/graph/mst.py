@@ -1,41 +1,5 @@
 """
 Minimum Spanning Tree construction from k-NN graph.
-
-ALGORITHM BACKGROUND
---------------------
-MST finds the tree that:
-1. Connects all nodes
-2. Minimizes total edge weight
-
-For k-NN graphs, edge weight = distance. So MST connects
-all points using the shortest possible total distance.
-
-We use scipy.sparse.csgraph.minimum_spanning_tree which
-implements Kruskal's algorithm with union-find. O(E log E).
-
-
-MST BIAS FEATURE
-----------------
-Your requirement: "bias MST toward close NNs ab initio"
-
-The idea: For visualization, we WANT close points to be connected.
-But MST purely minimizes total weight, which might skip some
-"obvious" connections.
-
-Solution: Modify edge weights before MST:
-    modified_weight = weight * (1 + bias_factor * rank / k)
-
-Where rank = how close this neighbor is (0=closest, k-1=furthest).
-This makes the MST prefer closer neighbors even if it costs more globally.
-
-
-DESIGN NOTE: No inheritance here
---------------------------------
-MSTBuilder is a simple class with one job. No need for ABC/interface.
-If you later want multiple MST algorithms, THEN add abstraction.
-
-"Make it work, make it right, make it fast" - in that order.
-Don't over-engineer upfront.
 """
 
 import numpy as np
