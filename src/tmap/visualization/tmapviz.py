@@ -95,7 +95,7 @@ def _get_jinja_env() -> Environment:
     """Get or create a cached Jinja2 environment for templates."""
     if not _JINJA_AVAILABLE:
         raise ImportError(
-            "Jinja2 is required for template rendering. Install with: pip install tmap[viz]"
+            "Jinja2 is required for template rendering. Install full dependencies with: pip install -e ."
         )
     return Environment(
         loader=PackageLoader("tmap.visualization", "templates"),
@@ -540,6 +540,85 @@ class TmapViz:
                     f"Column '{col.name}' has {len(col.values)} values but there are "
                     f"{len(self._points)} points"
                 )
+
+    def to_jupyter(
+        self,
+        layout: str | None = None,
+        *,
+        width: int | str = 800,
+        height: int = 420,
+    ) -> Any:
+        """Create a jupyter-scatter view from the current ``TmapViz`` state.
+
+        Args:
+            layout: Optional color layout name to visualize. If omitted and at
+                least one layout exists, the first layout is used.
+            width: Widget width in pixels or ``"auto"``.
+            height: Widget height in pixels.
+
+        Returns:
+            Configured ``jscatter.Scatter`` instance.
+        """
+        if self._points_array is None:
+            raise ValueError("Call set_points() before converting to a notebook widget.")
+
+        n_points = len(self._points_array)
+        for col in self._columns.values():
+            if len(col.values) != n_points:
+                raise ValueError(
+                    f"Column '{col.name}' has {len(col.values)} values but there are "
+                    f"{n_points} points"
+                )
+
+        if layout is not None and layout not in self._layout_keys:
+            raise ValueError(
+                f"Unknown layout '{layout}'. Available layouts: {self._layout_keys}"
+            )
+
+        from tmap.visualization.jupyter import to_jscatter
+
+        import pandas as pd
+
+        selected_layout = layout
+        if selected_layout is None and self._layout_keys:
+            selected_layout = self._layout_keys[0]
+
+        data_df: pd.DataFrame | None = None
+        if self._columns:
+            data_df = pd.DataFrame(
+                {name: col.values for name, col in self._columns.items()}
+            )
+
+        color_map: str | list[str] | dict[str, str] | None = None
+        if selected_layout is not None:
+            color_map = self._columns[selected_layout].color
+
+        tooltip_properties = [name for name in self._labels_keys if name in self._columns]
+
+        scatter = to_jscatter(
+            self._points_array.astype(np.float32, copy=False),
+            color_by=selected_layout,
+            color_map=color_map,
+            data=data_df,
+            tooltip_properties=tooltip_properties or None,
+            point_size=self.point_size,
+            opacity=self.opacity,
+            width=width,
+            height=height,
+        )
+
+        scatter.background(self.background_color)
+        if selected_layout is None:
+            scatter.color(default=self.point_color)
+
+        if self._edges_s is not None and self._edges_t is not None and len(self._edges_s) > 0:
+            warnings.warn(
+                "Edges are not supported in notebook mode yet and will be ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        return scatter
 
     def render(self, template_name: str = "base.html.j2") -> str:
         """Return the full HTML string for the visualization.
