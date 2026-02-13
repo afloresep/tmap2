@@ -68,7 +68,7 @@ class TestLSHForestInit:
         """Test default parameter values."""
         lsh = LSHForest()
         assert lsh.d == 128
-        assert lsh.l == 8
+        assert lsh.l == 64  # default: d // 2 = 128 // 2
         assert lsh.size == 0
         assert not lsh.is_clean
 

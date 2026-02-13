@@ -37,6 +37,13 @@ pytestmark = pytest.mark.skipif(
     not _VIZ_AVAILABLE, reason="Visualization dependencies not available (jinja2 required)"
 )
 
+try:
+    from jscatter.jscatter import Scatter as _Scatter
+
+    _JSCATTER_AVAILABLE = True
+except ImportError:
+    _JSCATTER_AVAILABLE = False
+
 
 # =============================================================================
 # Fixtures
@@ -354,6 +361,73 @@ class TestRender:
         # Should render without error (smiles template used)
         assert isinstance(html, str)
         assert len(html) > 0
+
+
+# =============================================================================
+# to_jupyter Tests
+# =============================================================================
+
+
+@pytest.mark.skipif(not _JSCATTER_AVAILABLE, reason="jupyter-scatter is not installed")
+class TestToJupyter:
+    """Tests for TmapViz.to_jupyter."""
+
+    def test_to_jupyter_basic_style(self, viz_with_data):
+        """Should map point/background style onto jscatter."""
+        viz, _ = viz_with_data
+        viz.background_color = "#ffffff"
+        viz.point_color = "#ff0000"
+        viz.point_size = 6.0
+        viz.opacity = 0.7
+
+        scatter = viz.to_jupyter()
+
+        assert isinstance(scatter, _Scatter)
+        assert scatter.background()["color"][:3] == pytest.approx((1.0, 1.0, 1.0))
+        assert scatter.color()["by"] is None
+        assert scatter.color()["default"][:3] == pytest.approx((1.0, 0.0, 0.0))
+        assert scatter.size()["default"] == pytest.approx(6.0)
+        assert scatter.opacity()["default"] == pytest.approx(0.7)
+
+    def test_to_jupyter_uses_layout_and_labels(self, viz_with_data):
+        """Should use first layout as color and labels as tooltip fields."""
+        viz, data = viz_with_data
+        viz.add_label("name", data["labels"])
+        viz.add_color_layout("value", data["continuous"], categorical=False, color="plasma")
+
+        scatter = viz.to_jupyter()
+
+        assert isinstance(scatter, _Scatter)
+        assert scatter.color()["by"] == "value"
+        assert scatter.tooltip()["enable"] is True
+        assert "name" in scatter.tooltip()["properties"]
+
+    def test_to_jupyter_layout_override(self, viz_with_data):
+        """Layout parameter should select the requested color layout."""
+        viz, data = viz_with_data
+        viz.add_color_layout("value_a", data["continuous"], categorical=False, color="viridis")
+        viz.add_color_layout("value_b", (data["continuous"] * 2), categorical=False, color="plasma")
+
+        scatter = viz.to_jupyter(layout="value_b")
+
+        assert isinstance(scatter, _Scatter)
+        assert scatter.color()["by"] == "value_b"
+
+    def test_to_jupyter_invalid_layout_raises(self, viz_with_data):
+        """Unknown layout name should raise ValueError."""
+        viz, _ = viz_with_data
+        with pytest.raises(ValueError, match="Unknown layout"):
+            viz.to_jupyter(layout="does_not_exist")
+
+    def test_to_jupyter_warns_when_edges_set(self, viz_with_data):
+        """Edges are not rendered in notebook mode and should emit a warning."""
+        viz, _ = viz_with_data
+        viz.set_edges([0, 1, 2], [1, 2, 3])
+
+        with pytest.warns(UserWarning, match="Edges are not supported"):
+            scatter = viz.to_jupyter()
+
+        assert isinstance(scatter, _Scatter)
 
 
 # =============================================================================
