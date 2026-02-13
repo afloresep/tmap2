@@ -68,4 +68,3 @@ def test_knn_graph_from_distance_matrix_non_square_raises() -> None:
 
     with pytest.raises(ValueError, match="must be square"):
         KNNGraph.from_distance_matrix(distance_matrix, k=1)
-

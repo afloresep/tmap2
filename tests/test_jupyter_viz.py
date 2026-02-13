@@ -13,9 +13,7 @@ try:
 except ImportError:
     _JSCATTER_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(
-    not _JSCATTER_AVAILABLE, reason="jscatter not installed"
-)
+pytestmark = pytest.mark.skipif(not _JSCATTER_AVAILABLE, reason="jscatter not installed")
 
 
 @pytest.fixture
@@ -92,16 +90,12 @@ class TestToJscatter:
         scatter = to_jscatter(embedding, data=df, color_by="species")
         assert isinstance(scatter, _Scatter)
 
-    def test_dataframe_int_column_color_is_categorical_scale(
-        self, embedding: np.ndarray
-    ) -> None:
+    def test_dataframe_int_column_color_is_categorical_scale(self, embedding: np.ndarray) -> None:
         """Integer category columns should render as categorical colors."""
         from tmap.visualization.jupyter import to_jscatter
 
         df = pd.DataFrame({"cluster": [i % 10 for i in range(len(embedding))]})
-        scatter = to_jscatter(
-            embedding, data=df, color_by="cluster", color_map="tab10"
-        )
+        scatter = to_jscatter(embedding, data=df, color_by="cluster", color_map="tab10")
         assert isinstance(scatter, _Scatter)
         assert scatter.widget.color_scale == "categorical"
 
@@ -124,13 +118,13 @@ class TestToJscatter:
         """tooltip_properties passed through."""
         from tmap.visualization.jupyter import to_jscatter
 
-        df = pd.DataFrame({
-            "name": [f"pt_{i}" for i in range(len(embedding))],
-            "value": np.arange(len(embedding), dtype=float),
-        })
-        scatter = to_jscatter(
-            embedding, data=df, tooltip_properties=["name", "value"]
+        df = pd.DataFrame(
+            {
+                "name": [f"pt_{i}" for i in range(len(embedding))],
+                "value": np.arange(len(embedding), dtype=float),
+            }
         )
+        scatter = to_jscatter(embedding, data=df, tooltip_properties=["name", "value"])
         assert isinstance(scatter, _Scatter)
 
     def test_width_and_height(self, embedding: np.ndarray) -> None:
@@ -204,9 +198,7 @@ class TestTMAPPlot:
 
         model = TMAP()
         # Inject a fake embedding to avoid needing OGDF
-        model._embedding = np.random.default_rng(0).standard_normal((20, 2)).astype(
-            np.float32
-        )
+        model._embedding = np.random.default_rng(0).standard_normal((20, 2)).astype(np.float32)
         scatter = model.plot(show=False)
         assert isinstance(scatter, _Scatter)
 
@@ -215,9 +207,7 @@ class TestTMAPPlot:
         from tmap.estimator import TMAP
 
         model = TMAP()
-        model._embedding = np.random.default_rng(0).standard_normal((20, 2)).astype(
-            np.float32
-        )
+        model._embedding = np.random.default_rng(0).standard_normal((20, 2)).astype(np.float32)
         labels = ["a", "b"] * 10
         scatter = model.plot(color_by=labels, show=False)
         assert isinstance(scatter, _Scatter)
@@ -234,17 +224,13 @@ class TestTMAPPlot:
         monkeypatch.setattr("tmap.visualization.jupyter._display_scatter", _fake_display)
 
         model = TMAP()
-        model._embedding = np.random.default_rng(0).standard_normal((20, 2)).astype(
-            np.float32
-        )
+        model._embedding = np.random.default_rng(0).standard_normal((20, 2)).astype(np.float32)
 
         scatter = model.plot(show=True, controls=True)
         assert isinstance(scatter, _Scatter)
         assert calls == [True]
 
-    def test_plot_show_false_skips_display_helper(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_plot_show_false_skips_display_helper(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """plot(show=False) does not trigger display helper."""
         from tmap.estimator import TMAP
 
@@ -254,9 +240,7 @@ class TestTMAPPlot:
         monkeypatch.setattr("tmap.visualization.jupyter._display_scatter", _fake_display)
 
         model = TMAP()
-        model._embedding = np.random.default_rng(0).standard_normal((20, 2)).astype(
-            np.float32
-        )
+        model._embedding = np.random.default_rng(0).standard_normal((20, 2)).astype(np.float32)
 
         scatter = model.plot(show=False)
         assert isinstance(scatter, _Scatter)

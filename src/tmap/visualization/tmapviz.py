@@ -571,13 +571,11 @@ class TmapViz:
                 )
 
         if layout is not None and layout not in self._layout_keys:
-            raise ValueError(
-                f"Unknown layout '{layout}'. Available layouts: {self._layout_keys}"
-            )
+            raise ValueError(f"Unknown layout '{layout}'. Available layouts: {self._layout_keys}")
 
         from tmap.visualization.jupyter import to_jscatter
 
-        import pandas as pd
+        import pandas as pd  # type: ignore[import-untyped]
 
         selected_layout = layout
         if selected_layout is None and self._layout_keys:
@@ -585,9 +583,7 @@ class TmapViz:
 
         data_df: pd.DataFrame | None = None
         if self._columns:
-            data_df = pd.DataFrame(
-                {name: col.values for name, col in self._columns.items()}
-            )
+            data_df = pd.DataFrame({name: col.values for name, col in self._columns.items()})
 
         color_map: str | list[str] | dict[str, str] | None = None
         if selected_layout is not None:

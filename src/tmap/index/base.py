@@ -13,6 +13,7 @@ class Index(ABC):
     """
     Abstract base class for nearest-neighbor search.
     """
+
     def __init__(self, seed: int | None = None) -> None:
         """
         Initialize the index.

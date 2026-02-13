@@ -12,12 +12,13 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.sparse import csr_matrix  # type: ignore[import-untyped]
 from scipy.sparse.csgraph import minimum_spanning_tree  # type: ignore[import-untyped]
+from typing import cast
 
 from tmap.graph.types import Tree
 from tmap.index.types import KNNGraph
 
 try:
-    from numba import njit
+    from numba import njit  # type: ignore[import-untyped]
 
     _HAS_NUMBA = True
 except ImportError:  # pragma: no cover - optional dependency
@@ -26,7 +27,8 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 if _HAS_NUMBA:
-    @njit(cache=True)
+
+    @njit(cache=True)  # type: ignore[untyped-decorator]
     def _reduce_sorted_min_numba(
         keys: NDArray[np.int64],
         u: NDArray[np.int32],
@@ -103,7 +105,10 @@ def _reduce_sorted_min(
 ) -> tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
     """Select the minimum edge weight for each sorted undirected edge key."""
     if _HAS_NUMBA:
-        return _reduce_sorted_min_numba(keys, u, v, w)
+        return cast(
+            tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]],
+            _reduce_sorted_min_numba(keys, u, v, w),
+        )
     return _reduce_sorted_min_numpy(keys, u, v, w)
 
 
@@ -233,12 +238,10 @@ class MSTBuilder:
                 np.empty(0, dtype=np.float32),
             )
 
-        weights = np.array(mst[rows, cols]).ravel()
+        weights = np.asarray(mst[rows, cols], dtype=np.float32).ravel()
 
         # Stack into edge array
         edges = np.column_stack([rows, cols]).astype(np.int32)
-        weights = weights.astype(np.float32)
-
         return edges, weights
 
     def _find_root(self, edges: NDArray[np.int32], n_nodes: int) -> int:

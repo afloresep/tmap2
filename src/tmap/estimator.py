@@ -230,7 +230,9 @@ class TMAP:
         else:
             # Layout the full k-NN graph; points in dense regions cluster.
             x, y, _, _ = layout_from_knn_graph(
-                self._graph, config=config, create_mst=False,
+                self._graph,
+                config=config,
+                create_mst=False,
             )
 
         self._embedding = np.column_stack([x, y]).astype(np.float32, copy=False)
@@ -317,7 +319,7 @@ class TMAP:
         self,
         *,
         color_by: Any | None = None,
-        color_map: str | list | dict | None = None,
+        color_map: str | list[str] | dict[str, str] | None = None,
         data: Any | None = None,
         tooltip_properties: list[str] | None = None,
         point_size: float = 3,

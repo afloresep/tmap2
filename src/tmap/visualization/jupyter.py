@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
-
-if TYPE_CHECKING:
-    import pandas as pd
-    from jscatter.jscatter import Scatter
 
 
 def _check_jscatter() -> None:
@@ -25,7 +21,7 @@ def _check_jscatter() -> None:
         ) from None
 
     try:
-        from jscatter.jscatter import Scatter as _Scatter  # noqa: F401
+        from jscatter.jscatter import Scatter as _Scatter  # type: ignore[import-untyped]  # noqa: F401
     except ImportError:
         raise ImportError(
             "Could not import jscatter widget bindings from jupyter-scatter.\n"
@@ -37,9 +33,7 @@ def _validate_embedding(embedding: Any) -> NDArray[np.float32]:
     """Validate and normalize embedding input."""
     arr = np.asarray(embedding, dtype=np.float32)
     if arr.ndim != 2 or arr.shape[1] != 2:
-        raise ValueError(
-            f"embedding must have shape (n_samples, 2); got {arr.shape!r}"
-        )
+        raise ValueError(f"embedding must have shape (n_samples, 2); got {arr.shape!r}")
     if arr.shape[0] == 0:
         raise ValueError("embedding must contain at least one point")
     if not np.isfinite(arr).all():
@@ -49,11 +43,11 @@ def _validate_embedding(embedding: Any) -> NDArray[np.float32]:
 
 def _is_categorical(
     values: Any,
-    data: pd.DataFrame | None = None,
+    data: Any | None = None,
     col_name: str | None = None,
 ) -> bool:
     """Infer whether *values* should be treated as categorical."""
-    import pandas as pd
+    import pandas as pd  # type: ignore[import-untyped]
 
     if data is not None and col_name is not None and col_name in data.columns:
         series = data[col_name]
@@ -75,33 +69,33 @@ def _is_categorical(
     return False
 
 
-def _display_scatter(scatter: Scatter, *, controls: bool = False) -> None:
+def _display_scatter(scatter: Any, *, controls: bool = False) -> None:
     """Display a scatter widget when running inside IPython/Jupyter."""
     try:
-        from IPython import get_ipython
+        from IPython import get_ipython as _get_ipython  # type: ignore[attr-defined]
         from IPython.display import display
     except ImportError:
         return
 
-    if get_ipython() is None:
+    if _get_ipython() is None:  # type: ignore[no-untyped-call]
         return
 
     widget = scatter.show() if controls else scatter.widget
-    display(widget)
+    display(widget)  # type: ignore[no-untyped-call]
 
 
 def to_jscatter(
     embedding: NDArray[np.float32] | Sequence[Sequence[float]],
     *,
-    color_by: str | NDArray | Sequence | None = None,
-    color_map: str | list | dict | None = None,
-    data: pd.DataFrame | None = None,
+    color_by: str | NDArray[np.generic] | Sequence[Any] | None = None,
+    color_map: str | list[str] | dict[str, str] | None = None,
+    data: Any | None = None,
     tooltip_properties: list[str] | None = None,
     point_size: float = 3,
     opacity: float = 0.8,
     width: int | str = 800,
     height: int = 420,
-) -> Scatter:
+) -> Any:
     """Create an interactive ``jscatter.Scatter`` widget from an embedding."""
     _check_jscatter()
     from jscatter.jscatter import Scatter as _Scatter

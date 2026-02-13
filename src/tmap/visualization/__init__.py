@@ -29,23 +29,19 @@ Available colormaps:
 - Categorical: tab10, tab20, Set1, Set2, Dark2, Paired
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from tmap.visualization.tmapviz import BINARY_THRESHOLD, TmapViz
 
 __all__ = ["TmapViz", "BINARY_THRESHOLD", "to_jscatter"]
 
 
-if TYPE_CHECKING:
-    from tmap.visualization.jupyter import to_jscatter as to_jscatter
-
-
-def to_jscatter(*args: Any, **kwargs: Any):
+def to_jscatter(*args: Any, **kwargs: Any) -> Any:
     """Lazily import notebook visualization helper."""
     from tmap.visualization.jupyter import to_jscatter as _to_jscatter
 
     return _to_jscatter(*args, **kwargs)
 
 
-def __getattr__(name: str):  # noqa: N807
+def __getattr__(name: str) -> Any:  # noqa: N807
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

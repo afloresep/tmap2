@@ -11,7 +11,7 @@ MST BIAS FEATURE
 TODO: "bias MST toward close NNs ab initio".
 This is implemented via edge weight modification before MST construction.
 MSTBuilder.build() for the bias_factor parameter.
-But it is slow and the end result is not really good. This is going to be tricky 
+But it is slow and the end result is not really good. This is going to be tricky
 to implement...
 """
 

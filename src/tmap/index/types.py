@@ -83,9 +83,7 @@ class KNNGraph:
         distances_arr = np.asarray(distances, dtype=np.float32)
 
         if indices_arr.ndim != 2 or distances_arr.ndim != 2:
-            raise ValueError(
-                "indices and distances must be 2D arrays with shape (n_nodes, k)."
-            )
+            raise ValueError("indices and distances must be 2D arrays with shape (n_nodes, k).")
         if indices_arr.shape != distances_arr.shape:
             raise ValueError(
                 f"indices and distances must have identical shapes. "
@@ -108,9 +106,7 @@ class KNNGraph:
         distances = np.asarray(distance_matrix, dtype=np.float32)
 
         if distances.ndim != 2 or distances.shape[0] != distances.shape[1]:
-            raise ValueError(
-                "distance_matrix must be square with shape (n_samples, n_samples)."
-            )
+            raise ValueError("distance_matrix must be square with shape (n_samples, n_samples).")
         n_samples = distances.shape[0]
         if n_samples < 2:
             raise ValueError("distance_matrix must contain at least 2 samples.")
