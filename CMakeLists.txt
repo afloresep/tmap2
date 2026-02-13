@@ -5,74 +5,41 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-option(TMAP_OPTIONAL_OGDF "Build OGDF layout extension if available" ON)
-
 # Find pybind11
 find_package(pybind11 CONFIG REQUIRED)
 
-# Find OGDF - try CONFIG first, then manual
-set(OGDF_FOUND_METHOD "")
+option(TMAP_BUILD_LAYOUT "Build OGDF-backed layout extension." ON)
 
-find_package(OGDF CONFIG QUIET)
-if(OGDF_FOUND)
-    set(OGDF_FOUND_METHOD "cmake-config")
-endif()
+if(TMAP_BUILD_LAYOUT)
+    # ---------------------------------------------------------------------------
+    # Build OGDF from bundled submodule (single supported path)
+    # ---------------------------------------------------------------------------
+    set(TMAP_OGDF_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/ogdf")
 
-# Fallback: environment variable (supports both installed and build-dir layouts)
-if(NOT OGDF_FOUND AND DEFINED ENV{OGDF_DIR})
-    set(OGDF_DIR "$ENV{OGDF_DIR}")
-
-    # Try installed layout first: ${OGDF_DIR}/include, ${OGDF_DIR}/lib
-    if(EXISTS "${OGDF_DIR}/include/ogdf" AND EXISTS "${OGDF_DIR}/lib")
-        set(OGDF_INCLUDE_DIR "${OGDF_DIR}/include")
-        set(OGDF_LIB_DIR "${OGDF_DIR}/lib")
-        set(OGDF_FOUND_METHOD "env-var-installed")
-    # Try build directory layout: ${OGDF_DIR}/include, ${OGDF_DIR}/build
-    elseif(EXISTS "${OGDF_DIR}/include/ogdf" AND EXISTS "${OGDF_DIR}/build")
-        set(OGDF_INCLUDE_DIR "${OGDF_DIR}/include")
-        set(OGDF_LIB_DIR "${OGDF_DIR}/build")
-        # OGDF build generates config_autogen.h in build/include/ogdf-release/
-        if(EXISTS "${OGDF_DIR}/build/include/ogdf-release")
-            set(OGDF_BUILD_INCLUDE_DIR "${OGDF_DIR}/build/include/ogdf-release")
-        endif()
-        set(OGDF_FOUND_METHOD "env-var-build")
+    if(NOT EXISTS "${TMAP_OGDF_SOURCE_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Bundled OGDF source was not found at extern/ogdf.\n"
+            "Initialize submodules and reinstall:\n"
+            "  git submodule update --init --recursive extern/ogdf\n"
+            "  pip install -e .\n"
+            "For core-only installs without layout:\n"
+            "  pip install -e . --config-settings=cmake.define.TMAP_BUILD_LAYOUT=OFF"
+        )
     endif()
 
-    if(OGDF_LIB_DIR)
-        find_library(OGDF_LIBRARY NAMES OGDF ogdf PATHS ${OGDF_LIB_DIR} NO_DEFAULT_PATH)
-        find_library(COIN_LIBRARY NAMES COIN coin PATHS ${OGDF_LIB_DIR} NO_DEFAULT_PATH)
+    message(STATUS "Building OGDF from bundled source: ${TMAP_OGDF_SOURCE_DIR}")
 
-        if(OGDF_LIBRARY)
-            set(OGDF_FOUND TRUE)
-        endif()
-    endif()
-endif()
+    # Keep OGDF static and avoid enabling docs by accident.
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(DOC_INSTALL OFF CACHE BOOL "" FORCE)
 
-# Build extension if OGDF found
-if(TMAP_OPTIONAL_OGDF AND OGDF_FOUND)
-    message(STATUS "")
-    message(STATUS "=== OGDF Configuration ===")
-    message(STATUS "  Found via: ${OGDF_FOUND_METHOD}")
-    if(OGDF_INCLUDE_DIR)
-        message(STATUS "  Include: ${OGDF_INCLUDE_DIR}")
+    add_subdirectory(extern/ogdf EXCLUDE_FROM_ALL)
+
+    if(NOT TARGET OGDF)
+        message(FATAL_ERROR "OGDF target was not created by extern/ogdf.")
     endif()
-    if(OGDF_BUILD_INCLUDE_DIR)
-        message(STATUS "  Build include: ${OGDF_BUILD_INCLUDE_DIR}")
-    endif()
-    if(OGDF_LIBRARY)
-        message(STATUS "  Library: ${OGDF_LIBRARY}")
-    endif()
-    if(COIN_LIBRARY)
-        message(STATUS "  COIN: ${COIN_LIBRARY}")
-    endif()
-    message(STATUS "")
 
     add_subdirectory(cpp)
 else()
-    message(STATUS "")
-    message(WARNING "OGDF not found - layout extension will NOT be built.")
-    message(WARNING "To enable: install OGDF and set OGDF_DIR=/path/to/ogdf")
-    message(WARNING "  macOS: brew install ogdf")
-    message(WARNING "  Linux: apt install libogdf-dev (or build from source)")
-    message(STATUS "")
+    message(STATUS "TMAP_BUILD_LAYOUT=OFF: skipping OGDF layout extension build.")
 endif()

@@ -1,5 +1,10 @@
 [build-system]
-requires = ["scikit-build-core>=0.8", "pybind11>=2.11"]
+requires = [
+    "scikit-build-core>=0.8",
+    "pybind11>=2.11",
+    "cmake>=3.15",
+    "ninja>=1.10",
+]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -23,25 +28,32 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
     "datasketch>=1.6.0",
+    "numba>=0.59",
+    "jinja2>=3.1",
+    "matplotlib>=3.7",
+    "pandas>=2.2",
+    "tqdm>=4.66",
+    "jupyter-scatter>=0.22.2",
 ]
 
 [project.optional-dependencies]
 faiss = ["faiss-cpu>=1.7"]
 faiss-gpu = ["faiss-gpu>=1.7"]
 annoy = ["annoy>=1.17"]
-viz = ["jinja2>=3.1"]
-fast = ["numba>=0.59"]
+viz = []
+notebook = []
+all = [
+    "faiss-cpu>=1.7",
+    "faiss-gpu>=1.7",
+    "annoy>=1.17",
+]
 dev = [
-    "numba>=0.59",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff>=0.1",
     "mypy>=1.0",
     "matplotlib>=3.7",
-     "jinja2>=3.1",
 ]
-ogdf = []  # Marker only - OGDF must be installed system-wide
-all = ["tmap[faiss,annoy,viz,fast,dev]"]
 
 [project.urls]
 Homepage = "https://github.com/afloresep/TMAP"
@@ -55,7 +67,6 @@ build.verbose = true
 wheel.install-dir = "tmap/layout"
 
 [tool.scikit-build.cmake.define]
-TMAP_OPTIONAL_OGDF = "ON"
 
 [tool.ruff]
 line-length = 100

@@ -10,21 +10,11 @@ target_include_directories(_tmap_ogdf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Handle OGDF found via find_package vs manual
-if(TARGET OGDF::OGDF)
-    # Modern CMake config
-    target_link_libraries(_tmap_ogdf PRIVATE OGDF::OGDF)
-else()
-    # Manual paths
-    target_include_directories(_tmap_ogdf PRIVATE ${OGDF_INCLUDE_DIR})
-    if(OGDF_BUILD_INCLUDE_DIR)
-        target_include_directories(_tmap_ogdf PRIVATE ${OGDF_BUILD_INCLUDE_DIR})
-    endif()
-    target_link_libraries(_tmap_ogdf PRIVATE ${OGDF_LIBRARY})
-    if(COIN_LIBRARY)
-        target_link_libraries(_tmap_ogdf PRIVATE ${COIN_LIBRARY})
-    endif()
+# Link OGDF from bundled submodule.
+if(NOT TARGET OGDF)
+    message(FATAL_ERROR "OGDF target is required but not available.")
 endif()
+target_link_libraries(_tmap_ogdf PRIVATE OGDF)
 
 # Install to tmap/layout/
 install(TARGETS _tmap_ogdf LIBRARY DESTINATION .)

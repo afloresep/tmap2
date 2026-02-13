@@ -137,7 +137,9 @@ def require_ogdf() -> None:
     if not _AVAILABLE:
         raise ImportError(
             "OGDF layout extension not available. "
-            "Install OGDF and rebuild: OGDF_DIR=/path/to/ogdf pip install --no-cache-dir -e ."
+            "Reinstall with bundled OGDF: pip install -e . "
+            "If a core-only install was intended, use "
+            "pip install -e . --config-settings=cmake.define.TMAP_BUILD_LAYOUT=OFF"
         ) from _IMPORT_ERROR
 
 
