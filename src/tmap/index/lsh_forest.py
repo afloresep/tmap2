@@ -48,7 +48,9 @@ class LSHForest:
 
     Args:
         d: Dimensionality of MinHash vectors (number of permutations). Default: 128
-        l: Number of prefix trees (bands). Default: 8
+        l: Number of prefix trees (bands). Default: d // 2. Lower values increase
+            band width (k = d // l), which reduces candidate recall for low-similarity
+            data. The safe range depends on dataset similarity — see ISS-018.
         store: Store signatures for linear scan and distance queries. Default: True
         weighted: Whether using weighted MinHash signatures. Default: False
 
@@ -60,8 +62,8 @@ class LSHForest:
         >>> mh = MinHash(num_perm=128)
         >>> sigs = mh.batch_from_binary_array(fingerprints)
         >>>
-        >>> # Build LSH Forest
-        >>> lsh = LSHForest(d=128, l=8)
+        >>> # Build LSH Forest (default l=d//2 for good recall)
+        >>> lsh = LSHForest(d=128)
         >>> lsh.batch_add(sigs)
         >>> lsh.index()
         >>>
@@ -77,12 +79,16 @@ class LSHForest:
     def __init__(
         self,
         d: int = 128,
-        l: int = 8,
+        l: int | None = None,
         store: bool = True,
         weighted: bool = False,
     ) -> None:
         if d <= 0:
             raise ValueError("d must be positive")
+
+        if l is None:
+            l = d // 2
+
         if l <= 0:
             raise ValueError("l must be positive")
         if l > d:
@@ -90,7 +96,7 @@ class LSHForest:
 
         self._d = d
         self._l = l
-        self._k = d // l  # Band width
+        self._k = d // l
         self._store = store
         self._weighted = weighted
 

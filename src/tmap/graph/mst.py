@@ -1,41 +1,11 @@
 """
 Minimum Spanning Tree construction from k-NN graph.
-
-ALGORITHM BACKGROUND
---------------------
 MST finds the tree that:
 1. Connects all nodes
 2. Minimizes total edge weight
 
 For k-NN graphs, edge weight = distance. So MST connects
 all points using the shortest possible total distance.
-
-We use scipy.sparse.csgraph.minimum_spanning_tree which
-implements Kruskal's algorithm with union-find. O(E log E).
-
-
-MST BIAS FEATURE
-----------------
-Your requirement: "bias MST toward close NNs ab initio"
-
-The idea: For visualization, we WANT close points to be connected.
-But MST purely minimizes total weight, which might skip some
-"obvious" connections.
-
-Solution: Modify edge weights before MST:
-    modified_weight = weight * (1 + bias_factor * rank / k)
-
-Where rank = how close this neighbor is (0=closest, k-1=furthest).
-This makes the MST prefer closer neighbors even if it costs more globally.
-
-
-DESIGN NOTE: No inheritance here
---------------------------------
-MSTBuilder is a simple class with one job. No need for ABC/interface.
-If you later want multiple MST algorithms, THEN add abstraction.
-
-"Make it work, make it right, make it fast" - in that order.
-Don't over-engineer upfront.
 """
 
 import numpy as np
@@ -45,6 +15,96 @@ from scipy.sparse.csgraph import minimum_spanning_tree  # type: ignore[import-un
 
 from tmap.graph.types import Tree
 from tmap.index.types import KNNGraph
+
+try:
+    from numba import njit
+
+    _HAS_NUMBA = True
+except ImportError:  # pragma: no cover - optional dependency
+    njit = None
+    _HAS_NUMBA = False
+
+
+if _HAS_NUMBA:
+    @njit(cache=True)
+    def _reduce_sorted_min_numba(
+        keys: NDArray[np.int64],
+        u: NDArray[np.int32],
+        v: NDArray[np.int32],
+        w: NDArray[np.float32],
+    ) -> tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
+        """Reduce sorted undirected edges to minimum weight per unique key."""
+        n = keys.shape[0]
+        if n == 0:
+            return (
+                np.empty(0, dtype=np.int32),
+                np.empty(0, dtype=np.int32),
+                np.empty(0, dtype=np.float32),
+            )
+
+        out_u = np.empty(n, dtype=np.int32)
+        out_v = np.empty(n, dtype=np.int32)
+        out_w = np.empty(n, dtype=np.float32)
+
+        cur_key = keys[0]
+        cur_u = u[0]
+        cur_v = v[0]
+        cur_w = w[0]
+        m = 0
+
+        for i in range(1, n):
+            if keys[i] != cur_key:
+                out_u[m] = cur_u
+                out_v[m] = cur_v
+                out_w[m] = cur_w
+                m += 1
+
+                cur_key = keys[i]
+                cur_u = u[i]
+                cur_v = v[i]
+                cur_w = w[i]
+            elif w[i] < cur_w:
+                cur_w = w[i]
+
+        out_u[m] = cur_u
+        out_v[m] = cur_v
+        out_w[m] = cur_w
+        m += 1
+
+        return out_u[:m], out_v[:m], out_w[:m]
+
+
+def _reduce_sorted_min_numpy(
+    keys: NDArray[np.int64],
+    u: NDArray[np.int32],
+    v: NDArray[np.int32],
+    w: NDArray[np.float32],
+) -> tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
+    """NumPy fallback for min-reduction over sorted undirected edge keys."""
+    if keys.size == 0:
+        return (
+            np.empty(0, dtype=np.int32),
+            np.empty(0, dtype=np.int32),
+            np.empty(0, dtype=np.float32),
+        )
+
+    starts = np.concatenate(([0], np.flatnonzero(np.diff(keys)) + 1))
+    w_min = np.minimum.reduceat(w, starts).astype(np.float32, copy=False)
+    u_min = u[starts]
+    v_min = v[starts]
+    return u_min, v_min, w_min
+
+
+def _reduce_sorted_min(
+    keys: NDArray[np.int64],
+    u: NDArray[np.int32],
+    v: NDArray[np.int32],
+    w: NDArray[np.float32],
+) -> tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
+    """Select the minimum edge weight for each sorted undirected edge key."""
+    if _HAS_NUMBA:
+        return _reduce_sorted_min_numba(keys, u, v, w)
+    return _reduce_sorted_min_numpy(keys, u, v, w)
 
 
 class MSTBuilder:
@@ -79,17 +139,14 @@ class MSTBuilder:
         Build MST from k-NN graph.
 
         Steps:
-        1. Convert k-NN to sparse adjacency matrix
-        2. Apply bias to edge weights (if enabled)
+        1. Convert directed k-NN to undirected sparse adjacency matrix
+           using union-min symmetrization (preserves one-way neighbors)
+        2. Apply optional rank bias directly while building adjacency
         3. Run scipy's MST algorithm
         4. Extract edges and build Tree object
         """
-        # Step 1: Build sparse adjacency matrix
+        # Step 1-2: Build sparse adjacency matrix with optional bias
         adj = self._knn_to_sparse(knn)
-
-        # Step 2: Apply neighbor rank bias
-        if self.bias_factor > 0:
-            adj = self._apply_bias(adj, knn)
 
         # Step 3: Compute MST using scipy
         # minimum_spanning_tree returns a sparse matrix with MST edges
@@ -112,63 +169,53 @@ class MSTBuilder:
         """
         Convert KNNGraph to scipy sparse matrix.
 
-        k-NN is directional (i->neighbors[i]), but we want undirected.
-        We symmetrize by taking minimum of (i,j) and (j,i) weights.
+        k-NN is directional (i->neighbors[i]), but MST needs undirected edges.
+        We build an undirected edge set by union of directed edges and keep
+        the minimum observed weight per undirected pair.
+
+        This avoids dropping one-way neighbors (a common source of fragmented
+        forests when using strict mutual-kNN intersection).
         """
         n = knn.n_nodes
         k = knn.k
 
-        # Build COO format arrays
-        rows = np.repeat(np.arange(n), k)
-        cols = knn.indices.ravel()
-        data = knn.distances.ravel()
+        # Build directed COO arrays from k-NN table.
+        rows = np.repeat(np.arange(n, dtype=np.int32), k)
+        cols = np.asarray(knn.indices.ravel(), dtype=np.int32)
+        weights = np.asarray(knn.distances.ravel(), dtype=np.float32)
 
-        # Remove self-loops and invalid entries (-1)
-        valid = (cols >= 0) & (cols != rows)
+        # Remove invalid nodes and self-loops.
+        valid = (cols >= 0) & (cols < n) & (cols != rows) & np.isfinite(weights)
+        if not np.any(valid):
+            return csr_matrix((n, n), dtype=np.float32)
+
         rows = rows[valid]
         cols = cols[valid]
-        data = data[valid]
+        weights = weights[valid]
 
-        # Create sparse matrix
-        adj = csr_matrix((data, (rows, cols)), shape=(n, n))
+        # Apply rank bias directly on directed edges before undirected reduction.
+        if self.bias_factor > 0:
+            ranks = np.tile(np.arange(k, dtype=np.float32), n)[valid]
+            weights = weights * (1.0 + self.bias_factor * (ranks / float(k)))
 
-        # Symmetrize: adj = min(adj, adj.T)
-        # For undirected graph, both directions should have same weight
-        adj_t = adj.T
-        adj = adj.minimum(adj_t)
+        # Canonicalize directed edges (i, j) and (j, i) to the same key.
+        u = np.minimum(rows, cols).astype(np.int32, copy=False)
+        v = np.maximum(rows, cols).astype(np.int32, copy=False)
+        keys = u.astype(np.int64) * np.int64(n) + v.astype(np.int64)
 
-        return adj
+        # Group by key and keep minimum weight per undirected pair.
+        order = np.argsort(keys, kind="mergesort")
+        keys_sorted = keys[order]
+        u_sorted = u[order]
+        v_sorted = v[order]
+        w_sorted = weights[order]
+        u_min, v_min, w_min = _reduce_sorted_min(keys_sorted, u_sorted, v_sorted, w_sorted)
 
-    def _apply_bias(self, adj: csr_matrix, knn: KNNGraph) -> csr_matrix:
-        """
-        Apply neighbor rank bias to edge weights.
-
-        Closer neighbors (lower rank) get slightly lower weights,
-        making MST prefer them even if it's not globally optimal.
-        """
-        n = knn.n_nodes
-        k = knn.k
-
-        # Create rank matrix: rank[i,j] = rank of j among i's neighbors
-        rows = np.repeat(np.arange(n), k)
-        cols = knn.indices.ravel()
-        ranks = np.tile(np.arange(k), n)  # 0, 1, 2, ..., k-1 repeated
-
-        valid = (cols >= 0) & (cols != rows)
-        rows = rows[valid]
-        cols = cols[valid]
-        ranks = ranks[valid]
-
-        # Bias factor: multiply weight by (1 + bias * rank/k)
-        # Rank 0 -> multiply by 1.0 (no change)
-        # Rank k-1 -> multiply by (1 + bias)
-        bias_multiplier = 1.0 + self.bias_factor * (ranks / k)
-
-        # Apply to adjacency matrix
-        adj = adj.copy()
-        for i, (r, c, mult) in enumerate(zip(rows, cols, bias_multiplier)):
-            if adj[r, c] > 0:
-                adj[r, c] *= mult
+        # Build symmetric sparse matrix for undirected MST.
+        rows_sym = np.concatenate((u_min, v_min))
+        cols_sym = np.concatenate((v_min, u_min))
+        data_sym = np.concatenate((w_min, w_min)).astype(np.float32, copy=False)
+        adj = csr_matrix((data_sym, (rows_sym, cols_sym)), shape=(n, n), dtype=np.float32)
 
         return adj
 

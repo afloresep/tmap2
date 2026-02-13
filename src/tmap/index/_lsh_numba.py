@@ -442,8 +442,8 @@ if NUMBA_AVAILABLE:
         Query LSH forest for a single signature.
 
         Searches all bands and collects unique candidates up to max_results.
-        Uses the LSH Forest algorithm: start with longest prefix match,
-        progressively relax until enough candidates found.
+        Uses exact band-hash matching — candidate recall depends on band width
+        (k = d/l) and data similarity.
 
         Args:
             query_bands: (l,) array of hash values for query
