@@ -27,7 +27,7 @@ def _clustered_binary_data(
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
 def test_fit_transform_returns_embedding_shape_and_dtype() -> None:
     data = _clustered_binary_data()
-    model = TMAP(n_neighbors=5, n_permutations=64, l=8, seed=123)
+    model = TMAP(n_neighbors=5, n_permutations=64, seed=123)
 
     coords = model.fit_transform(data)
 
@@ -39,8 +39,8 @@ def test_fit_transform_returns_embedding_shape_and_dtype() -> None:
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
 def test_list_and_array_inputs_produce_same_result() -> None:
     data = _clustered_binary_data(seed=123)
-    model_array = TMAP(n_neighbors=5, n_permutations=64, l=8, seed=7).fit(data)
-    model_list = TMAP(n_neighbors=5, n_permutations=64, l=8, seed=7).fit(data.tolist())
+    model_array = TMAP(n_neighbors=5, n_permutations=64, seed=7).fit(data)
+    model_list = TMAP(n_neighbors=5, n_permutations=64, seed=7).fit(data.tolist())
 
     np.testing.assert_array_equal(model_array.graph_.indices, model_list.graph_.indices)
     np.testing.assert_allclose(model_array.graph_.distances, model_list.graph_.distances)
@@ -95,16 +95,16 @@ def test_dense_metric_not_implemented() -> None:
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
-def test_graph_layout_produces_different_embedding() -> None:
+def test_graph_layout_builds_valid_embedding_and_tree() -> None:
     data = _clustered_binary_data()
-    model_tree = TMAP(n_neighbors=5, n_permutations=64, l=8, seed=1, layout="tree").fit(data)
-    model_graph = TMAP(n_neighbors=5, n_permutations=64, l=8, seed=1, layout="graph").fit(data)
+    model_tree = TMAP(n_neighbors=5, n_permutations=64, seed=1, layout="tree").fit(data)
+    model_graph = TMAP(n_neighbors=5, n_permutations=64, seed=1, layout="graph").fit(data)
 
     # Same KNN graph and MST
     np.testing.assert_array_equal(model_tree.graph_.indices, model_graph.graph_.indices)
     np.testing.assert_array_equal(model_tree.tree_.edges, model_graph.tree_.edges)
 
-    # Different coordinates (different layout input)
+    # Graph mode should produce a different embedding from tree mode.
     assert model_tree.embedding_.shape == model_graph.embedding_.shape
     assert not np.allclose(model_tree.embedding_, model_graph.embedding_)
 
@@ -125,3 +125,9 @@ def test_graph_layout_with_precomputed_knn() -> None:
 def test_invalid_layout_raises() -> None:
     with pytest.raises(ValueError, match="Unsupported layout"):
         TMAP(layout="invalid")
+
+
+@pytest.mark.parametrize("kw", [{"l": 8}, {"lsh_num_trees": 8}])
+def test_legacy_lsh_keywords_raise_type_error(kw: dict[str, int]) -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        TMAP(**kw)

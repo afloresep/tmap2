@@ -4,6 +4,10 @@
 >
 > This is a modernized reimplementation of the original TMAP library. Core features are working, but the API may change before v1.0.
 > Production users should continue using the [original TMAP](https://github.com/reymond-group/tmap) until this project reaches stability.
+>
+> **Status (2026-02-14):**
+> - `layout="tree"` is the supported layout mode.
+> - `layout="graph"` is alpha and not supported for production use.
 
 **TMAP** (Tree-MAP) creates beautiful, interactive visualizations of high-dimensional data by organizing similar items into tree structures. Perfect for chemical space, embeddings, or any high-dimensional dataset.
 
@@ -21,7 +25,7 @@ Your Data → MinHash → LSHForest → k-NN Graph → MST → OGDF Layout → I
 - ✅ `MinHash` / `WeightedMinHash` encoding (via datasketch)
 - ✅ `LSHForest` for fast approximate k-NN search
 - ✅ MST (Minimum Spanning Tree) construction with bias control
-- ✅ OGDF-based graph layout (FastMultipoleEmbedder + Multilevel Mixer)
+- ✅ OGDF-based tree layout (FastMultipoleEmbedder + Multilevel Mixer)
 - ✅ Interactive HTML visualizations with WebGL rendering
 
 **Features**
@@ -40,6 +44,12 @@ Your Data → MinHash → LSHForest → k-NN Graph → MST → OGDF Layout → I
 - 🚧 Additional layout algorithms
 - 🚧 Adding new points to existing TMAPs
 - 🚧 Adding edges to TMAPs
+
+## Alpha Features
+
+- `TMAP(layout="graph")` is currently alpha.
+- Known behavior includes crashes or hangs on some larger datasets/environments.
+- Use `layout="tree"` for supported workflows.
 
 ## 📦 Installation
 
@@ -182,6 +192,7 @@ Comprehensive guides are available in the [`docs/`](docs/) directory:
 | [Graph Guide](docs/graph_guide.md) | MST construction, tree traversal, bias factor tuning |
 | [Layout Guide](docs/layout_guide.md) | OGDF layout configuration, parameter tuning, determinism |
 | [Visualization Guide](docs/visualization_guide.md) | Creating interactive visualizations with TmapViz |
+| [Incremental Workflow Plan](docs/incremental_workflow_plan.md) | Concrete v1 plan for `transform(new_X)` and add-points workflows |
 | [API Reference](docs/api_reference.md) | Complete API documentation |
 
 ## 🧪 Development

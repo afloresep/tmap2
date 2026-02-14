@@ -6,20 +6,24 @@ from typing import TYPE_CHECKING, Any, Self
 import numpy as np
 from numpy.typing import NDArray
 
-from tmap.graph.mst import MSTBuilder
 from tmap.graph.types import Tree
 from tmap.index.encoders.minhash import MinHash
 from tmap.index.lsh_forest import LSHForest
 from tmap.index.types import KNNGraph
 from tmap.layout._ogdf import (
     LayoutConfig,
+    layout_from_edge_list,
     layout_from_knn_graph,
-    layout_from_tree,
     require_ogdf,
 )
 
 if TYPE_CHECKING:
     from tmap.visualization import TmapViz
+
+# Experimental graph-mode sparsification defaults.
+# Keep these internal until graph mode is fully stabilized.
+_GRAPH_LAYOUT_REQUIRE_MUTUAL_DEFAULT = True
+_GRAPH_LAYOUT_MAX_DEGREE_DEFAULT = 8
 
 
 class TMAP:
@@ -34,15 +38,13 @@ class TMAP:
       points can be traced through the tree structure. Best for exploring
       local neighborhoods and relationships between specific data points.
 
-    - ``layout='graph'``: Uses the full k-NN graph for force-directed layout
-      without reducing to a tree first. Dense regions with many mutual
-      neighbors are pulled together, producing cluster-like groupings similar
-      to UMAP or t-SNE. The MST is still computed and accessible via
-      ``tree_`` for programmatic exploration, but point positions reflect
-      global density structure rather than tree topology.
+    - ``layout='graph'``: Experimental overview mode for cluster inspection.
+      It layouts a sparsified k-NN graph using reciprocal neighbor filtering
+      plus per-node top-edge capping (defaults: ``mutual=True``,
+      ``max_degree=8``) to improve runtime and quality versus dense full-graph
+      layout.
 
-    Both modes compute the same k-NN graph and MST internally. The only
-    difference is which graph the layout algorithm operates on.
+    Both modes compute the same k-NN graph and expose an MST via ``tree_``.
 
     Parameters
     ----------
@@ -57,7 +59,7 @@ class TMAP:
           small datasets (< ~50k points due to O(n^2) memory). For larger
           datasets, compute k-NN externally and pass via ``knn_graph=``.
         - ``'cosine'``, ``'euclidean'``: Not yet implemented.
-    n_permutations : int, default=128
+    n_permutations : int, default=512
         Number of MinHash permutations. Only used with ``metric='jaccard'``.
     kc : int, default=10
         Candidate multiplier for LSH queries. The forest retrieves
@@ -66,11 +68,12 @@ class TMAP:
     seed : int, default=1
         Random seed for reproducibility.
     mst_bias : float, default=0.0
-        Bias factor for MST construction. Not yet implemented.
+        Reserved for low-level MST tuning. The high-level ``TMAP`` estimator
+        currently ignores this value.
     layout : str, default='tree'
-        Layout mode. ``'tree'`` layouts the MST for detailed path
-        exploration. ``'graph'`` layouts the full k-NN graph for a
-        cluster-oriented overview.
+        Layout mode. ``'tree'`` uses the stable OGDF MST path for detailed
+        path exploration. ``'graph'`` is experimental and uses a sparsified
+        non-MST graph layout for quick cluster-oriented overview.
     layout_iterations : int, default=1000
         Number of iterations for the force-directed layout algorithm.
     layout_config : LayoutConfig or None, default=None
@@ -112,34 +115,16 @@ class TMAP:
 
     def __init__(
         self,
-        n_neighbors: int = 10,
+        n_neighbors: int = 20,
         metric: str = "jaccard",
-        n_permutations: int = 128,
+        n_permutations: int = 512,
         kc: int = 10,
         seed: int = 1,
         mst_bias: float = 0.0,
         layout: str = "tree",
         layout_iterations: int = 1000,
         layout_config: Any | None = None,
-        **kwargs: Any,
     ) -> None:
-        # Backward compatibility with early prototype keywords.
-        legacy_num_trees = kwargs.pop("l", None)
-        legacy_num_trees_2 = kwargs.pop("lsh_num_trees", None)
-        if kwargs:
-            unexpected = ", ".join(sorted(kwargs))
-            raise TypeError(f"Unexpected keyword argument(s): {unexpected}")
-        if legacy_num_trees is not None or legacy_num_trees_2 is not None:
-            import warnings
-
-            warnings.warn(
-                "The 'l' and 'lsh_num_trees' parameters are deprecated in TMAP. "
-                "The number of LSH bands is now auto-selected from n_permutations. "
-                "This parameter will be ignored.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
         if n_neighbors <= 0:
             raise ValueError(f"n_neighbors must be > 0, got {n_neighbors}")
         if n_permutations <= 0:
@@ -175,6 +160,10 @@ class TMAP:
         self._tree: Tree | None = None
         self._graph: KNNGraph | None = None
         self._lsh_forest: LSHForest | None = None
+
+        # Graph mode defaults are module-level constants by design.
+        self._graph_mode_mutual = _GRAPH_LAYOUT_REQUIRE_MUTUAL_DEFAULT
+        self._graph_mode_max_degree = _GRAPH_LAYOUT_MAX_DEGREE_DEFAULT
 
     def fit(
         self,
@@ -220,20 +209,27 @@ class TMAP:
             raise ValueError(f"Unsupported metric {self.metric!r}")
 
         self._graph = knn
-        self._tree = MSTBuilder(bias_factor=self.mst_bias).build(knn)
 
         require_ogdf()
         config = self._make_layout_config()
 
         if self.layout == "tree":
-            x, y = layout_from_tree(self._tree, config=config)
+            x, y, s, t = layout_from_knn_graph(knn, config=config, create_mst=True)
+            self._tree = self._tree_from_ogdf_edges(knn, s, t)
         else:
-            # Layout the full k-NN graph; points in dense regions cluster.
-            x, y, _, _ = layout_from_knn_graph(
-                self._graph,
+            edges = self._graph_edges_from_knn(
+                knn,
+                max_degree=min(self._graph_mode_max_degree, knn.k),
+                mutual=self._graph_mode_mutual,
+            )
+            x, y, _, _ = layout_from_edge_list(
+                knn.n_nodes,
+                edges,
                 config=config,
                 create_mst=False,
             )
+            # Defer MST extraction until tree_ is requested.
+            self._tree = None
 
         self._embedding = np.column_stack([x, y]).astype(np.float32, copy=False)
         return self
@@ -265,7 +261,9 @@ class TMAP:
     def tree_(self) -> Tree:
         """Minimum spanning tree produced during fit."""
         if self._tree is None:
-            raise RuntimeError("Estimator is not fitted. Call fit() first.")
+            if self._graph is None:
+                raise RuntimeError("Estimator is not fitted. Call fit() first.")
+            self._tree = self._extract_tree_from_knn(self._graph)
         return self._tree
 
     @property
@@ -381,6 +379,138 @@ class TMAP:
             _display_scatter(scatter, controls=controls)
 
         return scatter
+
+    def _tree_from_ogdf_edges(
+        self,
+        knn: KNNGraph,
+        s: NDArray[np.uint32],
+        t: NDArray[np.uint32],
+    ) -> Tree:
+        """Build a Tree object from OGDF edge topology output."""
+        edge_count = len(s)
+        if edge_count == 0:
+            return Tree(
+                n_nodes=knn.n_nodes,
+                edges=np.empty((0, 2), dtype=np.int32),
+                weights=np.empty(0, dtype=np.float32),
+                root=0,
+            )
+
+        edges = np.column_stack(
+            [
+                s.astype(np.int32, copy=False),
+                t.astype(np.int32, copy=False),
+            ]
+        )
+
+        # Recover edge weights from the k-NN table where possible.
+        edge_weights: dict[tuple[int, int], float] = {}
+        for i in range(knn.n_nodes):
+            for j_idx in range(knn.k):
+                j = int(knn.indices[i, j_idx])
+                if j < 0 or j == i:
+                    continue
+                w = float(knn.distances[i, j_idx])
+                if not np.isfinite(w):
+                    continue
+                key = (min(i, j), max(i, j))
+                prev = edge_weights.get(key)
+                if prev is None or w < prev:
+                    edge_weights[key] = w
+
+        weights = np.ones(edge_count, dtype=np.float32)
+        for idx, (src, tgt) in enumerate(edges):
+            key = (min(int(src), int(tgt)), max(int(src), int(tgt)))
+            w = edge_weights.get(key)
+            if w is not None:
+                weights[idx] = np.float32(w)
+
+        degree = np.zeros(knn.n_nodes, dtype=np.int32)
+        np.add.at(degree, edges[:, 0], 1)
+        np.add.at(degree, edges[:, 1], 1)
+        root = int(np.argmax(degree))
+
+        return Tree(
+            n_nodes=knn.n_nodes,
+            edges=edges,
+            weights=weights,
+            root=root,
+        )
+
+    def _extract_tree_from_knn(self, knn: KNNGraph) -> Tree:
+        """Extract MST topology via OGDF and convert to Tree."""
+        config = self._make_tree_extraction_config()
+        _, _, s, t = layout_from_knn_graph(knn, config=config, create_mst=True)
+        return self._tree_from_ogdf_edges(knn, s, t)
+
+    def _make_tree_extraction_config(self) -> Any | None:
+        """Create a lightweight layout config used only for MST extraction."""
+        if LayoutConfig is None:
+            return None
+        config = LayoutConfig()
+        if hasattr(config, "fme_iterations"):
+            config.fme_iterations = 1
+        if hasattr(config, "deterministic"):
+            config.deterministic = True
+        if hasattr(config, "seed"):
+            config.seed = self.seed
+        return config
+
+    def _graph_edges_from_knn(
+        self,
+        knn: KNNGraph,
+        *,
+        max_degree: int,
+        mutual: bool,
+    ) -> list[tuple[int, int, float]]:
+        """Build a sparsified undirected edge list from a k-NN graph.
+
+        Parameters
+        ----------
+        knn : KNNGraph
+            Input k-NN graph.
+        max_degree : int
+            Keep at most this many ranked neighbors per node when proposing
+            edges. Lower values reduce density and runtime.
+        mutual : bool
+            If True, keep an edge only when the neighbor relation is reciprocal
+            (i in N(j) and j in N(i)).
+        """
+        n = knn.n_nodes
+        k = knn.k
+        if max_degree < 1:
+            raise ValueError(f"max_degree must be >= 1, got {max_degree}")
+
+        neighbor_sets = [set() for _ in range(n)]
+        for i in range(n):
+            for j_idx in range(k):
+                j = int(knn.indices[i, j_idx])
+                if j < 0 or j == i:
+                    continue
+                neighbor_sets[i].add(j)
+
+        edges: list[tuple[int, int, float]] = []
+        seen: set[tuple[int, int]] = set()
+
+        for i in range(n):
+            degree_limit = min(max_degree, k)
+            for j_idx in range(degree_limit):
+                j = int(knn.indices[i, j_idx])
+                if j < 0 or j == i:
+                    continue
+                w = float(knn.distances[i, j_idx])
+                if not np.isfinite(w):
+                    continue
+                if mutual and i not in neighbor_sets[j]:
+                    continue
+                a, b = (i, j) if i < j else (j, i)
+                key = (a, b)
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append((i, j, w))
+
+        return edges
 
     def _make_layout_config(self) -> Any | None:
         if self.layout_config is not None:

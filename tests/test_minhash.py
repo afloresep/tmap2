@@ -431,7 +431,7 @@ class TestWeightedMinHashEncodeErrors:
         wmh = WeightedMinHash(dim=3, num_perm=32)
         negative_data = np.array([[1.0, -2.0, 3.0]])
 
-        with pytest.raises(ValueError, match="non-negative"):
+        with pytest.raises(ValueError, match="positive"):
             wmh.encode(negative_data)
 
     def test_zero_values_raises(self):
@@ -439,7 +439,7 @@ class TestWeightedMinHashEncodeErrors:
         wmh = WeightedMinHash(dim=3, num_perm=32)
         zero_data = np.array([[1.0, 0.0, 3.0]])
 
-        with pytest.raises(ValueError, match="non-negative"):
+        with pytest.raises(ValueError, match="positive"):
             wmh.encode(zero_data)
 
 
@@ -895,7 +895,7 @@ class TestWeightedMinHashEdgeCases:
         wmh = WeightedMinHash(dim=3, num_perm=32)
 
         # Zero is not allowed
-        with pytest.raises(ValueError, match="non-negative"):
+        with pytest.raises(ValueError, match="positive"):
             wmh.encode(np.array([[1.0, 0.0, 1.0]]))
 
         # Small positive is OK
