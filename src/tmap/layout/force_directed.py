@@ -55,7 +55,7 @@ class ForceDirectedLayout(Layout):
     Example
     -------
     >>> from tmap.layout import ForceDirectedLayout
-    >>> from tmap.graph.mst import MSTBuilder
+    >>> from tmap.graph import MSTBuilder
     >>>
     >>> # Build MST from k-NN graph
     >>> tree = MSTBuilder().build(knn_graph)

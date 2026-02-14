@@ -493,7 +493,7 @@ class WeightedMinHash(Encoder):
         Encode weighted vectors into MinHash signatures.
 
         Args:
-            data: (n_samples, n_features) array of non-negative weights
+            data: (n_samples, n_features) array of positive weights (> 0)
 
         Returns:
             signatures: (n_samples, num_perm, 2) uint64 array
@@ -516,7 +516,7 @@ class WeightedMinHash(Encoder):
         Create a weighted MinHash vector from a float array.
 
         Args:
-            vec: 1D array of non-negative float values
+            vec: 1D array of positive float values (> 0)
 
         Returns:
             2D array of shape (num_perm, 2) containing the weighted MinHash signature

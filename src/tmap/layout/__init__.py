@@ -22,7 +22,7 @@ Quick Start (recommended - matches original TMAP API)
 Alternative: Step-by-step with ForceDirectedLayout
 --------------------------------------------------
 >>> from tmap.layout import ForceDirectedLayout
->>> from tmap.graph.mst import MSTBuilder
+>>> from tmap.graph import MSTBuilder
 >>>
 >>> tree = MSTBuilder().build(knn_graph)
 >>> layout = ForceDirectedLayout(seed=42)
