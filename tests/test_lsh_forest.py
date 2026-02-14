@@ -20,7 +20,6 @@ import pytest
 from tmap.index import LSHForest
 from tmap.index.types import KNNGraph
 
-
 # =============================================================================
 # Fixtures
 # =============================================================================
@@ -69,7 +68,7 @@ class TestLSHForestInit:
         """Test default parameter values."""
         lsh = LSHForest()
         assert lsh.d == 128
-        assert lsh.l == 8
+        assert lsh.l == 64  # default: d // 2 = 128 // 2
         assert lsh.size == 0
         assert not lsh.is_clean
 
@@ -428,9 +427,7 @@ class TestLSHForestPersistence:
             assert loaded.is_clean == indexed_forest.is_clean
 
             # Check signatures preserved
-            np.testing.assert_array_equal(
-                loaded.get_hash(0), indexed_forest.get_hash(0)
-            )
+            np.testing.assert_array_equal(loaded.get_hash(0), indexed_forest.get_hash(0))
 
             # Check queries work
             result_orig = indexed_forest.query(random_signatures[0], k=5)
@@ -799,7 +796,7 @@ class TestLSHForestWeightedPersistence:
             loaded = LSHForest.load(str(path))
 
             # Check configuration preserved
-            assert loaded._weighted == True
+            assert loaded._weighted
             assert loaded.d == 128
             assert loaded.l == 8
             assert loaded.size == 50

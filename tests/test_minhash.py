@@ -48,7 +48,7 @@ class TestMinHashEncode:
     def test_encode_list_of_sets(self):
         mh = MinHash(num_perm=32)
         data = [{1, 2, 3}, {2, 3, 4}]
-        sigs = mh.encode(data) # type: ignore
+        sigs = mh.encode(data)  # type: ignore
         assert sigs.shape == (2, 32)
         assert sigs.dtype == np.uint64
 
@@ -56,13 +56,13 @@ class TestMinHashEncode:
         """encode() should handle list of lists by converting to sets."""
         mh = MinHash(num_perm=32)
         data = [[1, 2, 3], [2, 3, 4]]
-        sigs = mh.encode(data) #type: ignore
+        sigs = mh.encode(data)  # type: ignore
         assert sigs.shape == (2, 32)
 
     def test_encode_string_sets(self):
         mh = MinHash(num_perm=32)
         data = [{"hello", "world"}, {"hello", "there"}]
-        sigs = mh.encode(data) #type: ignore
+        sigs = mh.encode(data)  # type: ignore
         assert sigs.shape == (2, 32)
 
     def test_encode_empty_set(self):
@@ -85,8 +85,8 @@ class TestMinHashDeterminism:
         mh2 = MinHash(num_perm=32, seed=42)
         data = [{1, 2, 3, 4, 5}]
 
-        sig1 = mh1.encode(data) #type:ignore
-        sig2 = mh2.encode(data) #type:ignore
+        sig1 = mh1.encode(data)  # type:ignore
+        sig2 = mh2.encode(data)  # type:ignore
 
         np.testing.assert_array_equal(sig1, sig2)
 
@@ -95,8 +95,8 @@ class TestMinHashDeterminism:
         mh2 = MinHash(num_perm=32, seed=2)
         data = [{1, 2, 3, 4, 5}]
 
-        sig1 = mh1.encode(data) # type: ignore
-        sig2 = mh2.encode(data) # type: ignore
+        sig1 = mh1.encode(data)  # type: ignore
+        sig2 = mh2.encode(data)  # type: ignore
 
         assert not np.array_equal(sig1, sig2)
 
@@ -862,10 +862,10 @@ class TestMinHashBatchMethods:
         """
         mh = MinHash(num_perm=32, seed=42)
         indices_list = [
-            [0],                    # 1 element
-            [0, 1, 2, 3, 4, 5],     # 6 elements
-            [],                     # 0 elements
-            [100],                  # 1 element, large index
+            [0],  # 1 element
+            [0, 1, 2, 3, 4, 5],  # 6 elements
+            [],  # 0 elements
+            [100],  # 1 element, large index
         ]
         sigs = mh.batch_from_sparse_binary_array(indices_list)
         assert sigs.shape == (4, 32)
@@ -919,9 +919,11 @@ class TestWeightedMinHashEdgeCases:
         Covers: Output shape is (n_samples, num_perm, 2).
         """
         wmh = WeightedMinHash(dim=5, num_perm=16)
-        data = np.array([
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            [5.0, 4.0, 3.0, 2.0, 1.0],
-        ])
+        data = np.array(
+            [
+                [1.0, 2.0, 3.0, 4.0, 5.0],
+                [5.0, 4.0, 3.0, 2.0, 1.0],
+            ]
+        )
         sigs = wmh.batch_from_weight_array(data)
         assert sigs.shape == (2, 16, 2)

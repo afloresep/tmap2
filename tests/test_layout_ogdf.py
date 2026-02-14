@@ -1,6 +1,7 @@
 """Tests for OGDF layout extension."""
 
 import math
+
 import pytest
 
 from tmap.layout import OGDF_AVAILABLE
@@ -42,9 +43,7 @@ def test_coordinates_normalized_range():
     x, y, s, t = layout_from_edge_list(4, edges, create_mst=False)
     all_vals = list(x) + list(y)
     assert all(-0.50001 <= v <= 0.50001 for v in all_vals)
-    assert any(
-        abs(v - (-0.5)) < 1e-3 or abs(v - 0.5) < 1e-3 for v in all_vals
-    )
+    assert any(abs(v - (-0.5)) < 1e-3 or abs(v - 0.5) < 1e-3 for v in all_vals)
 
 
 def test_deterministic_mode_reproducible():

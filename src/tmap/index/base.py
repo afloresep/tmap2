@@ -1,35 +1,17 @@
-## Provisional, not definitive base method
-
+import pickle
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Self
-import pickle
 
 import numpy as np
 from numpy.typing import NDArray
 
-from tmap.index.types import KNNGraph, EdgeList
+from tmap.index.types import EdgeList, KNNGraph
 
 
 class Index(ABC):
     """
     Abstract base class for nearest-neighbor search.
-
-    DESIGN DECISIONS:
-    1. Two build paths: from vectors OR from pre-computed edges
-       - from_vectors(): When you have raw data (embeddings, fingerprints)
-       - from_edges(): When you already have distances (generic input!)
-
-    2. Separate build() and query() - build once, query many times
-
-    3. State tracking (_is_built) - fail fast if used wrong
-
-    YOUR IMPLEMENTATION CHECKLIST:
-    - [ ] Override _build_from_vectors() if your index supports raw vectors
-    - [ ] Override _build_from_edges() if your index supports edge input
-    - [ ] Override _query_single() for single-point queries
-    - [ ] Override _query_batch() for efficient batch queries
-    - [ ] Override _save_implementation() and _load_implementation() for persistence
     """
 
     def __init__(self, seed: int | None = None) -> None:
@@ -38,10 +20,6 @@ class Index(ABC):
 
         Args:
             seed: Random seed for reproducibility. If None, non-deterministic.
-
-        WHY SEED IN BASE CLASS?
-        All NN algorithms have randomness (hashing, tree construction).
-        Putting seed here ensures ALL implementations support reproducibility.
         """
         self._seed = seed
         self._is_built = False
@@ -81,9 +59,6 @@ class Index(ABC):
     def build_from_edges(self, edges: EdgeList) -> Self:
         """
         Build index from pre-computed edges/distances.
-
-        THIS IS THE GENERIC ENTRY POINT.
-        Users can visualize ANYTHING if they provide edges.
 
         Args:
             edges: EdgeList with (source, target, distance) tuples
@@ -140,17 +115,9 @@ class Index(ABC):
         self._check_is_built()
         return self._query_single(point, k)
 
-    # =========================================================================
-    # PERSISTENCE - Save/load index to disk
-    # =========================================================================
-
     def save(self, path: str | Path) -> None:
         """
         Save index to disk.
-
-        WHY SEPARATE _save_implementation?
-        Base class handles common stuff (metadata, validation).
-        Subclass handles format-specific stuff (FAISS binary, Annoy trees).
         """
         self._check_is_built()
         path = Path(path)
@@ -173,9 +140,6 @@ class Index(ABC):
         """
         Load index from disk.
 
-        @classmethod means this receives the CLASS, not an instance.
-        Useful for "factory" methods that create instances.
-
         Usage:
             index = FaissIndex.load("my_index.faiss")
         """
@@ -189,10 +153,6 @@ class Index(ABC):
         instance._is_built = True
         return instance
 
-    # =========================================================================
-    # PROPERTIES - Computed attributes
-    # =========================================================================
-
     @property
     def is_built(self) -> bool:
         """Whether the index has been built and is ready for queries."""
@@ -202,10 +162,6 @@ class Index(ABC):
     def n_nodes(self) -> int:
         """Number of nodes/points in the index."""
         return self._n_nodes
-
-    # =========================================================================
-    # ABSTRACT METHODS - Subclasses MUST implement these
-    # =========================================================================
 
     @abstractmethod
     def _build_from_vectors(
@@ -244,10 +200,6 @@ class Index(ABC):
     def _load_implementation(self, path: Path) -> None:
         """Load index-specific data. Override this."""
         ...
-
-    # =========================================================================
-    # HELPER METHODS - Shared validation logic
-    # =========================================================================
 
     def _validate_vectors(self, vectors: NDArray[Any]) -> None:
         """Validate input vectors. Called before building."""

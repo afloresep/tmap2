@@ -7,19 +7,19 @@ with ModularMultilevelMixer, matching the original TMAP algorithm.
 
 from __future__ import annotations
 
-import numpy as np
+from typing import Any
 
 from tmap.graph.types import Tree
+from tmap.layout._ogdf import (
+    LayoutConfig,
+    Merger,
+    Placer,
+    ScalingType,
+    layout_from_tree,
+    require_ogdf,
+)
 from tmap.layout.base import Layout
 from tmap.layout.types import Coordinates
-from tmap.layout._ogdf import (
-    require_ogdf,
-    layout_from_tree,
-    LayoutConfig,
-    Placer,
-    Merger,
-    ScalingType,
-)
 
 
 class ForceDirectedLayout(Layout):
@@ -77,19 +77,20 @@ class ForceDirectedLayout(Layout):
         self,
         seed: int | None = None,
         max_iterations: int = 1000,
-        placer: Placer | None = None,
-        merger: Merger | None = None,
+        placer: Any | None = None,
+        merger: Any | None = None,
         node_size: float = 1.0 / 65.0,
         mmm_repeats: int = 1,
         sl_extra_scaling_steps: int = 2,
-        sl_scaling_type: ScalingType | None = None,
+        sl_scaling_type: Any | None = None,
         merger_factor: float = 2.0,
-        config: LayoutConfig | None = None,
+        config: Any | None = None,
     ) -> None:
         # Check OGDF availability early
         require_ogdf()
 
         super().__init__(seed=seed, max_iterations=max_iterations)
+        self._config: Any | None = None
 
         # If full config provided, use it directly
         if config is not None:
@@ -101,21 +102,27 @@ class ForceDirectedLayout(Layout):
             return
 
         # Store individual parameters
+        if Placer is None or Merger is None or ScalingType is None:
+            raise RuntimeError("OGDF enum types are unavailable")
+
         self._placer = placer if placer is not None else Placer.Barycenter
         self._merger = merger if merger is not None else Merger.LocalBiconnected
         self._node_size = node_size
         self._mmm_repeats = mmm_repeats
         self._sl_extra_scaling_steps = sl_extra_scaling_steps
-        self._sl_scaling_type = sl_scaling_type if sl_scaling_type is not None else ScalingType.RelativeToDrawing
+        self._sl_scaling_type = (
+            sl_scaling_type if sl_scaling_type is not None else ScalingType.RelativeToDrawing
+        )
         self._merger_factor = merger_factor
-        self._config = None  # Will be built in _make_config()
 
-    def _make_config(self) -> LayoutConfig:
+    def _make_config(self) -> Any:
         """Create OGDF LayoutConfig from our parameters."""
         # If a full config was provided, use it
         if self._config is not None:
             return self._config
 
+        if LayoutConfig is None:
+            raise RuntimeError("OGDF LayoutConfig is unavailable")
         config = LayoutConfig()
         config.fme_iterations = self.max_iterations
         config.placer = self._placer
@@ -164,7 +171,7 @@ class ForceDirectedLayout(Layout):
         2. Only optimize new nodes
         3. Run fewer iterations
 
-        This is a TODO for future optimization when adding new nodes
+        TODO(ISS-005): Implement true incremental layout instead of full recompute
         """
         # Simple approach: recompute everything
         # The existing layout provides a good starting point conceptually,

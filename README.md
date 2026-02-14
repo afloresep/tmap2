@@ -46,7 +46,7 @@ Your Data → MinHash → LSHForest → k-NN Graph → MST → OGDF Layout → I
 ### Requirements
 
 - Python **3.12+**
-- For layout functionality: OGDF library (automatically built during install)
+- A C++ compiler (for OGDF layout extension build)
 
 ### Quick Install
 
@@ -58,14 +58,28 @@ source .venv/bin/activate  # macOS/Linux
 
 # Install
 python -m pip install -U pip
+python -m pip install -e .
+
+# Optional: development tools
 python -m pip install -e ".[dev]"
 ```
 
 **Notes:**
 
 - The import name is `tmap`. If you need the original C++ `tmap` package, use a separate virtualenv to avoid conflicts.
-- Optional extras: `.[faiss]`, `.[annoy]`, `.[viz]`, or `.[all]` (see `pyproject.toml`)
-- OGDF will be built automatically if not found. Ensure you have `cmake`, `g++`, and `make` installed.
+- `pip install -e .` installs the full stack (OGDF layout + HTML visualization + notebook widget support).
+- OGDF is built from the bundled `extern/ogdf` submodule during install.
+- Optional extras: `.[faiss]`, `.[annoy]`, or `.[all]` (see `pyproject.toml`).
+
+### Core-Only Install (LSH + MinHash only)
+
+```bash
+# Skip OGDF build and skip full dependency set
+python -m pip install -e . --no-deps --config-settings=cmake.define.TMAP_BUILD_LAYOUT=OFF
+
+# Install only core runtime dependencies
+python -m pip install -r requirements-core.txt
+```
 
 ## 🚀 Quick Start
 

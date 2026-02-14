@@ -47,9 +47,7 @@ if NUMBA_AVAILABLE:
         return 1.0 - matches / d
 
     @numba.njit(cache=True)
-    def weighted_jaccard_distance(
-        sig_a: NDArray[np.uint64], sig_b: NDArray[np.uint64]
-    ) -> float:
+    def weighted_jaccard_distance(sig_a: NDArray[np.uint64], sig_b: NDArray[np.uint64]) -> float:
         """
         Compute weighted Jaccard distance between two weighted MinHash signatures.
 
@@ -444,8 +442,8 @@ if NUMBA_AVAILABLE:
         Query LSH forest for a single signature.
 
         Searches all bands and collects unique candidates up to max_results.
-        Uses the LSH Forest algorithm: start with longest prefix match,
-        progressively relax until enough candidates found.
+        Uses exact band-hash matching — candidate recall depends on band width
+        (k = d/l) and data similarity.
 
         Args:
             query_bands: (l,) array of hash values for query
@@ -581,9 +579,7 @@ else:
         """Compute Jaccard distance (fallback)."""
         return float(1.0 - np.mean(sig_a == sig_b))
 
-    def weighted_jaccard_distance(
-        sig_a: NDArray[np.uint64], sig_b: NDArray[np.uint64]
-    ) -> float:
+    def weighted_jaccard_distance(sig_a: NDArray[np.uint64], sig_b: NDArray[np.uint64]) -> float:
         """Compute weighted Jaccard distance (fallback)."""
         matches = np.all(sig_a == sig_b, axis=1)
         return float(1.0 - np.mean(matches))

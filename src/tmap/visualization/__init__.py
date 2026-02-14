@@ -7,11 +7,11 @@ TmapViz is the primary class for creating visualizations:
 
     from tmap.visualization import TmapViz
 
-    viz = TmapViz(title="My Data")
-    viz.set_layout(coords)
-    viz.add_column("label", labels, role="label")
-    viz.add_column("value", values, dtype="continuous")
-    viz.set_color("value", colormap="viridis")
+    viz = TmapViz()
+    viz.title = "My Data"
+    viz.set_points(x, y)
+    viz.add_label("label", labels)
+    viz.add_color_layout("value", values, categorical=False)
     viz.save("output.html")
 
 Features:
@@ -28,6 +28,20 @@ Available colormaps:
 - Diverging: coolwarm, RdYlBu
 - Categorical: tab10, tab20, Set1, Set2, Dark2, Paired
 """
+
+from typing import Any
+
 from tmap.visualization.tmapviz import BINARY_THRESHOLD, TmapViz
 
-__all__ = ["TmapViz", "BINARY_THRESHOLD"]
+__all__ = ["TmapViz", "BINARY_THRESHOLD", "to_jscatter"]
+
+
+def to_jscatter(*args: Any, **kwargs: Any) -> Any:
+    """Lazily import notebook visualization helper."""
+    from tmap.visualization.jupyter import to_jscatter as _to_jscatter
+
+    return _to_jscatter(*args, **kwargs)
+
+
+def __getattr__(name: str) -> Any:  # noqa: N807
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -14,19 +14,22 @@ Usage:
     coords = create_tmap_from_smiles(my_smiles_list, "output.html")
 """
 
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 
 # Check RDKit availability
 try:
     from rdkit import Chem
-    from rdkit.Chem import Descriptors, rdMolDescriptors, rdFingerprintGenerator
+    from rdkit.Chem import Descriptors, rdFingerprintGenerator, rdMolDescriptors
     RDKIT_AVAILABLE = True
 except ImportError:
     RDKIT_AVAILABLE = False
 
-from tmap import MinHash, LSHForest
-from tmap.layout import layout_from_lsh_forest, LayoutConfig, ScalingType
+from tmap import LSHForest, MinHash
+from tmap.layout import LayoutConfig, ScalingType, layout_from_lsh_forest
 from tmap.visualization import TmapViz
 
 
@@ -58,7 +61,8 @@ def smiles_to_fingerprints(
     valid_indices = []
     mols = []
 
-    for i, smi in tqdm(enumerate(smiles_list), desc='Generating Fingerprints', total=len(smiles_list)):
+    for i, smi in tqdm(enumerate(smiles_list),
+                       desc='Generating Fingerprints', total=len(smiles_list)):
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             fp = morgan_gen.GetFingerprintAsNumPy(mol)
@@ -179,9 +183,6 @@ def create_tmap_from_smiles(
     return x, y
 
 
-# Example SMILES - common drug-like molecules
-import pandas as pd
-from pathlib import Path
 
 # Get the directory where this script is located
 script_dir = Path(__file__).parent
@@ -221,7 +222,7 @@ if __name__ == "__main__":
         seed=42,
     )
 
-    print(f"\nDone! Open the HTML file in a browser to view the interactive visualization.")
+    print("\nDone! Open the HTML file in a browser to view the interactive visualization.")
     print("  - Pan: Click and drag")
     print("  - Zoom: Scroll wheel")
     print("  - Hover: See molecule structure and properties")

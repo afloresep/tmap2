@@ -15,23 +15,26 @@ API Compatibility:
     All public methods maintain backward compatibility with the original TMAP API.
 """
 
+import os
 from collections.abc import Collection, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import os
+from typing import Any, cast
 
-import datasketch.minhash as _datasketch_minhash
+import datasketch.minhash as _datasketch_minhash  # type: ignore[import-untyped]
 import numpy as np
-from datasketch.weighted_minhash import WeightedMinHashGenerator as _WeightedMinHashGenerator
+from datasketch.weighted_minhash import (  # type: ignore[import-untyped]
+    WeightedMinHashGenerator as _WeightedMinHashGenerator,
+)
 from numpy.typing import NDArray
 
-from .base import Encoder
 from ._minhash_numba import (
     NUMBA_AVAILABLE,
-    init_permutations,
-    minhash_batch_from_sparse,
-    minhash_batch_from_dense,
     binary_to_sparse,
+    init_permutations,
+    minhash_batch_from_dense,
+    minhash_batch_from_sparse,
 )
+from .base import Encoder
 
 __all__ = [
     "MinHash",
@@ -40,17 +43,17 @@ __all__ = [
 
 
 # Module-level helper functions for parallel processing (must be picklable)
-def _encode_single_set(args: tuple[set, int, int]) -> NDArray[np.uint64]:
+def _encode_single_set(args: tuple[set[Any], int, int]) -> NDArray[np.uint64]:
     """Encode a single set into a MinHash signature using datasketch."""
     s, num_perm, seed = args
     mh = _datasketch_minhash.MinHash(num_perm=num_perm, seed=seed)
     for item in s:
         mh.update(str(item).encode("utf-8"))
-    return mh.hashvalues
+    return np.asarray(mh.hashvalues, dtype=np.uint64)
 
 
 def _encode_weighted_chunk(
-    args: tuple[NDArray, int, int, int],
+    args: tuple[NDArray[np.float32], int, int, int],
 ) -> NDArray[np.uint64]:
     """Encode a chunk of weighted vectors (creates its own generator)."""
     data, dim, num_perm, seed = args
@@ -162,24 +165,30 @@ class MinHash(Encoder):
         if fill_rate < 0.3:
             # Sparse path: convert to CSR-like format
             indices_flat, offsets = binary_to_sparse(data)
-            return minhash_batch_from_sparse(
-                indices_flat,
-                offsets,
-                self._a,
-                self._b,
-                self._num_perm,
-                n_samples,
+            return cast(
+                NDArray[np.uint64],
+                minhash_batch_from_sparse(
+                    indices_flat,
+                    offsets,
+                    self._a,
+                    self._b,
+                    self._num_perm,
+                    n_samples,
+                ),
             )
         else:
             # Dense path: process directly
-            return minhash_batch_from_dense(
-                data,
-                self._a,
-                self._b,
-                self._num_perm,
+            return cast(
+                NDArray[np.uint64],
+                minhash_batch_from_dense(
+                    data,
+                    self._a,
+                    self._b,
+                    self._num_perm,
+                ),
             )
 
-    def _encode_sets_datasketch(self, sets: list[set]) -> NDArray[np.uint64]:
+    def _encode_sets_datasketch(self, sets: list[set[Any]]) -> NDArray[np.uint64]:
         """Encode sets using datasketch (for string data compatibility)."""
         signatures = np.zeros((len(sets), self._num_perm), dtype=np.uint64)
 
@@ -215,11 +224,11 @@ class MinHash(Encoder):
     # Alias for backward compatibility
     jaccard_distance = get_distance
 
-    def _binary_to_sets(self, vectors: NDArray) -> list[set[int]]:
+    def _binary_to_sets(self, vectors: NDArray[Any]) -> list[set[int]]:
         """Convert binary vectors to sets of 'on' indices."""
         return [set(np.where(row)[0]) for row in vectors]
 
-    def from_binary_array(self, arr: NDArray[np.uint8] | list) -> NDArray[np.uint64]:
+    def from_binary_array(self, arr: NDArray[np.uint8] | list[int]) -> NDArray[np.uint64]:
         """
         Create a MinHash signature from a single binary vector.
 
@@ -235,7 +244,7 @@ class MinHash(Encoder):
             arr = np.array(arr, dtype=np.uint8)
         if len(arr.shape) > 1:
             raise ValueError("vector must be 1D")
-        return self.encode(arr.reshape(1, -1))[0]
+        return cast(NDArray[np.uint64], self.encode(arr.reshape(1, -1))[0])
 
     def from_sparse_binary_array(self, indices: Sequence[int]) -> NDArray[np.uint64]:
         """
@@ -261,16 +270,19 @@ class MinHash(Encoder):
         if NUMBA_AVAILABLE:
             indices_arr = np.array(indices, dtype=np.int64)
             offsets = np.array([0, len(indices)], dtype=np.int64)
-            return minhash_batch_from_sparse(
-                indices_arr,
-                offsets,
-                self._a,
-                self._b,
-                self._num_perm,
-                1,
-            )[0]
+            return cast(
+                NDArray[np.uint64],
+                minhash_batch_from_sparse(
+                    indices_arr,
+                    offsets,
+                    self._a,
+                    self._b,
+                    self._num_perm,
+                    1,
+                )[0],
+            )
 
-        return self._encode_sets_datasketch([set(indices)])[0]
+        return cast(NDArray[np.uint64], self._encode_sets_datasketch([set(indices)])[0])
 
     def from_string_array(self, strings: Sequence[str]) -> NDArray[np.uint64]:
         """
@@ -296,7 +308,7 @@ class MinHash(Encoder):
             raise ValueError("All elements must be strings")
 
         # Always use datasketch for strings to maintain SHA1 hash compatibility
-        return self._encode_sets_datasketch([set(strings)])[0]
+        return cast(NDArray[np.uint64], self._encode_sets_datasketch([set(strings)])[0])
 
     # -------------------------------------------------------------------------
     # Batch methods
@@ -369,13 +381,16 @@ class MinHash(Encoder):
             for i, indices in enumerate(indices_list):
                 indices_flat[offsets[i] : offsets[i + 1]] = indices
 
-            return minhash_batch_from_sparse(
-                indices_flat,
-                offsets,
-                self._a,
-                self._b,
-                self._num_perm,
-                n_samples,
+            return cast(
+                NDArray[np.uint64],
+                minhash_batch_from_sparse(
+                    indices_flat,
+                    offsets,
+                    self._a,
+                    self._b,
+                    self._num_perm,
+                    n_samples,
+                ),
             )
 
         # Fallback to parallel datasketch
@@ -405,7 +420,7 @@ class MinHash(Encoder):
 
     def _parallel_encode_sets(
         self,
-        sets: list[set],
+        sets: list[set[Any]],
         n_jobs: int | None = None,
     ) -> NDArray[np.uint64]:
         """
@@ -510,7 +525,7 @@ class WeightedMinHash(Encoder):
             The original TMAP supported 'method' parameter for ICWS or I2CWS.
             This implementation uses datasketch's consistent weighted sampling.
         """
-        return self.encode(vec.reshape(1, -1))[0]
+        return cast(NDArray[np.uint64], self.encode(vec.reshape(1, -1))[0])
 
     def batch_from_weight_array(
         self,
@@ -531,9 +546,9 @@ class WeightedMinHash(Encoder):
             3D array of shape (n_samples, num_perm, 2) containing weighted MinHash signatures
         """
         if isinstance(vectors, np.ndarray) and vectors.ndim == 2:
-            data = vectors
+            data = vectors.astype(np.float32, copy=False)
         else:
-            data = np.stack(vectors)
+            data = np.stack([np.asarray(vec, dtype=np.float32) for vec in vectors])
 
         n_samples = data.shape[0]
 

@@ -3,12 +3,14 @@ def test_tmap_exports_lshforest():
 
     assert LSHForest.__name__ == "LSHForest"
 
+
 def test_tmap_exports_minhash():
-    from tmap import MinHash 
+    from tmap import MinHash
 
     assert MinHash.__name__ == "MinHash"
 
+
 def test_tmap_exports_weighted_minhash():
-    from tmap import WeightedMinHash 
+    from tmap import WeightedMinHash
 
     assert WeightedMinHash.__name__ == "WeightedMinHash"

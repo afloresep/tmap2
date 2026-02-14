@@ -13,7 +13,7 @@ which is the core algorithm for TMAP's fingerprint-based visualization.
 from __future__ import annotations
 
 import pickle
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -48,7 +48,9 @@ class LSHForest:
 
     Args:
         d: Dimensionality of MinHash vectors (number of permutations). Default: 128
-        l: Number of prefix trees (bands). Default: 8
+        l: Number of prefix trees (bands). Default: d // 2. Lower values increase
+            band width (k = d // l), which reduces candidate recall for low-similarity
+            data. The safe range depends on dataset similarity — see ISS-018.
         store: Store signatures for linear scan and distance queries. Default: True
         weighted: Whether using weighted MinHash signatures. Default: False
 
@@ -60,8 +62,8 @@ class LSHForest:
         >>> mh = MinHash(num_perm=128)
         >>> sigs = mh.batch_from_binary_array(fingerprints)
         >>>
-        >>> # Build LSH Forest
-        >>> lsh = LSHForest(d=128, l=8)
+        >>> # Build LSH Forest (default l=d//2 for good recall)
+        >>> lsh = LSHForest(d=128)
         >>> lsh.batch_add(sigs)
         >>> lsh.index()
         >>>
@@ -77,12 +79,16 @@ class LSHForest:
     def __init__(
         self,
         d: int = 128,
-        l: int = 8,
+        l: int | None = None,
         store: bool = True,
         weighted: bool = False,
     ) -> None:
         if d <= 0:
             raise ValueError("d must be positive")
+
+        if l is None:
+            l = d // 2
+
         if l <= 0:
             raise ValueError("l must be positive")
         if l > d:
@@ -90,7 +96,7 @@ class LSHForest:
 
         self._d = d
         self._l = l
-        self._k = d // l  # Band width
+        self._k = d // l
         self._store = store
         self._weighted = weighted
 
@@ -137,7 +143,8 @@ class LSHForest:
     @property
     def is_indexed(self) -> int:
         """Number of prefix trees."""
-        return self._is_indexed 
+        return self._is_indexed
+
     # =========================================================================
     # Internal helpers
     # =========================================================================
@@ -163,14 +170,12 @@ class LSHForest:
                 if signature.shape != (self._d,):
                     raise ValueError(f"Expected shape ({self._d},), got {signature.shape}")
 
-    def _compute_distance(
-        self, sig_a: NDArray[np.uint64], sig_b: NDArray[np.uint64]
-    ) -> float:
+    def _compute_distance(self, sig_a: NDArray[np.uint64], sig_b: NDArray[np.uint64]) -> float:
         """Compute distance using appropriate method based on weighted flag."""
         if self._weighted:
-            return weighted_jaccard_distance(sig_a, sig_b)
+            return cast(float, weighted_jaccard_distance(sig_a, sig_b))
         else:
-            return jaccard_distance(sig_a, sig_b)
+            return cast(float, jaccard_distance(sig_a, sig_b))
 
     # =========================================================================
     # Add methods
@@ -198,15 +203,14 @@ class LSHForest:
         """
         Add multiple MinHash signatures to the LSH forest (optimized).
 
-        This is now very fast - just appends signatures to a list.
-        The actual hash computation is deferred to index().
-
         Args:
             signatures: MinHash vectors of shape (n, d) or (n, d, 2) for weighted
 
         Note:
             Call index() after adding signatures to build/update the index.
         """
+        # This is now very fast - just appends signatures to a list.
+        # The actual hash computation is deferred to index().
         self._validate_signature_shape(signatures, batch=True)
 
         n_samples = signatures.shape[0]
@@ -242,13 +246,9 @@ class LSHForest:
 
         # Compute hash bands for all signatures (Numba-parallel)
         if self._weighted:
-            self._hash_bands = compute_hash_bands_weighted(
-                self._signatures, self._l, self._k
-            )
+            self._hash_bands = compute_hash_bands_weighted(self._signatures, self._l, self._k)
         else:
-            self._hash_bands = compute_hash_bands(
-                self._signatures, self._l, self._k
-            )
+            self._hash_bands = compute_hash_bands(self._signatures, self._l, self._k)
 
         # Build sorted hash tables for each band
         # We flatten all bands into single arrays with offsets for Numba compatibility
@@ -303,13 +303,9 @@ class LSHForest:
 
         # Compute hash bands for query
         if self._weighted:
-            query_bands = compute_hash_bands_weighted(
-                signature[np.newaxis, :, :], self._l, self._k
-            )
+            query_bands = compute_hash_bands_weighted(signature[np.newaxis, :, :], self._l, self._k)
         else:
-            query_bands = compute_hash_bands(
-                signature[np.newaxis, :], self._l, self._k
-            )
+            query_bands = compute_hash_bands(signature[np.newaxis, :], self._l, self._k)
 
         if (
             self._sorted_hashes_flat is None
@@ -329,7 +325,7 @@ class LSHForest:
 
         # Extract valid candidates
         n_valid = counts[0]
-        return candidates[0, :n_valid].copy()
+        return cast(NDArray[np.int32], candidates[0, :n_valid].copy())
 
     def query_by_id(self, id: int, k: int) -> NDArray[np.int32]:
         """
@@ -566,7 +562,7 @@ class LSHForest:
         Returns:
             Jaccard distance (0.0 to 1.0)
         """
-        return jaccard_distance(sig_a, sig_b)
+        return cast(float, jaccard_distance(sig_a, sig_b))
 
     @staticmethod
     def get_weighted_distance(
@@ -583,7 +579,7 @@ class LSHForest:
         Returns:
             Weighted Jaccard distance (0.0 to 1.0)
         """
-        return weighted_jaccard_distance(sig_a, sig_b)
+        return cast(float, weighted_jaccard_distance(sig_a, sig_b))
 
     def get_distance_by_id(self, a: int, b: int) -> float:
         """
@@ -630,9 +626,14 @@ class LSHForest:
         self._validate_signature_shape(signature)
 
         if self._weighted:
-            return compute_weighted_distances_to_candidates(signature, self._signatures)
+            return cast(
+                NDArray[np.float32],
+                compute_weighted_distances_to_candidates(signature, self._signatures),
+            )
         else:
-            return compute_distances_to_candidates(signature, self._signatures)
+            return cast(
+                NDArray[np.float32], compute_distances_to_candidates(signature, self._signatures)
+            )
 
     # =========================================================================
     # Storage / Retrieval
@@ -659,7 +660,7 @@ class LSHForest:
         if id < 0 or id >= self._n_indexed:
             raise IndexError(f"ID {id} out of range [0, {self._n_indexed})")
 
-        return self._signatures[id].copy()
+        return cast(NDArray[np.uint64], self._signatures[id].copy())
 
     # =========================================================================
     # Persistence

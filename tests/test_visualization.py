@@ -10,29 +10,39 @@ Tests cover:
 - Binary container format utilities
 """
 
+import json
+import re
+
 import numpy as np
 import pytest
 
 # Check if visualization dependencies are available
 try:
-    from tmap.visualization import TmapViz, BINARY_THRESHOLD
+    from tmap.visualization import BINARY_THRESHOLD, TmapViz
     from tmap.visualization.binary import (
-        quantize_coords,
+        BinaryContainerWriter,
         dequantize_coords,
+        pack_categorical_column,
         pack_coords,
         pack_numeric_column,
-        pack_categorical_column,
-        BinaryContainerWriter,
+        quantize_coords,
     )
+
     _VIZ_AVAILABLE = True
 except ImportError as e:
     _VIZ_AVAILABLE = False
     _IMPORT_ERROR = e
 
 pytestmark = pytest.mark.skipif(
-    not _VIZ_AVAILABLE,
-    reason="Visualization dependencies not available (jinja2 required)"
+    not _VIZ_AVAILABLE, reason="Visualization dependencies not available (jinja2 required)"
 )
+
+try:
+    from jscatter.jscatter import Scatter as _Scatter
+
+    _JSCATTER_AVAILABLE = True
+except ImportError:
+    _JSCATTER_AVAILABLE = False
 
 
 # =============================================================================
@@ -88,6 +98,9 @@ class TestTmapVizCreation:
         assert viz.point_color == "#4a9eff"
         assert viz.point_size == 4.0
         assert viz.opacity == 0.85
+        assert viz.edge_color == "#000000"
+        assert viz.edge_opacity == 0.5
+        assert viz.edge_width == 2.0
         assert viz.n_points == 0
 
     def test_properties_settable(self):
@@ -291,7 +304,7 @@ class TestAddSmiles:
         viz.add_smiles("structure", data["smiles"])
 
         assert viz._smiles_column == "structure"
-        assert "structure" in [l.name for l in viz.labels]
+        assert "structure" in [label.name for label in viz.labels]
 
     def test_only_one_smiles_allowed(self, viz_with_data):
         """Only one SMILES column should be allowed."""
@@ -348,6 +361,73 @@ class TestRender:
         # Should render without error (smiles template used)
         assert isinstance(html, str)
         assert len(html) > 0
+
+
+# =============================================================================
+# to_jupyter Tests
+# =============================================================================
+
+
+@pytest.mark.skipif(not _JSCATTER_AVAILABLE, reason="jupyter-scatter is not installed")
+class TestToJupyter:
+    """Tests for TmapViz.to_jupyter."""
+
+    def test_to_jupyter_basic_style(self, viz_with_data):
+        """Should map point/background style onto jscatter."""
+        viz, _ = viz_with_data
+        viz.background_color = "#ffffff"
+        viz.point_color = "#ff0000"
+        viz.point_size = 6.0
+        viz.opacity = 0.7
+
+        scatter = viz.to_jupyter()
+
+        assert isinstance(scatter, _Scatter)
+        assert scatter.background()["color"][:3] == pytest.approx((1.0, 1.0, 1.0))
+        assert scatter.color()["by"] is None
+        assert scatter.color()["default"][:3] == pytest.approx((1.0, 0.0, 0.0))
+        assert scatter.size()["default"] == pytest.approx(6.0)
+        assert scatter.opacity()["default"] == pytest.approx(0.7)
+
+    def test_to_jupyter_uses_layout_and_labels(self, viz_with_data):
+        """Should use first layout as color and labels as tooltip fields."""
+        viz, data = viz_with_data
+        viz.add_label("name", data["labels"])
+        viz.add_color_layout("value", data["continuous"], categorical=False, color="plasma")
+
+        scatter = viz.to_jupyter()
+
+        assert isinstance(scatter, _Scatter)
+        assert scatter.color()["by"] == "value"
+        assert scatter.tooltip()["enable"] is True
+        assert "name" in scatter.tooltip()["properties"]
+
+    def test_to_jupyter_layout_override(self, viz_with_data):
+        """Layout parameter should select the requested color layout."""
+        viz, data = viz_with_data
+        viz.add_color_layout("value_a", data["continuous"], categorical=False, color="viridis")
+        viz.add_color_layout("value_b", (data["continuous"] * 2), categorical=False, color="plasma")
+
+        scatter = viz.to_jupyter(layout="value_b")
+
+        assert isinstance(scatter, _Scatter)
+        assert scatter.color()["by"] == "value_b"
+
+    def test_to_jupyter_invalid_layout_raises(self, viz_with_data):
+        """Unknown layout name should raise ValueError."""
+        viz, _ = viz_with_data
+        with pytest.raises(ValueError, match="Unknown layout"):
+            viz.to_jupyter(layout="does_not_exist")
+
+    def test_to_jupyter_warns_when_edges_set(self, viz_with_data):
+        """Edges are not rendered in notebook mode and should emit a warning."""
+        viz, _ = viz_with_data
+        viz.set_edges([0, 1, 2], [1, 2, 3])
+
+        with pytest.warns(UserWarning, match="Edges are not supported"):
+            scatter = viz.to_jupyter()
+
+        assert isinstance(scatter, _Scatter)
 
 
 # =============================================================================
@@ -588,15 +668,26 @@ class TestEdgeCases:
         assert isinstance(html, str)
 
     def test_nan_values_in_continuous(self, viz_with_data):
-        """Should handle NaN in continuous values."""
+        """Should warn and handle NaN in continuous values."""
         viz, data = viz_with_data
         values = np.array([1.0, np.nan, 3.0, np.nan] * 25)
 
-        viz.add_color_layout("with_nan", values)
+        with pytest.warns(UserWarning, match="contains NaN values"):
+            viz.add_color_layout("with_nan", values)
 
-        # Should not raise, NaN will be serialized
+        # Should not raise, NaN values are rendered in black client-side
         html = viz.render()
         assert isinstance(html, str)
+
+        # Payload JSON in HTML should be valid JSON (NaN -> null)
+        match = re.search(
+            r'<script id="payload" type="application/json">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match is not None
+        payload = json.loads(match.group(1))
+        assert payload["columns"]["with_nan"]["values"][1] is None
 
 
 # =============================================================================
@@ -627,6 +718,143 @@ class TestColumnValidation:
 
         with pytest.raises(ValueError, match="values but there are"):
             viz.set_points([0.0, 1.0], [0.0, 1.0])  # Only 2 points, 3 labels
+
+
+# =============================================================================
+# set_edges Tests
+# =============================================================================
+
+
+class TestSetEdges:
+    """Tests for set_edges method."""
+
+    def test_basic_set_edges(self, viz_with_data):
+        """set_edges should accept valid s, t arrays."""
+        viz, data = viz_with_data
+        s = np.array([0, 1, 2], dtype=np.uint32)
+        t = np.array([1, 2, 3], dtype=np.uint32)
+
+        viz.set_edges(s, t)
+
+        assert viz._edges_s is not None
+        assert viz._edges_t is not None
+        assert len(viz._edges_s) == 3
+        assert len(viz._edges_t) == 3
+
+    def test_set_edges_mismatched_length(self, viz_with_data):
+        """Mismatched s and t should raise ValueError."""
+        viz, data = viz_with_data
+
+        with pytest.raises(ValueError, match="same length"):
+            viz.set_edges([0, 1], [1, 2, 3])
+
+    def test_set_edges_2d_raises(self, viz_with_data):
+        """2D arrays should raise ValueError."""
+        viz, data = viz_with_data
+
+        with pytest.raises(ValueError, match="1-dimensional"):
+            viz.set_edges(np.zeros((3, 2), dtype=np.uint32), np.zeros((3, 2), dtype=np.uint32))
+
+    def test_set_edges_out_of_bounds(self, viz_with_data):
+        """Edge indices >= n_points should raise ValueError."""
+        viz, data = viz_with_data
+        n = len(data["x"])
+
+        with pytest.raises(ValueError, match="must be < n_points"):
+            viz.set_edges([0, n], [1, 0])
+
+    def test_render_with_edges(self, viz_with_data):
+        """JSON payload should include edges."""
+        viz, data = viz_with_data
+        viz.add_color_layout("value", data["continuous"])
+        viz.set_edges([0, 1, 2], [1, 2, 3])
+
+        html = viz.render()
+
+        # Extract payload from HTML
+        match = re.search(
+            r'<script id="payload" type="application/json">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match is not None
+        payload = json.loads(match.group(1))
+        assert "edges" in payload
+        assert payload["edges"]["s"] == [0, 1, 2]
+        assert payload["edges"]["t"] == [1, 2, 3]
+        assert payload["edgeStrokeStyle"] == "rgba(0, 0, 0, 0.5)"
+        assert payload["edgeWidth"] == 2.0
+
+    def test_render_binary_with_edges(self, viz_with_data):
+        """Binary mode should include edge data."""
+        viz, data = viz_with_data
+        viz.add_color_layout("value", data["continuous"])
+        viz.set_edges([0, 1, 2], [1, 2, 3])
+
+        html = viz.render_binary()
+
+        # Should contain the edges script tag
+        assert 'id="tmap-edges"' in html
+        # Header should contain nEdges
+        match = re.search(
+            r'<script id="tmap-header" type="application/json">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match is not None
+        header = json.loads(match.group(1))
+        assert header["metadata"]["nEdges"] == 3
+        assert header["metadata"]["edgeStrokeStyle"] == "rgba(0, 0, 0, 0.5)"
+        assert header["metadata"]["edgeWidth"] == 2.0
+
+    def test_custom_edge_style_in_payload(self, viz_with_data):
+        """Custom edge style should be serialized in JSON payload."""
+        viz, data = viz_with_data
+        viz.set_edges([0, 1], [1, 2])
+        viz.set_edge_style(color="#f03", width=4.5, opacity=0.35)
+
+        html = viz.render()
+
+        match = re.search(
+            r'<script id="payload" type="application/json">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        assert match is not None
+        payload = json.loads(match.group(1))
+        assert payload["edgeStrokeStyle"] == "rgba(255, 0, 51, 0.35)"
+        assert payload["edgeWidth"] == 4.5
+
+
+class TestEdgeStyle:
+    """Tests for edge style configuration."""
+
+    def test_set_edge_style_updates_values(self):
+        """set_edge_style should update style attributes."""
+        viz = TmapViz()
+        viz.set_edge_style(color="#abc", width=3.25, opacity=0.2)
+
+        assert viz.edge_color == "#aabbcc"
+        assert viz.edge_width == 3.25
+        assert viz.edge_opacity == 0.2
+
+    def test_set_edge_style_invalid_color_raises(self):
+        """Invalid edge color should raise ValueError."""
+        viz = TmapViz()
+        with pytest.raises(ValueError, match="Invalid hex color"):
+            viz.set_edge_style(color="not-a-color")
+
+    def test_set_edge_style_invalid_width_raises(self):
+        """Non-positive edge width should raise ValueError."""
+        viz = TmapViz()
+        with pytest.raises(ValueError, match="must be > 0"):
+            viz.set_edge_style(width=0)
+
+    def test_set_edge_style_invalid_opacity_raises(self):
+        """Opacity outside [0, 1] should raise ValueError."""
+        viz = TmapViz()
+        with pytest.raises(ValueError, match="must be in \\[0, 1\\]"):
+            viz.set_edge_style(opacity=1.2)
 
 
 # =============================================================================

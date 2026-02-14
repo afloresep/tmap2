@@ -67,7 +67,7 @@ def save_layout(
     edges_bytes = s_arr.nbytes + t_arr.nbytes
     stats["memory_mb"] = (coords_bytes + edges_bytes) / (1024 * 1024)
 
-    print(f"Layout stats:")
+    print("Layout stats:")
     print(f"  Points: {n_points:,}")
     print(f"  Edges: {n_edges:,}")
     print(f"  X range: [{stats['x_range'][0]:.2f}, {stats['x_range'][1]:.2f}]")

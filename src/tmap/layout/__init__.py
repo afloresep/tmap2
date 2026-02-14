@@ -35,11 +35,10 @@ Low-level: Direct edge list
 """
 
 # Always available (pure Python)
-from tmap.layout.base import Layout
-from tmap.layout.types import Coordinates
-
 # OGDF availability (handles editable install quirks internally)
 from tmap.layout._ogdf import _AVAILABLE as OGDF_AVAILABLE
+from tmap.layout.base import Layout
+from tmap.layout.types import Coordinates
 
 __all__ = [
     "Layout",
@@ -51,13 +50,13 @@ __all__ = [
 if OGDF_AVAILABLE:
     from tmap.layout._ogdf import (
         LayoutConfig,
-        Placer,
         Merger,
+        Placer,
         ScalingType,
         layout_from_edge_list,
-        layout_from_tree,
-        layout_from_lsh_forest,
         layout_from_knn_graph,
+        layout_from_lsh_forest,
+        layout_from_tree,
     )
     from tmap.layout.force_directed import ForceDirectedLayout
 

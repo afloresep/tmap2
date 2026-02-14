@@ -388,7 +388,7 @@ class TestFullPipeline:
 
     def test_full_pipeline_with_minhash(self, clustered_fingerprints):
         """Test full pipeline including MinHash encoding."""
-        from tmap import MinHash, LSHForest
+        from tmap import LSHForest, MinHash
         from tmap.graph.mst import MSTBuilder
         from tmap.layout import ForceDirectedLayout
         from tmap.visualization.tmapviz import TmapViz
@@ -440,7 +440,9 @@ class TestFullPipeline:
                     idx = cluster_id * 5 + i
                     sig = template.copy()
                     modify_mask = rng.random(d) < 0.05
-                    sig[modify_mask] = rng.integers(0, 2**63, size=np.sum(modify_mask), dtype=np.uint64)
+                    sig[modify_mask] = rng.integers(
+                        0, 2**63, size=np.sum(modify_mask), dtype=np.uint64
+                    )
                     sigs[idx] = sig
             return sigs
 

@@ -3,6 +3,7 @@ Type definitions for the layout module.
 """
 
 from dataclasses import dataclass
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -21,6 +22,7 @@ class Coordinates:
     depending on the layout algorithm. The visualization module
     handles final scaling to screen coordinates.
     """
+
     x: NDArray[np.float32]
     y: NDArray[np.float32]
     scale: float = 1.0
@@ -31,9 +33,7 @@ class Coordinates:
 
     def __post_init__(self) -> None:
         if len(self.x) != len(self.y):
-            raise ValueError(
-                f"x and y must have same length, got {len(self.x)} and {len(self.y)}"
-            )
+            raise ValueError(f"x and y must have same length, got {len(self.x)} and {len(self.y)}")
 
     def normalize(self, margin: float = 0.1) -> "Coordinates":
         """

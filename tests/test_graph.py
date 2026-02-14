@@ -12,9 +12,8 @@ Tests cover:
 import numpy as np
 import pytest
 
-from tmap.index.types import KNNGraph
 from tmap.graph import MSTBuilder, Tree
-
+from tmap.index.types import KNNGraph
 
 # =============================================================================
 # Fixtures
@@ -30,21 +29,27 @@ def simple_knn():
         |    |
         3 -- 4
     """
-    indices = np.array([
-        [1, 3],   # Node 0: neighbors 1, 3
-        [0, 2],   # Node 1: neighbors 0, 2
-        [1, 4],   # Node 2: neighbors 1, 4
-        [0, 4],   # Node 3: neighbors 0, 4
-        [3, 2],   # Node 4: neighbors 3, 2
-    ], dtype=np.int32)
+    indices = np.array(
+        [
+            [1, 3],  # Node 0: neighbors 1, 3
+            [0, 2],  # Node 1: neighbors 0, 2
+            [1, 4],  # Node 2: neighbors 1, 4
+            [0, 4],  # Node 3: neighbors 0, 4
+            [3, 2],  # Node 4: neighbors 3, 2
+        ],
+        dtype=np.int32,
+    )
 
-    distances = np.array([
-        [0.1, 0.2],   # Node 0
-        [0.1, 0.15],  # Node 1
-        [0.15, 0.25], # Node 2
-        [0.2, 0.1],   # Node 3
-        [0.1, 0.25],  # Node 4
-    ], dtype=np.float32)
+    distances = np.array(
+        [
+            [0.1, 0.2],  # Node 0
+            [0.1, 0.15],  # Node 1
+            [0.15, 0.25],  # Node 2
+            [0.2, 0.1],  # Node 3
+            [0.1, 0.25],  # Node 4
+        ],
+        dtype=np.float32,
+    )
 
     return KNNGraph(indices=indices, distances=distances)
 
@@ -94,21 +99,27 @@ def disconnected_knn():
     Component 1: nodes 0, 1, 2
     Component 2: nodes 3, 4
     """
-    indices = np.array([
-        [1, 2],    # Node 0: only connected to 1, 2
-        [0, 2],    # Node 1: only connected to 0, 2
-        [0, 1],    # Node 2: only connected to 0, 1
-        [4, -1],   # Node 3: only connected to 4
-        [3, -1],   # Node 4: only connected to 3
-    ], dtype=np.int32)
+    indices = np.array(
+        [
+            [1, 2],  # Node 0: only connected to 1, 2
+            [0, 2],  # Node 1: only connected to 0, 2
+            [0, 1],  # Node 2: only connected to 0, 1
+            [4, -1],  # Node 3: only connected to 4
+            [3, -1],  # Node 4: only connected to 3
+        ],
+        dtype=np.int32,
+    )
 
-    distances = np.array([
-        [0.1, 0.2],
-        [0.1, 0.15],
-        [0.2, 0.15],
-        [0.1, 2.0],  # 2.0 = invalid marker
-        [0.1, 2.0],
-    ], dtype=np.float32)
+    distances = np.array(
+        [
+            [0.1, 0.2],
+            [0.1, 0.15],
+            [0.2, 0.15],
+            [0.1, 2.0],  # 2.0 = invalid marker
+            [0.1, 2.0],
+        ],
+        dtype=np.float32,
+    )
 
     return KNNGraph(indices=indices, distances=distances)
 
@@ -607,18 +618,10 @@ class TestTreeSubtreeSizes:
 class TestMSTBuilderEdgeCases:
     """Test edge cases for MSTBuilder."""
 
-    @pytest.mark.xfail(
-        reason="BUG ISS-009: MSTBuilder._sparse_to_edges crashes on empty sparse matrix",
-        raises=ValueError,
-    )
     def test_single_node_graph(self):
         """Single node graph should produce tree with 0 edges.
 
         Covers: Minimum viable graph.
-
-        BUG ISS-009: MSTBuilder._sparse_to_edges() fails when sparse matrix is empty.
-        The line `weights = np.array(mst[rows, cols]).ravel()` returns a matrix
-        object instead of an array when there are no edges.
         """
         indices = np.array([[-1]], dtype=np.int32)  # No neighbors
         distances = np.array([[2.0]], dtype=np.float32)  # Invalid
@@ -663,17 +666,10 @@ class TestMSTBuilderEdgeCases:
         assert tree.n_nodes == 2
         assert len(tree.edges) == 1
 
-    @pytest.mark.xfail(
-        reason="BUG ISS-009: MSTBuilder._sparse_to_edges crashes on empty sparse matrix",
-        raises=ValueError,
-    )
     def test_all_invalid_neighbors(self):
         """Graph with all -1 neighbors should produce tree with 0 edges.
 
         Covers: Completely disconnected graph.
-
-        BUG ISS-009: Same issue as test_single_node_graph - empty sparse matrix
-        causes crash in _sparse_to_edges().
         """
         indices = np.array([[-1, -1], [-1, -1], [-1, -1]], dtype=np.int32)
         distances = np.array([[2.0, 2.0], [2.0, 2.0], [2.0, 2.0]], dtype=np.float32)

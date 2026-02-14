@@ -156,10 +156,7 @@ if NUMBA_AVAILABLE:
                 min_hash = MAX_HASH
                 for idx in range(n_features):
                     if data[i, idx] != 0:
-                        h = (
-                            np.uint64((a[p] * np.uint64(idx) + b[p]) % MERSENNE_PRIME)
-                            & MAX_HASH
-                        )
+                        h = np.uint64((a[p] * np.uint64(idx) + b[p]) % MERSENNE_PRIME) & MAX_HASH
                         if h < min_hash:
                             min_hash = h
                 signatures[i, p] = min_hash

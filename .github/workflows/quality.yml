@@ -1,0 +1,43 @@
+name: Code Quality (Non-blocking)
+
+on:
+  push:
+    branches: [main, master, visualization]
+  pull_request:
+    branches: [main, master]
+
+# These checks provide feedback but don't block merges
+
+# Cancel in-progress runs when a new push is made
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-format:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --config-settings=cmake.define.TMAP_BUILD_LAYOUT=OFF ".[dev]"
+
+      - name: Run ruff format check
+        run: ruff format --check src/ tests/
+
+      - name: Run ruff lint
+        run: ruff check src/ tests/
+
+      - name: Run mypy type check
+        run: mypy src/

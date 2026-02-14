@@ -1,0 +1,8 @@
+line-length = 100
+target-version = "py312"
+extend-exclude = ["*.ipynb"]
+
+[lint.per-file-ignores]
+# `l` is part of the established LSHForest public API and is intentionally preserved.
+"src/tmap/index/lsh_forest.py" = ["E741", "E743"]
+"src/tmap/index/_lsh_numba.py" = ["E741"]

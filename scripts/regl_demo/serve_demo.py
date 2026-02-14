@@ -231,7 +231,7 @@ Examples:
     n_points = len(x)
 
     # Print stats
-    print(f"\nLayout stats:")
+    print("\nLayout stats:")
     print(f"  Points: {n_points:,}")
     print(f"  X range: [{x.min():.2f}, {x.max():.2f}]")
     print(f"  Y range: [{y.min():.2f}, {y.max():.2f}]")

@@ -10,18 +10,18 @@ This module wraps the C++ extension (_tmap_ogdf) and provides:
 from __future__ import annotations
 
 import importlib.util
-import sysconfig
 import sys
+import sysconfig
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from tmap.graph.types import Tree
-    from tmap.index.types import KNNGraph
     from tmap.index.lsh_forest import LSHForest
+    from tmap.index.types import KNNGraph
 
 # =============================================================================
 # Load C++ extension
@@ -31,12 +31,12 @@ _AVAILABLE = False
 _IMPORT_ERROR: ImportError | None = None
 
 # These will be set by _load_extension()
-LayoutConfig = None
-LayoutResult = None
-Merger = None
-Placer = None
-ScalingType = None
-_cpp_layout_from_edge_list = None
+LayoutConfig: Any = None
+LayoutResult: Any = None
+Merger: Any = None
+Placer: Any = None
+ScalingType: Any = None
+_cpp_layout_from_edge_list: Any = None
 
 
 def _load_extension() -> bool:
@@ -53,14 +53,25 @@ def _load_extension() -> bool:
 
     # Try normal import first
     try:
-        from tmap.layout._tmap_ogdf import ( # type: ignore
+        from tmap.layout._tmap_ogdf import (  # type: ignore
             LayoutConfig as _LC,
+        )
+        from tmap.layout._tmap_ogdf import (
             LayoutResult as _LR,
+        )
+        from tmap.layout._tmap_ogdf import (
             Merger as _M,
+        )
+        from tmap.layout._tmap_ogdf import (
             Placer as _P,
+        )
+        from tmap.layout._tmap_ogdf import (
             ScalingType as _ST,
+        )
+        from tmap.layout._tmap_ogdf import (
             layout_from_edge_list as _lfel,
         )
+
         # Assign to module-level globals (global declaration above makes this work)
         LayoutConfig = _LC
         LayoutResult = _LR
@@ -82,9 +93,9 @@ def _load_extension() -> bool:
 
     # Find the extension file (name varies by platform)
     ext_files = (
-        list(ext_dir.glob("_tmap_ogdf.cpython-*.so")) +  # Linux/macOS
-        list(ext_dir.glob("_tmap_ogdf.*.pyd")) +          # Windows
-        list(ext_dir.glob("_tmap_ogdf*.dylib"))           # macOS alternative
+        list(ext_dir.glob("_tmap_ogdf.cpython-*.so"))  # Linux/macOS
+        + list(ext_dir.glob("_tmap_ogdf.*.pyd"))  # Windows
+        + list(ext_dir.glob("_tmap_ogdf*.dylib"))  # macOS alternative
     )
 
     if not ext_files:
@@ -126,7 +137,9 @@ def require_ogdf() -> None:
     if not _AVAILABLE:
         raise ImportError(
             "OGDF layout extension not available. "
-            "Install OGDF and rebuild: OGDF_DIR=/path/to/ogdf pip install --no-cache-dir -e ."
+            "Reinstall with bundled OGDF: pip install -e . "
+            "If a core-only install was intended, use "
+            "pip install -e . --config-settings=cmake.define.TMAP_BUILD_LAYOUT=OFF"
         ) from _IMPORT_ERROR
 
 
@@ -134,10 +147,11 @@ def require_ogdf() -> None:
 # Convenience functions
 # =============================================================================
 
+
 def layout_from_edge_list(
     vertex_count: int,
     edges: list[tuple[int, int, float]],
-    config: "LayoutConfig | None" = None,
+    config: Any | None = None,
     create_mst: bool = True,
 ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.uint32], NDArray[np.uint32]]:
     """
@@ -162,7 +176,11 @@ def layout_from_edge_list(
     require_ogdf()
 
     if config is None:
+        if LayoutConfig is None:
+            raise RuntimeError("LayoutConfig is unavailable")
         config = LayoutConfig()
+    if _cpp_layout_from_edge_list is None:
+        raise RuntimeError("OGDF layout function is unavailable")
 
     result = _cpp_layout_from_edge_list(vertex_count, edges, config, create_mst)
 
@@ -175,8 +193,8 @@ def layout_from_edge_list(
 
 
 def layout_from_tree(
-    tree: "Tree",
-    config: "LayoutConfig | None" = None,
+    tree: Tree,
+    config: Any | None = None,
 ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
     """
     Compute 2D layout from a Tree (MST).
@@ -196,7 +214,11 @@ def layout_from_tree(
     require_ogdf()
 
     if config is None:
+        if LayoutConfig is None:
+            raise RuntimeError("LayoutConfig is unavailable")
         config = LayoutConfig()
+    if _cpp_layout_from_edge_list is None:
+        raise RuntimeError("OGDF layout function is unavailable")
 
     edges = [
         (int(tree.edges[i, 0]), int(tree.edges[i, 1]), float(tree.weights[i]))
@@ -212,8 +234,8 @@ def layout_from_tree(
 
 
 def layout_from_lsh_forest(
-    lsh_forest: "LSHForest",
-    config: "LayoutConfig | None" = None,
+    lsh_forest: LSHForest,
+    config: Any | None = None,
     create_mst: bool = True,
 ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.uint32], NDArray[np.uint32]]:
     """
@@ -264,7 +286,11 @@ def layout_from_lsh_forest(
     require_ogdf()
 
     if config is None:
+        if LayoutConfig is None:
+            raise RuntimeError("LayoutConfig is unavailable")
         config = LayoutConfig()
+    if _cpp_layout_from_edge_list is None:
+        raise RuntimeError("OGDF layout function is unavailable")
 
     # Build k-NN graph using config parameters
     knn = lsh_forest.get_knn_graph(k=config.k, kc=config.kc)
@@ -273,9 +299,7 @@ def layout_from_lsh_forest(
     edges = _knn_to_edge_list(knn)
 
     # Call layout with full k-NN graph - OGDF will compute MST
-    result = _cpp_layout_from_edge_list(
-        knn.n_nodes, edges, config, create_mst=create_mst
-    )
+    result = _cpp_layout_from_edge_list(knn.n_nodes, edges, config, create_mst=create_mst)
 
     return (
         np.array(result.x, dtype=np.float32),
@@ -286,8 +310,8 @@ def layout_from_lsh_forest(
 
 
 def layout_from_knn_graph(
-    knn: "KNNGraph",
-    config: "LayoutConfig | None" = None,
+    knn: KNNGraph,
+    config: Any | None = None,
     create_mst: bool = True,
 ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.uint32], NDArray[np.uint32]]:
     """
@@ -313,13 +337,15 @@ def layout_from_knn_graph(
     require_ogdf()
 
     if config is None:
+        if LayoutConfig is None:
+            raise RuntimeError("LayoutConfig is unavailable")
         config = LayoutConfig()
+    if _cpp_layout_from_edge_list is None:
+        raise RuntimeError("OGDF layout function is unavailable")
 
     edges = _knn_to_edge_list(knn)
 
-    result = _cpp_layout_from_edge_list(
-        knn.n_nodes, edges, config, create_mst=create_mst
-    )
+    result = _cpp_layout_from_edge_list(knn.n_nodes, edges, config, create_mst=create_mst)
 
     return (
         np.array(result.x, dtype=np.float32),
@@ -329,7 +355,7 @@ def layout_from_knn_graph(
     )
 
 
-def _knn_to_edge_list(knn: "KNNGraph") -> list[tuple[int, int, float]]:
+def _knn_to_edge_list(knn: KNNGraph) -> list[tuple[int, int, float]]:
     """
     Convert KNNGraph to edge list for OGDF.
 
