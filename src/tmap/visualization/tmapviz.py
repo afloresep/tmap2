@@ -627,7 +627,7 @@ class TmapViz:
 
         from tmap.visualization.jupyter import to_jscatter
 
-        import pandas as pd  # type: ignore[import-untyped]
+        import pandas as pd
 
         selected_layout = self._layout_keys[0] if self._layout_keys else None
 
@@ -691,18 +691,20 @@ class TmapViz:
         """Patch ``scatter.show()`` to include color and filter controls."""
         original_show = scatter.show
         layout_options = tuple(self._layout_keys)
+        if data_df is None:
+            # No metadata columns available for color/filter controls.
+            return
         categorical_filter_values: dict[str, list[Any]] = {}
-        if data_df is not None:
-            for name, col in self._columns.items():
-                if col.dtype != "categorical" or name not in data_df.columns:
-                    continue
-                series = data_df[name]
-                if hasattr(series, "cat"):
-                    values = [v for v in series.cat.categories.tolist() if v == v]  # drop NaN
-                else:
-                    values = [v for v in series.dropna().unique().tolist()]
-                if values:
-                    categorical_filter_values[name] = values
+        for name, col in self._columns.items():
+            if col.dtype != "categorical" or name not in data_df.columns:
+                continue
+            series = data_df[name]
+            if hasattr(series, "cat"):
+                values = [v for v in series.cat.categories.tolist() if v == v]  # drop NaN
+            else:
+                values = [v for v in series.dropna().unique().tolist()]
+            if values:
+                categorical_filter_values[name] = values
 
         def _show_with_layout_selector(*args: Any, **kwargs: Any) -> Any:
             base_widget = original_show(*args, **kwargs)
@@ -786,7 +788,7 @@ class TmapViz:
                 return base_widget
             return widgets.VBox([widgets.HBox(controls_row), base_widget])
 
-        scatter.show = _show_with_layout_selector  # type: ignore[method-assign]
+        scatter.show = _show_with_layout_selector
 
     def show(
         self,

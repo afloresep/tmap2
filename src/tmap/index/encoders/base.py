@@ -19,7 +19,7 @@ class Encoder(ABC):
         return self.num_perm
 
     @abstractmethod
-    def encode(self, data: Any, num_perm: int = 128) -> NDArray[np.uint64]:
+    def encode(self, data: Any) -> NDArray[np.uint64]:
         """Encode input data into hash signatures."""
         ...
 

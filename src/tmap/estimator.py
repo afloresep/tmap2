@@ -433,9 +433,9 @@ class TMAP:
         weights = np.ones(edge_count, dtype=np.float32)
         for idx, (src, tgt) in enumerate(edges):
             key = (min(int(src), int(tgt)), max(int(src), int(tgt)))
-            w = edge_weights.get(key)
-            if w is not None:
-                weights[idx] = np.float32(w)
+            w_opt = edge_weights.get(key)
+            if w_opt is not None:
+                weights[idx] = np.float32(w_opt)
 
         degree = np.zeros(knn.n_nodes, dtype=np.int32)
         np.add.at(degree, edges[:, 0], 1)
@@ -493,7 +493,7 @@ class TMAP:
         if max_degree < 1:
             raise ValueError(f"max_degree must be >= 1, got {max_degree}")
 
-        neighbor_sets = [set() for _ in range(n)]
+        neighbor_sets: list[set[int]] = [set() for _ in range(n)]
         for i in range(n):
             for j_idx in range(k):
                 j = int(knn.indices[i, j_idx])
