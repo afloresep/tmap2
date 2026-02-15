@@ -44,6 +44,13 @@ try:
 except ImportError:
     _JSCATTER_AVAILABLE = False
 
+try:
+    import ipywidgets as _widgets
+
+    _IPYWIDGETS_AVAILABLE = True
+except ImportError:
+    _IPYWIDGETS_AVAILABLE = False
+
 
 # =============================================================================
 # Fixtures
@@ -171,6 +178,46 @@ class TestSetPoints:
         for p in points:
             assert -1.0 <= p[0] <= 1.0
             assert -1.0 <= p[1] <= 1.0
+
+
+class TestToDataFrame:
+    """Tests for TmapViz.to_dataframe helper."""
+
+    def test_to_dataframe_with_coords(self, viz_with_data):
+        """Metadata export should include coordinate columns by default."""
+        viz, data = viz_with_data
+        viz.add_color_layout("value", data["continuous"], categorical=False)
+        viz.add_label("name", data["labels"])
+
+        df = viz.to_dataframe()
+
+        assert len(df) == viz.n_points
+        assert "value" in df.columns
+        assert "name" in df.columns
+        assert "_tmap_x" in df.columns
+        assert "_tmap_y" in df.columns
+        np.testing.assert_allclose(df["_tmap_x"].to_numpy(), viz._points_array[:, 0])
+        np.testing.assert_allclose(df["_tmap_y"].to_numpy(), viz._points_array[:, 1])
+
+    def test_to_dataframe_without_coords(self, viz_with_data):
+        """include_coords=False should omit coordinate columns."""
+        viz, data = viz_with_data
+        viz.add_color_layout("group", data["categorical"], categorical=True)
+
+        df = viz.to_dataframe(include_coords=False)
+
+        assert len(df) == viz.n_points
+        assert "group" in df.columns
+        assert "_tmap_x" not in df.columns
+        assert "_tmap_y" not in df.columns
+
+    def test_to_dataframe_requires_points_when_including_coords(self):
+        """Requesting coords without points should raise."""
+        viz = TmapViz()
+        viz.add_label("name", ["a", "b"])
+
+        with pytest.raises(ValueError, match="set_points"):
+            viz.to_dataframe(include_coords=True)
 
 
 # =============================================================================
@@ -364,15 +411,15 @@ class TestRender:
 
 
 # =============================================================================
-# to_jupyter Tests
+# Notebook API Tests
 # =============================================================================
 
 
 @pytest.mark.skipif(not _JSCATTER_AVAILABLE, reason="jupyter-scatter is not installed")
-class TestToJupyter:
-    """Tests for TmapViz.to_jupyter."""
+class TestNotebookAPI:
+    """Tests for TmapViz notebook helpers."""
 
-    def test_to_jupyter_basic_style(self, viz_with_data):
+    def test_to_widget_basic_style(self, viz_with_data):
         """Should map point/background style onto jscatter."""
         viz, _ = viz_with_data
         viz.background_color = "#ffffff"
@@ -380,7 +427,7 @@ class TestToJupyter:
         viz.point_size = 6.0
         viz.opacity = 0.7
 
-        scatter = viz.to_jupyter()
+        scatter = viz.to_widget()
 
         assert isinstance(scatter, _Scatter)
         assert scatter.background()["color"][:3] == pytest.approx((1.0, 1.0, 1.0))
@@ -389,45 +436,121 @@ class TestToJupyter:
         assert scatter.size()["default"] == pytest.approx(6.0)
         assert scatter.opacity()["default"] == pytest.approx(0.7)
 
-    def test_to_jupyter_uses_layout_and_labels(self, viz_with_data):
+    def test_to_widget_uses_layout_and_labels(self, viz_with_data):
         """Should use first layout as color and labels as tooltip fields."""
         viz, data = viz_with_data
         viz.add_label("name", data["labels"])
         viz.add_color_layout("value", data["continuous"], categorical=False, color="plasma")
 
-        scatter = viz.to_jupyter()
+        scatter = viz.to_widget()
 
         assert isinstance(scatter, _Scatter)
         assert scatter.color()["by"] == "value"
         assert scatter.tooltip()["enable"] is True
         assert "name" in scatter.tooltip()["properties"]
 
-    def test_to_jupyter_layout_override(self, viz_with_data):
-        """Layout parameter should select the requested color layout."""
-        viz, data = viz_with_data
-        viz.add_color_layout("value_a", data["continuous"], categorical=False, color="viridis")
-        viz.add_color_layout("value_b", (data["continuous"] * 2), categorical=False, color="plasma")
-
-        scatter = viz.to_jupyter(layout="value_b")
-
-        assert isinstance(scatter, _Scatter)
-        assert scatter.color()["by"] == "value_b"
-
-    def test_to_jupyter_invalid_layout_raises(self, viz_with_data):
-        """Unknown layout name should raise ValueError."""
-        viz, _ = viz_with_data
-        with pytest.raises(ValueError, match="Unknown layout"):
-            viz.to_jupyter(layout="does_not_exist")
-
-    def test_to_jupyter_warns_when_edges_set(self, viz_with_data):
+    def test_to_widget_warns_when_edges_set(self, viz_with_data):
         """Edges are not rendered in notebook mode and should emit a warning."""
         viz, _ = viz_with_data
         viz.set_edges([0, 1, 2], [1, 2, 3])
 
         with pytest.warns(UserWarning, match="Edges are not supported"):
-            scatter = viz.to_jupyter()
+            scatter = viz.to_widget()
 
         assert isinstance(scatter, _Scatter)
+
+    def test_show_calls_display_helper(
+        self, viz_with_data, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """show() should delegate widget display to jupyter helper."""
+        viz, _ = viz_with_data
+        calls: list[bool] = []
+
+        def _fake_display(scatter: _Scatter, *, controls: bool = False) -> None:
+            calls.append(controls)
+
+        monkeypatch.setattr("tmap.visualization.jupyter._display_scatter", _fake_display)
+
+        scatter = viz.show(controls=True)
+        assert isinstance(scatter, _Scatter)
+        assert calls == [True]
+
+    @pytest.mark.skipif(not _IPYWIDGETS_AVAILABLE, reason="ipywidgets is not installed")
+    def test_to_widget_controls_show_includes_color_and_filter(self, viz_with_data) -> None:
+        """controls=True should add color and categorical filter controls to show()."""
+        viz, data = viz_with_data
+        viz.add_color_layout("rings", [i % 4 for i in range(viz.n_points)], categorical=True)
+        viz.add_color_layout("mw", data["continuous"], categorical=False, color="plasma")
+        viz.add_label("name", data["labels"])
+
+        scatter = viz.to_widget(controls=True)
+        shown = scatter.show()
+
+        assert isinstance(scatter, _Scatter)
+        assert isinstance(shown, _widgets.VBox)
+
+        controls = shown.children[0]
+        assert isinstance(controls, _widgets.HBox)
+
+        dropdowns = [c for c in controls.children if isinstance(c, _widgets.Dropdown)]
+        assert len(dropdowns) >= 3
+        color_dd = next(dd for dd in dropdowns if dd.description == "Color:")
+        filter_dd = next(dd for dd in dropdowns if dd.description == "Filter:")
+        value_dd = next(dd for dd in dropdowns if dd.description == "Value:")
+
+        assert color_dd.value == "rings"
+        color_dd.value = "mw"
+        assert scatter.color()["by"] == "mw"
+
+        filter_dd.value = "rings"
+        assert value_dd.disabled is False
+        value_dd.value = 2
+        filtered = scatter.widget.filter
+        assert filtered is not None
+        assert len(filtered) == 25
+
+        filter_dd.value = "None"
+        assert scatter.widget.filter is None
+
+    @pytest.mark.skipif(not _IPYWIDGETS_AVAILABLE, reason="ipywidgets is not installed")
+    def test_to_widget_controls_false_does_not_add_custom_dropdowns(self, viz_with_data) -> None:
+        """controls=False should not add custom color/filter dropdowns."""
+        viz, data = viz_with_data
+        viz.add_color_layout("rings", [i % 4 for i in range(viz.n_points)], categorical=True)
+        viz.add_color_layout("mw", data["continuous"], categorical=False, color="plasma")
+
+        scatter = viz.to_widget(controls=False)
+        shown = scatter.show()
+
+        if not isinstance(shown, _widgets.VBox):
+            return
+        controls = shown.children[0]
+        if not isinstance(controls, _widgets.HBox):
+            return
+        dropdowns = [
+            c
+            for c in controls.children
+            if isinstance(c, _widgets.Dropdown) and c.description in {"Color:", "Filter:", "Value:"}
+        ]
+        assert dropdowns == []
+
+    @pytest.mark.skipif(not _IPYWIDGETS_AVAILABLE, reason="ipywidgets is not installed")
+    def test_show_controls_true_uses_same_controls_ui(self, viz_with_data) -> None:
+        """show(controls=True) and to_widget(controls=True).show() should match behavior."""
+        viz, data = viz_with_data
+        viz.add_color_layout("rings", [i % 4 for i in range(viz.n_points)], categorical=True)
+        viz.add_color_layout("mw", data["continuous"], categorical=False, color="plasma")
+
+        scatter = viz.show(controls=True)
+        shown = scatter.show()
+        assert isinstance(shown, _widgets.VBox)
+        controls = shown.children[0]
+        assert isinstance(controls, _widgets.HBox)
+        dropdowns = [c for c in controls.children if isinstance(c, _widgets.Dropdown)]
+        color_dd = next(dd for dd in dropdowns if dd.description == "Color:")
+        color_dd.value = "mw"
+        assert scatter.color()["by"] == "mw"
+        assert color_dd.value == "mw"
 
 
 # =============================================================================
@@ -470,48 +593,103 @@ class TestRenderBinary:
 
 
 # =============================================================================
-# save Tests
+# to_html Tests
 # =============================================================================
 
 
-class TestSave:
-    """Tests for save method."""
+class TestToHtml:
+    """Tests for mode selection in to_html."""
 
-    def test_save_creates_file(self, viz_with_data, tmp_path):
-        """save should create HTML file."""
+    def test_to_html_default_uses_render(self, viz_with_data, monkeypatch: pytest.MonkeyPatch):
+        """Default mode should use JSON rendering for small datasets."""
+        viz, _ = viz_with_data
+        calls: list[str] = []
+
+        def _fake_render(template_name: str = "base.html.j2") -> str:
+            calls.append("render")
+            return "json-html"
+
+        def _fake_render_binary(template_name: str = "binary.html.j2") -> str:
+            calls.append("render_binary")
+            return "binary-html"
+
+        monkeypatch.setattr(viz, "render", _fake_render)
+        monkeypatch.setattr(viz, "render_binary", _fake_render_binary)
+
+        html = viz.to_html()
+        assert html == "json-html"
+        assert calls == ["render"]
+
+    def test_to_html_mode_binary(self, viz_with_data, monkeypatch: pytest.MonkeyPatch):
+        """mode='binary' should always select binary rendering."""
+        viz, _ = viz_with_data
+        calls: list[str] = []
+
+        def _fake_render(template_name: str = "base.html.j2") -> str:
+            calls.append("render")
+            return "json-html"
+
+        def _fake_render_binary(template_name: str = "binary.html.j2") -> str:
+            calls.append("render_binary")
+            return "binary-html"
+
+        monkeypatch.setattr(viz, "render", _fake_render)
+        monkeypatch.setattr(viz, "render_binary", _fake_render_binary)
+
+        html = viz.to_html(mode="binary")
+        assert html == "binary-html"
+        assert calls == ["render_binary"]
+
+    def test_to_html_invalid_mode_raises(self, viz_with_data):
+        """Invalid mode should raise ValueError."""
+        viz, _ = viz_with_data
+        with pytest.raises(ValueError, match="mode must be one of"):
+            viz.to_html(mode="invalid")  # type: ignore[arg-type]
+
+
+# =============================================================================
+# write_html Tests
+# =============================================================================
+
+
+class TestWriteHtml:
+    """Tests for write_html method."""
+
+    def test_write_html_creates_file(self, viz_with_data, tmp_path):
+        """write_html should create HTML file."""
         viz, data = viz_with_data
         viz.title = "test_output"
 
-        output_path = viz.save(tmp_path)
+        output_path = viz.write_html(tmp_path)
 
         assert output_path.exists()
         assert output_path.name == "test_output.html"
 
-    def test_save_adds_html_extension(self, viz_with_data, tmp_path):
-        """save should add .html extension if missing."""
+    def test_write_html_adds_html_extension(self, viz_with_data, tmp_path):
+        """write_html should add .html extension if missing."""
         viz, data = viz_with_data
         viz.title = "my_viz"
 
-        output_path = viz.save(tmp_path)
+        output_path = viz.write_html(tmp_path)
 
         assert output_path.suffix == ".html"
 
-    def test_save_preserves_existing_extension(self, viz_with_data, tmp_path):
-        """save should preserve .html extension if present."""
+    def test_write_html_preserves_existing_extension(self, viz_with_data, tmp_path):
+        """write_html should preserve .html extension if present."""
         viz, data = viz_with_data
         viz.title = "my_viz.html"
 
-        output_path = viz.save(tmp_path)
+        output_path = viz.write_html(tmp_path)
 
         assert output_path.name == "my_viz.html"
         assert not output_path.name.endswith(".html.html")
 
-    def test_save_force_binary(self, viz_with_data, tmp_path):
-        """force_binary should use binary mode."""
+    def test_write_html_mode_binary(self, viz_with_data, tmp_path):
+        """mode='binary' should use binary mode."""
         viz, data = viz_with_data
         viz.title = "binary_output"
 
-        output_path = viz.save(tmp_path, force_binary=True)
+        output_path = viz.write_html(tmp_path, mode="binary")
 
         assert output_path.exists()
 
@@ -869,15 +1047,15 @@ class TestBinaryThreshold:
         """BINARY_THRESHOLD should be 500,000."""
         assert BINARY_THRESHOLD == 500_000
 
-    def test_save_uses_threshold(self, tmp_path):
-        """save should use threshold to choose mode."""
+    def test_write_html_uses_threshold(self, tmp_path):
+        """write_html should use threshold to choose mode."""
         # Create small dataset
         viz = TmapViz()
         viz.title = "small"
         viz.set_points([0.0, 1.0], [0.0, 1.0])
 
         # Should use JSON mode (below threshold)
-        output = viz.save(tmp_path, binary_threshold=100)
+        output = viz.write_html(tmp_path, binary_threshold=100)
 
         content = output.read_text()
         # JSON mode includes points as array

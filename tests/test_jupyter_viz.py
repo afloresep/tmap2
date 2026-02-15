@@ -173,11 +173,12 @@ class TestToJscatter:
         with pytest.raises(ValueError, match="not a column"):
             to_jscatter(embedding, color_by="nonexistent")
 
-    def test_lazy_import(self) -> None:
-        """from tmap.visualization import to_jscatter works."""
-        from tmap.visualization import to_jscatter
+    def test_to_jscatter_not_public_on_visualization_module(self) -> None:
+        """to_jscatter should not be exposed from tmap.visualization public API."""
+        import tmap.visualization as viz_mod
 
-        assert callable(to_jscatter)
+        with pytest.raises(AttributeError):
+            _ = viz_mod.to_jscatter
 
 
 # ---------- TMAP.plot() tests ----------
@@ -244,3 +245,32 @@ class TestTMAPPlot:
 
         scatter = model.plot(show=False)
         assert isinstance(scatter, _Scatter)
+
+
+class TestDisplayHelper:
+    def test_display_scatter_prefers_show_when_flag_is_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When requested, helper should render through show(buttons=[])."""
+        from tmap.visualization.jupyter import _display_scatter
+
+        class _DummyScatter:
+            def __init__(self) -> None:
+                self.widget = object()
+                self._tmap_prefers_show = True
+                self.show_calls: list[object] = []
+
+            def show(self, buttons=None):
+                self.show_calls.append(buttons)
+                return "shown-widget"
+
+        dummy = _DummyScatter()
+        displayed: list[object] = []
+
+        monkeypatch.setattr("IPython.get_ipython", lambda: object())
+        monkeypatch.setattr("IPython.display.display", lambda widget: displayed.append(widget))
+
+        _display_scatter(dummy, controls=False)
+
+        assert dummy.show_calls == [[]]
+        assert displayed == ["shown-widget"]

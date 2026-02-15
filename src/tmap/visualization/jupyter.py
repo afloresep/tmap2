@@ -80,7 +80,15 @@ def _display_scatter(scatter: Any, *, controls: bool = False) -> None:
     if _get_ipython() is None:  # type: ignore[no-untyped-call]
         return
 
-    widget = scatter.show() if controls else scatter.widget
+    prefer_show = bool(getattr(scatter, "_tmap_prefers_show", False))
+    if controls:
+        widget = scatter.show()
+    elif prefer_show:
+        # Render via show(buttons=[]) to preserve custom wrappers around
+        # scatter.show() while keeping jscatter toolbar hidden by default.
+        widget = scatter.show(buttons=[])
+    else:
+        widget = scatter.widget
     display(widget)  # type: ignore[no-untyped-call]
 
 

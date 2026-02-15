@@ -29,11 +29,18 @@ def test_fit_transform_returns_embedding_shape_and_dtype() -> None:
     data = _clustered_binary_data()
     model = TMAP(n_neighbors=5, n_permutations=64, seed=123)
 
-    coords = model.fit_transform(data)
+    x, y, s, t = model.fit_transform(data)
 
-    assert coords.shape == (data.shape[0], 2)
-    assert coords.dtype == np.float32
-    np.testing.assert_array_equal(coords, model.embedding_)
+    assert x.shape == (data.shape[0],)
+    assert y.shape == (data.shape[0],)
+    assert s.shape == (len(model.tree_.edges),)
+    assert t.shape == (len(model.tree_.edges),)
+    assert x.dtype == np.float32
+    assert y.dtype == np.float32
+    np.testing.assert_array_equal(x, model.embedding_[:, 0])
+    np.testing.assert_array_equal(y, model.embedding_[:, 1])
+    np.testing.assert_array_equal(s, model.tree_.edges[:, 0])
+    np.testing.assert_array_equal(t, model.tree_.edges[:, 1])
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
@@ -120,6 +127,30 @@ def test_graph_layout_with_precomputed_knn() -> None:
 
     assert model.embedding_.shape == (4, 2)
     assert model.tree_ is not None
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_jaccard_knn_is_stable_across_layout_seeds_by_default() -> None:
+    data = _clustered_binary_data(n_samples=80, n_features=256, seed=321)
+
+    model_seed_1 = TMAP(n_neighbors=8, n_permutations=128, seed=1).fit(data)
+    model_seed_42 = TMAP(n_neighbors=8, n_permutations=128, seed=42).fit(data)
+
+    np.testing.assert_array_equal(model_seed_1.graph_.indices, model_seed_42.graph_.indices)
+    np.testing.assert_allclose(model_seed_1.graph_.distances, model_seed_42.graph_.distances)
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_jaccard_knn_changes_when_minhash_seed_changes() -> None:
+    data = _clustered_binary_data(n_samples=80, n_features=256, seed=321)
+
+    model_seed_1 = TMAP(n_neighbors=8, n_permutations=128, seed=1, minhash_seed=1).fit(data)
+    model_seed_42 = TMAP(n_neighbors=8, n_permutations=128, seed=42, minhash_seed=42).fit(data)
+
+    same_indices = np.array_equal(model_seed_1.graph_.indices, model_seed_42.graph_.indices)
+    same_distances = np.allclose(model_seed_1.graph_.distances, model_seed_42.graph_.distances)
+
+    assert not (same_indices and same_distances)
 
 
 def test_invalid_layout_raises() -> None:
