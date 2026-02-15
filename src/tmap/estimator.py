@@ -249,7 +249,12 @@ class TMAP:
         """Fit and return 2D coordinates with shape (n_samples, 2)."""
         self.fit(X, knn_graph=knn_graph)
         # Return x,y coordinates  + s,t edges
-        return (self.embedding_[:, 0], self.embedding_[:, 1], self.tree_.edges[:, 0], self.tree_.edges[:, 1])
+        return (
+            self.embedding_[:, 0],
+            self.embedding_[:, 1],
+            self.tree_.edges[:, 0],
+            self.tree_.edges[:, 1],
+        )
 
     def transform(self, X: Any) -> NDArray[np.float32]:
         """Embed new points into an existing embedding."""
