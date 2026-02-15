@@ -260,7 +260,8 @@ class TmapViz:
     """Interactive scatter-plot visualization backed by regl-scatterplot.
 
     Supports continuous and categorical color layouts, label tooltips,
-    and optional SMILES molecule rendering. Outputs self-contained HTML.
+    and optional SMILES molecule rendering. Supports both HTML export
+    (``to_html()``, ``write_html()``) and notebook widgets (``to_widget()``, ``show()``).
 
     Attributes:
         title: Page title and default filename stem.
@@ -440,6 +441,60 @@ class TmapViz:
         """Return labels added."""
         return [self._columns[labels] for labels in self._labels_keys]
 
+    def to_dataframe(
+        self,
+        *,
+        include_coords: bool = True,
+        x_col: str = "_tmap_x",
+        y_col: str = "_tmap_y",
+    ) -> Any:
+        """Return visualization metadata as a pandas DataFrame.
+
+        This is useful for advanced notebook workflows where jscatter controls
+        (search, filtering, callbacks) need direct access to metadata.
+
+        Args:
+            include_coords: If True, include normalized coordinates.
+            x_col: Column name for x coordinate when ``include_coords=True``.
+            y_col: Column name for y coordinate when ``include_coords=True``.
+
+        Returns:
+            ``pandas.DataFrame`` with one row per point.
+        """
+        import pandas as pd  # type: ignore[import-untyped]
+
+        n_rows = len(self._points_array) if self._points_array is not None else 0
+        if n_rows == 0 and self._columns:
+            first_column = next(iter(self._columns.values()))
+            n_rows = len(first_column.values)
+
+        for col in self._columns.values():
+            if len(col.values) != n_rows:
+                raise ValueError(
+                    f"Column '{col.name}' has {len(col.values)} values but there are "
+                    f"{n_rows} points"
+                )
+
+        if self._columns:
+            df = pd.DataFrame({name: col.values for name, col in self._columns.items()})
+        else:
+            df = pd.DataFrame(index=pd.RangeIndex(n_rows))
+
+        if include_coords:
+            if self._points_array is None:
+                raise ValueError("Call set_points() before include_coords=True.")
+            if x_col == y_col:
+                raise ValueError("x_col and y_col must be different names.")
+            if x_col in df.columns or y_col in df.columns:
+                raise ValueError(
+                    f"Coordinate columns '{x_col}'/'{y_col}' conflict with existing metadata columns."
+                )
+            coords = self._points_array.astype(np.float32, copy=False)
+            df[x_col] = coords[:, 0]
+            df[y_col] = coords[:, 1]
+
+        return df
+
     def set_edges(
         self,
         s: list[int] | NDArray[np.unsignedinteger],
@@ -541,20 +596,20 @@ class TmapViz:
                     f"{len(self._points)} points"
                 )
 
-    def to_jupyter(
+    def to_widget(
         self,
-        layout: str | None = None,
         *,
         width: int | str = 800,
         height: int = 420,
+        controls: bool = True,
     ) -> Any:
-        """Create a jupyter-scatter view from the current ``TmapViz`` state.
+        """Create a jupyter-scatter widget from the current ``TmapViz`` state.
 
         Args:
-            layout: Optional color layout name to visualize. If omitted and at
-                least one layout exists, the first layout is used.
             width: Widget width in pixels or ``"auto"``.
             height: Widget height in pixels.
+            controls: If True, expose color and categorical filter controls
+                when rendering via ``scatter.show()``.
 
         Returns:
             Configured ``jscatter.Scatter`` instance.
@@ -570,20 +625,20 @@ class TmapViz:
                     f"{n_points} points"
                 )
 
-        if layout is not None and layout not in self._layout_keys:
-            raise ValueError(f"Unknown layout '{layout}'. Available layouts: {self._layout_keys}")
-
         from tmap.visualization.jupyter import to_jscatter
 
-        import pandas as pd  # type: ignore[import-untyped]
+        import pandas as pd
 
-        selected_layout = layout
-        if selected_layout is None and self._layout_keys:
-            selected_layout = self._layout_keys[0]
+        selected_layout = self._layout_keys[0] if self._layout_keys else None
 
         data_df: pd.DataFrame | None = None
         if self._columns:
-            data_df = pd.DataFrame({name: col.values for name, col in self._columns.items()})
+            data_df = self.to_dataframe(include_coords=False)
+            # Preserve categorical intent for all declared categorical layouts so
+            # interactive layout switching can keep categorical color scaling.
+            for name, col in self._columns.items():
+                if col.dtype == "categorical" and name in data_df.columns:
+                    data_df[name] = pd.Series(data_df[name], index=data_df.index).astype("category")
 
         color_map: str | list[str] | dict[str, str] | None = None
         if selected_layout is not None:
@@ -614,14 +669,189 @@ class TmapViz:
                 stacklevel=2,
             )
 
+        if controls:
+            self._attach_controls_to_show(
+                scatter,
+                data_df=data_df,
+                selected_layout=selected_layout,
+            )
+            # Hint notebook display helper to use scatter.show() when controls
+            # are requested.
+            scatter._tmap_prefers_show = True
+
         return scatter
 
-    def render(self, template_name: str = "base.html.j2") -> str:
-        """Return the full HTML string for the visualization.
+    def _attach_controls_to_show(
+        self,
+        scatter: Any,
+        *,
+        data_df: Any | None,
+        selected_layout: str | None,
+    ) -> None:
+        """Patch ``scatter.show()`` to include color and filter controls."""
+        original_show = scatter.show
+        layout_options = tuple(self._layout_keys)
+        if data_df is None:
+            # No metadata columns available for color/filter controls.
+            return
+        categorical_filter_values: dict[str, list[Any]] = {}
+        for name, col in self._columns.items():
+            if col.dtype != "categorical" or name not in data_df.columns:
+                continue
+            series = data_df[name]
+            if hasattr(series, "cat"):
+                values = [v for v in series.cat.categories.tolist() if v == v]  # drop NaN
+            else:
+                values = [v for v in series.dropna().unique().tolist()]
+            if values:
+                categorical_filter_values[name] = values
 
-        Note: Most users should use save() instead, which handles file I/O
-        and automatically selects the optimal encoding. This method is useful
-        for advanced use cases like serving HTML directly in web applications.
+        def _show_with_layout_selector(*args: Any, **kwargs: Any) -> Any:
+            base_widget = original_show(*args, **kwargs)
+            try:
+                import ipywidgets as widgets  # type: ignore[import-untyped]
+            except ImportError:
+                return base_widget
+
+            controls_row: list[Any] = []
+
+            current_layout = scatter.color().get("by")
+            initial_layout = current_layout if current_layout in layout_options else selected_layout
+            if initial_layout is None and layout_options:
+                initial_layout = layout_options[0]
+
+            if layout_options:
+                color_dd = widgets.Dropdown(
+                    options=list(layout_options),
+                    value=initial_layout,
+                    description="Color:",
+                )
+
+                def _on_layout_change(change: dict[str, Any]) -> None:
+                    layout_name = change["new"]
+                    cmap = self._columns[layout_name].color
+                    scatter.color(by=layout_name, map=cmap)
+                    scatter.legend(True)
+
+                color_dd.observe(_on_layout_change, names="value")
+                controls_row.append(color_dd)
+
+            if categorical_filter_values:
+                filter_col_dd = widgets.Dropdown(
+                    options=["None"] + list(categorical_filter_values.keys()),
+                    value="None",
+                    description="Filter:",
+                )
+                filter_val_dd = widgets.Dropdown(
+                    options=["All"],
+                    value="All",
+                    description="Value:",
+                    disabled=True,
+                )
+
+                def _apply_filter() -> None:
+                    col = filter_col_dd.value
+                    val = filter_val_dd.value
+                    if col == "None" or val == "All":
+                        scatter.filter(None)
+                        return
+                    idxs = np.flatnonzero(data_df[col].to_numpy() == val).tolist()
+                    scatter.filter(idxs)
+
+                def _on_filter_col_change(change: dict[str, Any]) -> None:
+                    col = change["new"]
+                    if col == "None":
+                        filter_val_dd.options = ["All"]
+                        filter_val_dd.value = "All"
+                        filter_val_dd.disabled = True
+                        scatter.filter(None)
+                        return
+
+                    values = categorical_filter_values[col]
+                    filter_val_dd.options = values
+                    filter_val_dd.disabled = False
+                    filter_val_dd.value = values[0]
+                    _apply_filter()
+
+                def _on_filter_value_change(change: dict[str, Any]) -> None:
+                    if filter_col_dd.value == "None":
+                        return
+                    if change["new"] is None:
+                        return
+                    _apply_filter()
+
+                filter_col_dd.observe(_on_filter_col_change, names="value")
+                filter_val_dd.observe(_on_filter_value_change, names="value")
+                controls_row.extend([filter_col_dd, filter_val_dd])
+
+            if not controls_row:
+                return base_widget
+            return widgets.VBox([widgets.HBox(controls_row), base_widget])
+
+        scatter.show = _show_with_layout_selector
+
+    def show(
+        self,
+        *,
+        width: int | str = 800,
+        height: int = 420,
+        controls: bool = True,
+    ) -> Any:
+        """Display the notebook widget and return the configured scatter object.
+
+        Args:
+            width: Widget width in pixels or ``"auto"``.
+            height: Widget height in pixels.
+            controls: If True, include color/filter controls and display
+                jscatter controls.
+
+        Returns:
+            Configured ``jscatter.Scatter`` instance.
+        """
+        from tmap.visualization.jupyter import _display_scatter
+
+        scatter = self.to_widget(width=width, height=height, controls=controls)
+        _display_scatter(scatter, controls=controls)
+        return scatter
+
+    def to_html(
+        self,
+        *,
+        mode: Literal["auto", "json", "binary"] = "auto",
+        binary_threshold: int = BINARY_THRESHOLD,
+    ) -> str:
+        """Return HTML string for the current visualization state.
+
+        Args:
+            mode: HTML encoding mode:
+                - ``"auto"``: choose based on ``binary_threshold``.
+                - ``"json"``: force JSON mode.
+                - ``"binary"``: force binary mode.
+            binary_threshold: Point count above which binary mode is used
+                when ``mode="auto"``.
+
+        Returns:
+            Full HTML document as a string.
+        """
+        if mode not in {"auto", "json", "binary"}:
+            raise ValueError("mode must be one of {'auto', 'json', 'binary'}.")
+
+        if mode == "json":
+            return self.render()
+        if mode == "binary":
+            return self.render_binary()
+
+        n_points = len(self._points) if self._points else 0
+        use_binary = n_points > binary_threshold
+        if use_binary:
+            return self.render_binary()
+        return self.render()
+
+    def render(self, template_name: str = "base.html.j2") -> str:
+        """Return the full HTML string in JSON mode.
+
+        This method is intended for advanced use cases where a specific template
+        is required.
 
         Args:
             template_name: Name of the Jinja2 template to use.
@@ -629,7 +859,7 @@ class TmapViz:
                            future templates like "smiles.html.j2".
 
         Returns:
-            HTML string ready to be written to a file or served
+            HTML string ready to be written to a file or served.
         """
         if not self._points:
             raise ValueError("Call set_points() before rendering.")
@@ -715,8 +945,8 @@ class TmapViz:
     def render_binary(self, template_name: str = "binary.html.j2") -> str:
         """Return HTML string using binary encoding for large datasets.
 
-        Note: Most users should use save() instead, which automatically selects
-        binary mode when appropriate. This method is for advanced use cases.
+        This method is for advanced use cases where a specific template
+        is required.
 
         This method uses:
         - Uint16 quantized coordinates (4x smaller than JSON)
@@ -729,7 +959,7 @@ class TmapViz:
             template_name: Name of the Jinja2 template to use.
 
         Returns:
-            HTML string with binary-encoded data
+            HTML string with binary-encoded data.
         """
         if self._points_array is None:
             raise ValueError("Call set_points() before rendering.")
@@ -850,32 +1080,36 @@ class TmapViz:
             runtime_scatterplot=runtime["scatterplot"],
         )
 
-    def save(
+    def write_html(
         self,
         path: str | Path,
+        *,
+        mode: Literal["auto", "json", "binary"] = "auto",
         binary_threshold: int = BINARY_THRESHOLD,
-        force_binary: bool = False,
     ) -> Path:
         """Write HTML to disk and return the path.
 
-        This is the primary method for saving visualizations. It automatically
+        This is the primary method for exporting visualizations. It automatically
         selects binary mode for large datasets (>500k points by default).
 
         Args:
             path: Either a full file path (ending in .html) or a directory path.
                   - If a file path: saves to that exact location
                   - If a directory: uses self.title as the filename
+            mode: HTML encoding mode:
+                - ``"auto"``: choose based on ``binary_threshold``.
+                - ``"json"``: force JSON mode.
+                - ``"binary"``: force binary mode.
             binary_threshold: Point count above which binary mode is used.
-                              Default is 500,000 points.
-            force_binary: If True, always use binary mode regardless of size.
+                              Only used when ``mode="auto"``.
 
         Returns:
             Path to the saved file
 
         Examples:
-            >>> viz.save("output.html")  # Saves to output.html
-            >>> viz.save("results/")     # Saves to results/{title}.html
-            >>> viz.save("results/viz.html")  # Saves to results/viz.html
+            >>> viz.write_html("output.html")  # Saves to output.html
+            >>> viz.write_html("results/")     # Saves to results/{title}.html
+            >>> viz.write_html("results/viz.html")  # Saves to results/viz.html
         """
         path = Path(path)
 
@@ -897,14 +1131,7 @@ class TmapViz:
         # Create parent directory if needed
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Auto-select rendering mode based on dataset size
-        n_points = len(self._points) if self._points else 0
-        use_binary = force_binary or n_points > binary_threshold
-
-        if use_binary:
-            html = self.render_binary()
-        else:
-            html = self.render()
+        html = self.to_html(mode=mode, binary_threshold=binary_threshold)
 
         output_path.write_text(html, encoding="utf-8")
         return output_path

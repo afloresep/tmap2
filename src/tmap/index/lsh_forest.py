@@ -13,7 +13,7 @@ which is the core algorithm for TMAP's fingerprint-based visualization.
 from __future__ import annotations
 
 import pickle
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -30,9 +30,6 @@ from ._lsh_numba import (
     weighted_jaccard_distance,
 )
 from .types import KNNGraph
-
-if TYPE_CHECKING:
-    pass
 
 __all__ = ["LSHForest"]
 
@@ -489,7 +486,8 @@ class LSHForest:
         """
         Construct the k-nearest neighbor graph of all indexed signatures.
 
-        This is the primary output method - produces input for MSTBuilder.
+        This is the primary output method - produces input for OGDF layout
+        and MST construction APIs.
         Uses Numba-accelerated parallel operations throughout.
 
         Args:
