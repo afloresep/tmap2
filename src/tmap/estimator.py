@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from tmap.visualization import TmapViz
 
 # Experimental graph-mode sparsification defaults.
-# Keep these internal until graph mode is fully stabilized.
+# these are internal until i figure out the graph mode and is fully stabilized.
 _GRAPH_LAYOUT_REQUIRE_MUTUAL_DEFAULT = True
 _GRAPH_LAYOUT_MAX_DEGREE_DEFAULT = 8
 
@@ -65,8 +65,12 @@ class TMAP:
         Candidate multiplier for LSH queries. The forest retrieves
         ``k * kc`` candidates before linear scan. Higher values improve
         recall at the cost of speed.
-    seed : int, default=1
-        Random seed for reproducibility.
+    seed : int, default=42
+        Random seed for OGDF layout reproducibility.
+    minhash_seed : int, default=42
+        Random seed for MinHash permutation generation when
+        ``metric='jaccard'``. Keep this fixed to make k-NN graph topology
+        stable while varying ``seed`` for layout initialization.
     mst_bias : float, default=0.0
         Reserved for low-level MST tuning. The high-level ``TMAP`` estimator
         currently ignores this value.
@@ -119,7 +123,8 @@ class TMAP:
         metric: str = "jaccard",
         n_permutations: int = 512,
         kc: int = 10,
-        seed: int = 1,
+        seed: int = 42,
+        minhash_seed: int = 42,
         mst_bias: float = 0.0,
         layout: str = "tree",
         layout_iterations: int = 1000,
@@ -151,6 +156,7 @@ class TMAP:
         self.n_permutations = n_permutations
         self.kc = kc
         self.seed = seed
+        self.minhash_seed = minhash_seed
         self.mst_bias = mst_bias
         self.layout = layout
         self.layout_iterations = layout_iterations
@@ -187,7 +193,7 @@ class TMAP:
                     f"n_neighbors={self.n_neighbors} must be < n_samples={binary_matrix.shape[0]}"
                 )
 
-            encoder = MinHash(num_perm=self.n_permutations, seed=self.seed)
+            encoder = MinHash(num_perm=self.n_permutations, seed=self.minhash_seed)
             signatures = encoder.batch_from_binary_array(binary_matrix)
 
             forest = LSHForest(d=self.n_permutations)
@@ -222,7 +228,7 @@ class TMAP:
                 max_degree=min(self._graph_mode_max_degree, knn.k),
                 mutual=self._graph_mode_mutual,
             )
-            x, y, _, _ = layout_from_edge_list(
+            x, y, s, t = layout_from_edge_list(
                 knn.n_nodes,
                 edges,
                 config=config,
@@ -239,10 +245,11 @@ class TMAP:
         X: Any | None = None,
         *,
         knn_graph: KNNGraph | None = None,
-    ) -> NDArray[np.float32]:
+    ) -> Tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.int32], NDArray[np.int32]]:
         """Fit and return 2D coordinates with shape (n_samples, 2)."""
         self.fit(X, knn_graph=knn_graph)
-        return self.embedding_
+        # Return x,y coordinates  + s,t edges
+        return (self.embedding_[:, 0], self.embedding_[:, 1], self.tree_.edges[:, 0], self.tree_.edges[:, 1])
 
     def transform(self, X: Any) -> NDArray[np.float32]:
         """Embed new points into an existing embedding."""
@@ -311,7 +318,7 @@ class TMAP:
         viz = self.to_tmapviz(include_edges=include_edges)
         if title is not None:
             viz.title = title
-        return viz.save(path)
+        return viz.write_html(path)
 
     def plot(
         self,
