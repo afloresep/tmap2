@@ -1,3 +1,6 @@
+[![Tests](https://github.com/afloresep/TMAP/actions/workflows/tests.yml/badge.svg)](https://github.com/afloresep/TMAP/actions/workflows/tests.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+
 # TMAP 
 
 > **🚧 UNDER ACTIVE DEVELOPMENT 🚧**
@@ -9,47 +12,70 @@
 > - `layout="tree"` is the supported layout mode.
 > - `layout="graph"` is alpha and not supported for production use.
 
-**TMAP** (Tree-MAP) creates beautiful, interactive visualizations of high-dimensional data by organizing similar items into tree structures. Perfect for chemical space, embeddings, or any high-dimensional dataset.
+**TMAP** creates beautiful, interactive visualizations of high-dimensional data by organizing similar items into tree structures. Perfect for chemical space, embeddings, or any high-dimensional dataset.
 
 ```text
 Your Data → MinHash → LSHForest → k-NN Graph → MST → OGDF Layout → Interactive Visualization
 ```
 
-[![Tests](https://github.com/afloresep/TMAP/actions/workflows/tests.yml/badge.svg)](https://github.com/afloresep/TMAP/actions/workflows/tests.yml)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+## What's New
 
-## What's Working
+### Notebook Controls for Color + Filter
 
-**Core Pipeline**
+![Notebook controls demo](docs/images/ScreenRecording2026-02-15at19.43.12-ezgif.com-video-to-gif-converter.gif)
 
-- ✅ `MinHash` / `WeightedMinHash` encoding (via datasketch)
-- ✅ `LSHForest` for fast approximate k-NN search
-- ✅ MST (Minimum Spanning Tree) construction with bias control
-- ✅ OGDF-based tree layout (FastMultipoleEmbedder + Multilevel Mixer)
-- ✅ Interactive HTML visualizations with WebGL rendering
+`TmapViz` now supports built-in notebook controls for:
+- Color layout switching
+- Categorical filtering
+- Lasso/selection workflows with pandas-backed metadata
 
-**Features**
+```python
+scatter = viz.to_widget(width=1000, height=620, controls=True)
+scatter.show()
+```
 
-- ✅ Deterministic, reproducible layouts (fixed seeds)
-- ✅ Handles large datasets (10M+ points with binary encoding)
-- ✅ Multiple color schemes and categorical/continuous data
-- ✅ Easier API, removed Faerun dependency
-- ✅ Improved Visualization: Lasso selection, exporting functions, (partial) search on labels
-- ✅ Removed C++ backend (except for OGDF) while being 3x faster
-- ✅ Many more!
+### Deterministic, Reproducible Layouts
+
+Same input and same seed produce the same topology and coordinates.
+
+```python
+from tmap import TMAP
+
+x, y, s, t = TMAP(seed=42).fit_transform(fingerprints)
+```
+
+### Cleaner Visualization API
+
+Add multiple layouts once, then switch them interactively in the notebook UI:
+
+```python
+viz.add_color_layout("Molecular Weight", mw.tolist(), categorical=False)
+viz.add_color_layout("Number of Rings", n_rings.tolist(), categorical=True, color="tab10")
+viz.add_color_layout("LogP", logp.tolist(), categorical=False, add_as_label=True)
+viz.add_label("SMILES", df.smiles.tolist())
+
+# Includes color/filter controls
+viz.show(width=1000, height=620, controls=True)
+```
+
+### Lasso Selection + DataFrame Integration
+
+![Lasso and dataframe integration](docs/images/ScreenRecording2026-02-15at19.44.43-ezgif.com-video-to-gif-converter.gif)
+
+### Improved Exported HTML
+
+![Interactive HTML features](docs/images/image.png)
+
+### Also Improved
+
+- Handles large datasets (binary mode for compact HTML payloads)
+- Better notebook interactivity via `jupyter-scatter`
+- High-level sklearn-style estimator (`TMAP`) plus lower-level modular pipeline
 
 **In Progress**
 
-- 🚧 Performance benchmarks vs. original TMAP
-- 🚧 Additional layout algorithms
-- 🚧 Adding new points to existing TMAPs
-- 🚧 Adding edges to TMAPs
-
-## Alpha Features
-
-- `TMAP(layout="graph")` is currently alpha.
-- Known behavior includes crashes or hangs on some larger datasets/environments.
-- Use `layout="tree"` for supported workflows.
+- `layout="graph"` stabilization and quality tuning
+- Incremental/add-points workflows
 
 ## 📦 Installation
 
@@ -131,7 +157,10 @@ viz.set_points(x, y)
 viz.add_color_layout("Property", your_property_values, categorical=False)
 
 # Save (auto-selects binary mode for large datasets)
-viz.save("output.html")
+viz.write_html("output.html")
+
+# Notebook mode (optional)
+viz.show(width=1000, height=620, controls=True)
 ```
 
 ### Simpler Example: Just the Layout
