@@ -7,7 +7,6 @@ This module provides a custom Numba-accelerated implementation:
 - Numba JIT for distance computation and linear scan
 
 The LSH Forest is optimized for Jaccard similarity on MinHash signatures,
-which is the core algorithm for TMAP's fingerprint-based visualization.
 """
 
 from __future__ import annotations
@@ -228,7 +227,6 @@ class LSHForest:
         Build/rebuild the LSH forest index.
 
         Must be called after adding signatures with add() or batch_add().
-        This is where the Numba-accelerated hash computation happens.
         """
         if not self._signatures_list:
             # Nothing to index
@@ -488,7 +486,6 @@ class LSHForest:
 
         This is the primary output method - produces input for OGDF layout
         and MST construction APIs.
-        Uses Numba-accelerated parallel operations throughout.
 
         Args:
             k: Number of nearest neighbors per point

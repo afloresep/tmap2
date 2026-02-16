@@ -1,7 +1,6 @@
 """
 Layout module: Compute 2D coordinates for tree visualization.
 
-Quick Start (recommended - matches original TMAP API)
 -----------------------------------------------------
 >>> from tmap import MinHash, LSHForest
 >>> from tmap.layout import layout_from_lsh_forest, LayoutConfig
@@ -34,7 +33,7 @@ Low-level: Direct edge list
 >>> x, y, s, t = layout_from_edge_list(n_nodes, edges, create_mst=True)
 """
 
-# Always available (pure Python)
+# Always available (pure Python)-> TODO: Again probably not good to have pure python
 # OGDF availability (handles editable install quirks internally)
 from tmap.layout._ogdf import _AVAILABLE as OGDF_AVAILABLE
 from tmap.layout.base import Layout

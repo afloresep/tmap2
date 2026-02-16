@@ -1,10 +1,6 @@
 """
 Numba JIT-accelerated MinHash implementation.
 
-This module provides high-performance MinHash computation using Numba's
-just-in-time compilation. For binary fingerprints (1M x 2048-bit), this
-achieves ~50-100x speedup over the pure Python datasketch-based implementation.
-
 Key optimizations:
 1. Vectorized permutation computation across all samples in parallel
 2. Direct index hashing (skips string conversion and SHA1 for binary data)
@@ -13,7 +9,7 @@ Key optimizations:
 Compatibility Notes:
 - Permutation parameters (a, b) match datasketch exactly when using the same seed
 - For binary data: uses indices directly as hash input (faster, valid MinHash)
-- For string data: uses xxhash for fast hashing (different from datasketch's SHA1)
+- For string data: uses xxhash for fast hashing (different from datasketch's SHA1) -> TODO: Have to rewrit the string data implementation. Not comparable with others and far slower. Maybe reuse Daniel stuff?
 """
 
 import numpy as np
@@ -28,7 +24,7 @@ except ImportError:
     NUMBA_AVAILABLE = False
     prange = range  # fallback for type checking
 
-# Constants matching datasketch exactly
+# Constants matching
 MERSENNE_PRIME = np.uint64((1 << 61) - 1)
 MAX_HASH = np.uint64((1 << 32) - 1)
 
@@ -75,7 +71,7 @@ if NUMBA_AVAILABLE:
         for p in range(num_perm):
             min_hash = MAX_HASH
             for idx in indices:
-                # Universal hash: (a * x + b) mod prime, then mask to 32 bits
+                # Universal hash: (a * x + b) mod prime, then mask to 32 bits NOTE: mask to 32bits for compatibility but makes sense to keep 64bit as intermediary for num. stability (e.g.MERSENNE_PRIME)
                 h = np.uint64((a[p] * np.uint64(idx) + b[p]) % MERSENNE_PRIME) & MAX_HASH
                 if h < min_hash:
                     min_hash = h
@@ -163,7 +159,7 @@ if NUMBA_AVAILABLE:
 
         return signatures
 
-    # Simple polynomial hash for strings (much faster than SHA1)
+    # Simple polynomial hash for strings (much faster than SHA1) -> TODO: Again, probably this way instead of datasketch (SHA1)
     @numba.njit(cache=True)
     def _polynomial_hash(s: bytes) -> np.uint64:
         """Fast polynomial rolling hash for a byte string."""
@@ -172,7 +168,7 @@ if NUMBA_AVAILABLE:
             h = h * np.uint64(31) + np.uint64(c)
         return h & MAX_HASH
 
-else:
+else:  # TODO: Probably remove this part bc Numba is core dependency  this was done for the initial versions
     # Fallback implementations when Numba is not available
     def _minhash_single_sample(
         indices: NDArray[np.int64],
