@@ -182,8 +182,8 @@ def layout_from_edge_list(
     )
 
 
-#NOTE: This gives trash tmaps, specially when MST comes from scipy 
-# probably not good idea to keep it 
+# NOTE: This gives trash tmaps, specially when MST comes from scipy
+# probably not good idea to keep it
 def layout_from_tree(
     tree: Tree,
     config: Any | None = None,

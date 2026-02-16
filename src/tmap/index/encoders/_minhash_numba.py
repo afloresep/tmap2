@@ -9,7 +9,7 @@ Key optimizations:
 Compatibility Notes:
 - Permutation parameters (a, b) match datasketch exactly when using the same seed
 - For binary data: uses indices directly as hash input (faster, valid MinHash)
-- For string data: uses xxhash for fast hashing (different from datasketch's SHA1) -> TODO: Have to rewrit the string data implementation. Not comparable with others and far slower. Maybe reuse Daniel stuff? 
+- For string data: uses xxhash for fast hashing (different from datasketch's SHA1) -> TODO: Have to rewrit the string data implementation. Not comparable with others and far slower. Maybe reuse Daniel stuff?
 """
 
 import numpy as np
@@ -168,7 +168,7 @@ if NUMBA_AVAILABLE:
             h = h * np.uint64(31) + np.uint64(c)
         return h & MAX_HASH
 
-else: #TODO: Probably remove this part bc Numba is core dependency  this was done for the initial versions
+else:  # TODO: Probably remove this part bc Numba is core dependency  this was done for the initial versions
     # Fallback implementations when Numba is not available
     def _minhash_single_sample(
         indices: NDArray[np.int64],

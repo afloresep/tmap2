@@ -2,7 +2,7 @@
 Force-directed layout using OGDF.
 
 This implements the Layout ABC using OGDF's FastMultipoleEmbedder
-with ModularMultilevelMixer 
+with ModularMultilevelMixer
 """
 
 from __future__ import annotations

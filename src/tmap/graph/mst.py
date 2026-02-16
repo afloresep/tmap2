@@ -111,8 +111,9 @@ def _reduce_sorted_min(
         )
     return _reduce_sorted_min_numpy(keys, u, v, w)
 
+
 # not very good so far
-# TODO: rewrite MSTBUilder 
+# TODO: rewrite MSTBUilder
 class MSTBuilder:
     """
     Build MST from k-NN graph.
@@ -197,7 +198,7 @@ class MSTBuilder:
         weights = weights[valid]
 
         """A bit hacky so far. Def can be improved. scipy is slow"""
-         # Apply rank bias directly on directed edges before undirected reduction.
+        # Apply rank bias directly on directed edges before undirected reduction.
         if self.bias_factor > 0:
             ranks = np.tile(np.arange(k, dtype=np.float32), n)[valid]
             weights = weights * (1.0 + self.bias_factor * (ranks / float(k)))
