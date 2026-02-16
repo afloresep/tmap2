@@ -111,7 +111,8 @@ def _reduce_sorted_min(
         )
     return _reduce_sorted_min_numpy(keys, u, v, w)
 
-
+# not very good so far
+# TODO: rewrite MSTBUilder 
 class MSTBuilder:
     """
     Build MST from k-NN graph.
@@ -175,16 +176,13 @@ class MSTBuilder:
         Convert KNNGraph to scipy sparse matrix.
 
         k-NN is directional (i->neighbors[i]), but MST needs undirected edges.
-        We build an undirected edge set by union of directed edges and keep
-        the minimum observed weight per undirected pair.
-
-        This avoids dropping one-way neighbors (a common source of fragmented
-        forests when using strict mutual-kNN intersection).
+        build an undirected edge set by union of directed edges and keep
+        the minimum observed weight per undirected pair which
+        avoids dropping one-way neighbors
         """
         n = knn.n_nodes
         k = knn.k
 
-        # Build directed COO arrays from k-NN table.
         rows = np.repeat(np.arange(n, dtype=np.int32), k)
         cols = np.asarray(knn.indices.ravel(), dtype=np.int32)
         weights = np.asarray(knn.distances.ravel(), dtype=np.float32)
@@ -198,7 +196,8 @@ class MSTBuilder:
         cols = cols[valid]
         weights = weights[valid]
 
-        # Apply rank bias directly on directed edges before undirected reduction.
+        """A bit hacky so far. Def can be improved. scipy is slow"""
+         # Apply rank bias directly on directed edges before undirected reduction.
         if self.bias_factor > 0:
             ranks = np.tile(np.arange(k, dtype=np.float32), n)[valid]
             weights = weights * (1.0 + self.bias_factor * (ranks / float(k)))

@@ -1,10 +1,5 @@
 """
 OGDF integration layer.
-
-This module wraps the C++ extension (_tmap_ogdf) and provides:
-1. Import guard with friendly error messages
-2. Python-friendly convenience functions
-3. Type conversions between tmap types and C++ types
 """
 
 from __future__ import annotations
@@ -143,11 +138,6 @@ def require_ogdf() -> None:
         ) from _IMPORT_ERROR
 
 
-# =============================================================================
-# Convenience functions
-# =============================================================================
-
-
 def layout_from_edge_list(
     vertex_count: int,
     edges: list[tuple[int, int, float]],
@@ -192,6 +182,8 @@ def layout_from_edge_list(
     )
 
 
+#NOTE: This gives trash tmaps, specially when MST comes from scipy 
+# probably not good idea to keep it 
 def layout_from_tree(
     tree: Tree,
     config: Any | None = None,
@@ -241,13 +233,6 @@ def layout_from_lsh_forest(
     """
     Compute 2D layout directly from LSHForest.
 
-    This is the recommended high-level API that matches original TMAP behavior.
-    It builds the k-NN graph internally using config.k and config.kc, then
-    passes the full k-NN graph to OGDF for MST computation and layout.
-
-    This approach ensures better connectivity than pre-computing the MST in Python,
-    because OGDF's MST algorithm operates on the full k-NN graph.
-
     Parameters
     ----------
     lsh_forest : LSHForest
@@ -282,6 +267,12 @@ def layout_from_lsh_forest(
     >>> cfg.node_size = 1/30
     >>> cfg.mmm_repeats = 2
     >>> x, y, s, t = layout_from_lsh_forest(lsh, cfg)
+    """
+
+    """Probably the best way to generate the TMAP
+    relying on OGDF for MST and layout is a better 
+    approach than outsourcing MST to other library 
+    not sure why...
     """
     require_ogdf()
 

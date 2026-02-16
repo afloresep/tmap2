@@ -9,7 +9,7 @@ Performance Notes:
     For binary data, the Numba backend provides 50-100x speedup over datasketch.
     The backend is auto-selected based on input type:
     - Binary arrays → Numba (if available)
-    - String data → datasketch (SHA1 hash compatibility)
+    - String data → datasketch (SHA1 hasH compatibility). NOTE: Probably to be replaced for faster alternatives
 
 API Compatibility:
     All public methods maintain backward compatibility with the original TMAP API.
@@ -101,7 +101,7 @@ class MinHash(Encoder):
         - Binary data uses universal hash function (a*x + b) mod prime
         - String data uses SHA1 hash via datasketch
         - Signatures from binary and string inputs are NOT comparable
-          (different hash functions)
+          (different hash functions)!
     """
 
     def __init__(self, num_perm: int = 128, seed: int = 1):

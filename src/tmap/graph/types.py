@@ -1,15 +1,7 @@
 """
 Type definitions for the graph module.
-
-TREE REPRESENTATION
--------------------
 A tree with N nodes has exactly N-1 edges.
 We store it as edge list + adjacency for efficient traversal.
-
-The Tree class is designed for:
-1. Layout algorithms (need to traverse parent->children)
-2. Insertion (need to find where new nodes attach)
-3. Serialization (save/load for persistence)
 """
 
 from collections.abc import Iterator
@@ -18,6 +10,8 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+
+"""idea is to have the tree class to support DFS, BFS etc. probably not worht keeping """
 
 @dataclass(slots=True)
 class Tree:
@@ -33,7 +27,7 @@ class Tree:
     The tree is stored edge-list style but also builds adjacency
     for efficient traversal.
 
-    DESIGN NOTE: We use arrays, not Python lists
+    NOTE: use arrays, not Python lists
     - Faster for numerical operations
     - Less memory for large trees
     - Easy to serialize (np.save)
@@ -44,7 +38,6 @@ class Tree:
     weights: NDArray[np.float32]  # Shape: (n_edges,)
     root: int = 0
 
-    # Built on demand (not stored/serialized)
     _adjacency: dict[int, list[tuple[int, float]]] = field(
         default_factory=dict,
         repr=False,

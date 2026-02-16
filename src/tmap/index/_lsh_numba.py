@@ -274,29 +274,6 @@ if NUMBA_AVAILABLE:
 
         return result_indices, result_distances
 
-    # =========================================================================
-    # LSH Forest Hash Band Functions (for custom implementation)
-    # =========================================================================
-
-    @numba.njit(cache=True)
-    def _hash_band(values: NDArray[np.uint64]) -> np.uint64:
-        """
-        Hash k uint64 values into a single uint64 using polynomial rolling hash.
-
-        Uses Knuth's multiplicative hash with position mixing for good distribution.
-        """
-        # Golden ratio prime for mixing
-        GOLDEN = np.uint64(0x9E3779B97F4A7C15)
-        h = np.uint64(0)
-        for i in range(len(values)):
-            # Mix value with position-dependent rotation
-            v = values[i]
-            v ^= v >> np.uint64(33)
-            v *= GOLDEN
-            v ^= v >> np.uint64(33)
-            h ^= v + GOLDEN + (h << np.uint64(6)) + (h >> np.uint64(2))
-        return h
-
     @numba.njit(parallel=True, cache=True)
     def compute_hash_bands(
         signatures: NDArray[np.uint64],
@@ -347,8 +324,7 @@ if NUMBA_AVAILABLE:
         """
         Compute L hash bands for weighted MinHash signatures.
 
-        For weighted MinHash, only uses the first column (k values) for LSH lookup,
-        consistent with datasketch behavior.
+        For weighted MinHash, only uses the first column (k values) for LSH looku
 
         Args:
             signatures: (N, d, 2) uint64 array of weighted MinHash signatures
@@ -676,7 +652,7 @@ else:
 
         return result_indices, result_distances
 
-    # Fallback LSH Forest functions
+    # Fallback LSH Forest functions TODO: Remove this part bc Numba is now a core dependency
 
     def compute_hash_bands(
         signatures: NDArray[np.uint64],

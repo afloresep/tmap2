@@ -24,12 +24,6 @@ class EdgeList:
     """
     Generic input format - just a list of weighted edges.
 
-    This is how tmap stays generic: users can provide ANY data
-    as edges. Molecule similarities, paper citations, image distances, etc.
-
-    frozen=True: Makes instances immutable (hashable, safer)
-    slots=True: Memory optimization (Python 3.10+)
-
     Example usage:
         edges = EdgeList(
             edges=[(0, 1, 0.9), (0, 2, 0.7), (1, 2, 0.5)],
@@ -55,18 +49,11 @@ class KNNGraph:
     """
     k-Nearest Neighbor graph as sparse arrays.
 
-    This is the OUTPUT of the Index stage and INPUT to Graph stage.
-
     Storage format (CSR-like, memory efficient):
         indices[i, j] = index of j-th nearest neighbor of node i
         distances[i, j] = distance to that neighbor
 
     Shape: (n_nodes, k) for both arrays
-
-    WHY NOT scipy.sparse?
-    - We always have exactly k neighbors per node (dense in that sense)
-    - These arrays are simpler and faster for our use case
-    - Easy to convert to scipy.sparse if needed later
     """
 
     indices: NDArray[np.int32]  # Shape: (n_nodes, k)

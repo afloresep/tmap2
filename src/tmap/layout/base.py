@@ -1,26 +1,7 @@
 """
 Abstract base class for layout algorithms.
-
-CHOOSING A LAYOUT ALGORITHM
----------------------------
-1. Force-directed (default recommendation):
-   + Natural-looking, respects distances
-   + Handles any tree structure
-   - Slower for large trees
-   - Needs tuning (iterations, forces)
-
-2. Radial:
-   + Fast (O(n) single pass)
-   + Clear hierarchy visualization
-   - Doesn't respect actual distances
-   - Wastes space for unbalanced trees
-
-3. Hierarchical:
-   + Very fast
-   + Clear parent-child relationships
-   - Very sparse for deep trees
-   - Doesn't show similarity at all
-
+TODO: Probably rm this since we're probably not doing another layout
+implementation
 For TMAP-like visualization of high-dimensional data,
 force-directed is usually best because it preserves
 distance relationships.
@@ -139,8 +120,7 @@ class Layout(ABC):
         Returns:
             Updated Coordinates for all nodes
 
-        DESIGN NOTE: Two modes of insertion
-        -----------------------------------
+        NOTE: Two modes of insertion
         1. Local insertion (fast):
            - Only move new nodes and immediate neighbors
            - Existing layout mostly unchanged

@@ -2,7 +2,7 @@
 Force-directed layout using OGDF.
 
 This implements the Layout ABC using OGDF's FastMultipoleEmbedder
-with ModularMultilevelMixer, matching the original TMAP algorithm.
+with ModularMultilevelMixer 
 """
 
 from __future__ import annotations
