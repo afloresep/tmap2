@@ -398,8 +398,8 @@ class TmapViz:
 
     def add_smiles(
         self,
-        name: str,
         values: list[str],
+        name: str = "SMILES", 
     ) -> None:
         """Add a SMILES column for molecular structure visualization.
 
