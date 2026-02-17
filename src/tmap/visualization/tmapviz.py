@@ -276,7 +276,7 @@ class TmapViz:
 
     def __init__(self) -> None:
         self.title: str = "MyTMAP"
-        self.background_color: str = "#7A7A7A"
+        self.background_color: str = "#FFFFFF"
         self.point_color: str = "#4a9eff"
         self.point_size: float = 4.0
         self.opacity: float = 0.85
