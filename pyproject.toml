@@ -30,20 +30,18 @@ dependencies = [
     "jinja2>=3.1",
     "matplotlib>=3.7",
     "pandas>=2.2",
-    "tqdm>=4.66",
-    "jupyter-scatter>=0.22.2",
 ]
 
 [project.optional-dependencies]
+nndescent = ["pynndescent>=0.5"]
 faiss = ["faiss-cpu>=1.7"]
 faiss-gpu = ["faiss-gpu>=1.7"]
-annoy = ["annoy>=1.17"]
-viz = []
-notebook = []
+notebook = ["jupyter-scatter>=0.22.2"]
 all = [
+    "pynndescent>=0.5",
     "faiss-cpu>=1.7",
     "faiss-gpu>=1.7",
-    "annoy>=1.17",
+    "jupyter-scatter>=0.22.2",
 ]
 dev = [
     "pytest>=7.0",
