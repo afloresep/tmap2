@@ -1,21 +1,30 @@
 """
-TODO: ADd support for Annoy, FAISS etc.
 Index module: Nearest-neighbor search data structures.
-We define an abstract base class (Index) that specifies WHAT an index must do,
-then concrete classes (FaissIndex, AnnoyIndex) that specify HOW.
 
-This lets users swap implementations without changing their code:
-    index = FaissIndex(...)   # or AnnoyIndex(...), or custom
-    index.build(data)
-    neighbors = index.query(point, k=10)
+Defines an abstract base class (Index) and concrete backends for kNN search:
+  - LSHForest: MinHash-based locality-sensitive hashing (Jaccard metric)
+  - NNDescentIndex: PyNNDescent approximate NN (cosine/euclidean, pure Python)
+  - FaissIndex: FAISS exact/approximate NN (cosine/euclidean, optional GPU)
+
+Usage:
+    index = FaissIndex(seed=42)       # or NNDescentIndex(...)
+    index.build_from_vectors(data, metric="cosine")
+    knn = index.query_knn(k=10)
 """
 
 from tmap.index.base import Index
 from tmap.index.lsh_forest import LSHForest
 from tmap.index.types import EdgeList, KNNGraph
 
-__all__ = ["Index", "KNNGraph", "EdgeList", "LSHForest"]
+__all__ = ["Index", "KNNGraph", "EdgeList", "LSHForest", "NNDescentIndex", "FaissIndex"]
 
-# Concrete implementations
-# from tmap.index.faiss_index import FaissIndex
-# from tmap.index.annoy_index import AnnoyIndex
+# Optional backends — imported lazily to avoid hard dependency on pynndescent/faiss.
+try:
+    from tmap.index.nndescent import NNDescentIndex
+except ImportError:
+    pass
+
+try:
+    from tmap.index.faiss_index import FaissIndex
+except ImportError:
+    pass
