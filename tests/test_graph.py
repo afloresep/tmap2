@@ -769,3 +769,186 @@ class TestGraphModuleIntegration:
             assert tree.n_nodes == larger_knn.n_nodes
             assert len(tree.edges) <= tree.n_nodes - 1
             assert np.all(tree.weights >= 0)
+
+
+# =============================================================================
+# Helper factories for tree method tests
+# =============================================================================
+
+
+def _make_chain_tree(n: int, weight: float = 1.0) -> Tree:
+    """Chain: 0-1-2-..-(n-1)."""
+    edges = np.array([[i, i + 1] for i in range(n - 1)], dtype=np.int32)
+    weights = np.full(n - 1, weight, dtype=np.float32)
+    return Tree(n_nodes=n, edges=edges, weights=weights, root=0)
+
+
+def _make_star_tree(n: int, weight: float = 1.0) -> Tree:
+    """Star: 0 connected to 1,2,..,n-1."""
+    edges = np.array([[0, i] for i in range(1, n)], dtype=np.int32)
+    weights = np.full(n - 1, weight, dtype=np.float32)
+    return Tree(n_nodes=n, edges=edges, weights=weights, root=0)
+
+
+def _make_disconnected_tree() -> Tree:
+    """Two components: 0-1-2 and 3-4."""
+    edges = np.array([[0, 1], [1, 2], [3, 4]], dtype=np.int32)
+    weights = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    return Tree(n_nodes=5, edges=edges, weights=weights, root=0)
+
+
+# =============================================================================
+# Tree.path() tests
+# =============================================================================
+
+
+class TestTreePath:
+    """Tests for Tree.path()."""
+
+    def test_same_node(self):
+        tree = _make_chain_tree(5)
+        assert tree.path(2, 2) == [2]
+
+    def test_adjacent(self):
+        tree = _make_chain_tree(5)
+        assert tree.path(0, 1) == [0, 1]
+
+    def test_chain_forward(self):
+        tree = _make_chain_tree(5)
+        assert tree.path(0, 4) == [0, 1, 2, 3, 4]
+
+    def test_chain_reverse(self):
+        tree = _make_chain_tree(5)
+        assert tree.path(4, 0) == [4, 3, 2, 1, 0]
+
+    def test_star_through_hub(self):
+        tree = _make_star_tree(5)
+        path = tree.path(1, 3)
+        assert path == [1, 0, 3]
+
+    def test_invalid_from_idx(self):
+        tree = _make_chain_tree(3)
+        with pytest.raises(ValueError, match="from_idx"):
+            tree.path(-1, 1)
+
+    def test_invalid_to_idx(self):
+        tree = _make_chain_tree(3)
+        with pytest.raises(ValueError, match="to_idx"):
+            tree.path(0, 10)
+
+    def test_disconnected_raises(self):
+        tree = _make_disconnected_tree()
+        with pytest.raises(IndexError, match="No path"):
+            tree.path(0, 4)
+
+
+# =============================================================================
+# Tree.distance() tests
+# =============================================================================
+
+
+class TestTreeDistance:
+    """Tests for Tree.distance()."""
+
+    def test_self_distance_zero(self):
+        tree = _make_chain_tree(5, weight=2.0)
+        assert tree.distance(2, 2) == 0.0
+
+    def test_adjacent_distance(self):
+        tree = _make_chain_tree(5, weight=1.5)
+        assert tree.distance(0, 1) == pytest.approx(1.5)
+
+    def test_chain_sum(self):
+        tree = _make_chain_tree(5, weight=1.0)
+        assert tree.distance(0, 4) == pytest.approx(4.0)
+
+    def test_symmetry(self):
+        tree = _make_chain_tree(5, weight=0.5)
+        assert tree.distance(1, 3) == pytest.approx(tree.distance(3, 1))
+
+    def test_non_uniform_weights(self):
+        tree = _make_disconnected_tree()  # weights [1, 2, 3]
+        assert tree.distance(0, 2) == pytest.approx(3.0)  # 1.0 + 2.0
+
+    def test_disconnected_raises(self):
+        tree = _make_disconnected_tree()
+        with pytest.raises(IndexError, match="No path"):
+            tree.distance(0, 4)
+
+
+# =============================================================================
+# Tree.subtree() tests
+# =============================================================================
+
+
+class TestTreeSubtree:
+    """Tests for Tree.subtree()."""
+
+    def test_depth_zero(self):
+        tree = _make_chain_tree(5)
+        assert tree.subtree(2, depth=0) == [2]
+
+    def test_depth_one(self):
+        tree = _make_chain_tree(5)
+        result = tree.subtree(2, depth=1)
+        assert set(result) == {1, 2, 3}
+        assert result[0] == 2  # source first
+
+    def test_unlimited(self):
+        tree = _make_chain_tree(5)
+        result = tree.subtree(0)
+        assert set(result) == {0, 1, 2, 3, 4}
+
+    def test_star_from_hub(self):
+        tree = _make_star_tree(5)
+        result = tree.subtree(0, depth=1)
+        assert set(result) == {0, 1, 2, 3, 4}
+
+    def test_invalid_index(self):
+        tree = _make_chain_tree(3)
+        with pytest.raises(ValueError, match="node_idx"):
+            tree.subtree(10)
+
+
+# =============================================================================
+# Tree.distances_from() tests
+# =============================================================================
+
+
+class TestTreeDistancesFrom:
+    """Tests for Tree.distances_from()."""
+
+    def test_source_zero(self):
+        tree = _make_chain_tree(4, weight=1.0)
+        dists = tree.distances_from(0)
+        np.testing.assert_allclose(dists, [0.0, 1.0, 2.0, 3.0])
+
+    def test_shape_and_dtype(self):
+        tree = _make_chain_tree(5)
+        dists = tree.distances_from(0)
+        assert dists.shape == (5,)
+        assert dists.dtype == np.float32
+
+    def test_middle_start(self):
+        tree = _make_chain_tree(5, weight=1.0)
+        dists = tree.distances_from(2)
+        np.testing.assert_allclose(dists, [2.0, 1.0, 0.0, 1.0, 2.0])
+
+    def test_disconnected_inf(self):
+        tree = _make_disconnected_tree()
+        dists = tree.distances_from(0)
+        assert dists[0] == 0.0
+        assert np.isfinite(dists[1])
+        assert np.isfinite(dists[2])
+        assert np.isinf(dists[3])
+        assert np.isinf(dists[4])
+
+    def test_star_distances(self):
+        tree = _make_star_tree(4, weight=2.0)
+        dists = tree.distances_from(0)
+        np.testing.assert_allclose(dists, [0.0, 2.0, 2.0, 2.0])
+
+    def test_invalid_source(self):
+        tree = _make_chain_tree(3)
+        with pytest.raises(ValueError, match="source"):
+            tree.distances_from(-1)

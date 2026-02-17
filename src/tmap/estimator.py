@@ -22,6 +22,58 @@ if TYPE_CHECKING:
 
 # Experimental graph-mode sparsification defaults.
 # these are internal until i figure out the graph mode and is fully stabilized.
+def _resolve_ann_backend(n_samples: int = 0, seed: int | None = None) -> Any:
+    """Auto-detect and return the best available ANN index.
+
+    For large datasets (n >= 50k), prefers FaissIndex which supports IVF/IVFPQ
+    auto-selection for sub-linear query time.  For small datasets, prefers
+    NNDescentIndex (simpler, no training step).
+
+    Raises ImportError with install instructions if neither is available.
+    """
+    _have_nnd = False
+    _have_faiss = False
+
+    try:
+        import pynndescent  # noqa: F401
+
+        _have_nnd = True
+    except ImportError:
+        pass
+
+    try:
+        import faiss  # noqa: F401
+
+        _have_faiss = True
+    except ImportError:
+        pass
+
+    if not _have_nnd and not _have_faiss:
+        raise ImportError(
+            "metric='cosine' and metric='euclidean' require either pynndescent or faiss. "
+            "Install one with:\n"
+            "  pip install pynndescent\n"
+            "  pip install faiss-cpu"
+        )
+
+    # Large data: prefer FAISS (IVF/IVFPQ auto-selection handles scale)
+    if n_samples >= 50_000 and _have_faiss:
+        from tmap.index.faiss_index import FaissIndex
+
+        return FaissIndex(seed=seed)
+
+    # Small data: prefer NNDescent (simpler, no training)
+    if _have_nnd:
+        from tmap.index.nndescent import NNDescentIndex
+
+        return NNDescentIndex(seed=seed)
+
+    # Fallback: whatever is available
+    from tmap.index.faiss_index import FaissIndex
+
+    return FaissIndex(seed=seed)
+
+
 _GRAPH_LAYOUT_REQUIRE_MUTUAL_DEFAULT = True
 _GRAPH_LAYOUT_MAX_DEGREE_DEFAULT = 8
 
@@ -58,7 +110,8 @@ class TMAP:
         - ``'precomputed'``: X is a square distance matrix. Suitable for
           small datasets (< ~50k points due to O(n^2) memory). For larger
           datasets, compute k-NN externally and pass via ``knn_graph=``.
-        - ``'cosine'``, ``'euclidean'``: Not yet implemented.
+        - ``'cosine'``, ``'euclidean'``: For dense float vectors (e.g. protein
+          embeddings). Requires ``pynndescent`` or ``faiss-cpu``.
     n_permutations : int, default=512
         Number of MinHash permutations. Only used with ``metric='jaccard'``.
     kc : int, default=10
@@ -80,6 +133,11 @@ class TMAP:
         non-MST graph layout for quick cluster-oriented overview.
     layout_iterations : int, default=1000
         Number of iterations for the force-directed layout algorithm.
+    store_index : bool, default=False
+        If True, keep the ANN index in memory after ``fit()``. Access it
+        via ``index_``. Useful for later ``query_point`` calls (e.g.
+        embedding new data). Only applies to ``metric='cosine'`` and
+        ``metric='euclidean'``.
     layout_config : LayoutConfig or None, default=None
         Advanced OGDF layout configuration. Overrides ``layout_iterations``
         and ``seed`` when provided.
@@ -129,6 +187,7 @@ class TMAP:
         layout: str = "tree",
         layout_iterations: int = 1000,
         layout_config: Any | None = None,
+        store_index: bool = False,
     ) -> None:
         if n_neighbors <= 0:
             raise ValueError(f"n_neighbors must be > 0, got {n_neighbors}")
@@ -161,8 +220,10 @@ class TMAP:
         self.layout = layout
         self.layout_iterations = layout_iterations
         self.layout_config = layout_config
+        self.store_index = store_index
 
         self._embedding: NDArray[np.float32] | None = None
+        self._index: Any | None = None
         self._tree: Tree | None = None
         self._graph: KNNGraph | None = None
         self._lsh_forest: LSHForest | None = None
@@ -206,10 +267,18 @@ class TMAP:
             knn = KNNGraph.from_distance_matrix(distance_matrix, k=self.n_neighbors)
             self._lsh_forest = None
         elif self.metric in {"cosine", "euclidean"}:
-            raise NotImplementedError(
-                f"metric={self.metric!r} is not implemented yet. "
-                "Use metric='jaccard' or metric='precomputed'."
+            X_dense = self._coerce_dense_matrix(X)
+            if self.n_neighbors >= X_dense.shape[0]:
+                raise ValueError(
+                    f"n_neighbors={self.n_neighbors} must be < n_samples={X_dense.shape[0]}"
+                )
+            index = _resolve_ann_backend(
+                n_samples=X_dense.shape[0], seed=self.seed
             )
+            index.build_from_vectors(X_dense, metric=self.metric)
+            knn = index.query_knn(k=self.n_neighbors)
+            self._lsh_forest = None
+            self._index = index if self.store_index else None
         else:
             # Defensive fallback; __init__ already validates metrics.
             raise ValueError(f"Unsupported metric {self.metric!r}")
@@ -294,6 +363,16 @@ class TMAP:
             )
         return self._lsh_forest
 
+    @property
+    def index_(self) -> Any:
+        """ANN index retained after fit (only when ``store_index=True``)."""
+        if self._index is None:
+            raise RuntimeError(
+                "No index stored. Use store_index=True when constructing TMAP "
+                "to retain the ANN index after fit()."
+            )
+        return self._index
+
     def to_tmapviz(self, include_edges: bool = True) -> TmapViz:
         """Create a TmapViz object preloaded with fitted coordinates."""
         from tmap.visualization import TmapViz
@@ -341,8 +420,8 @@ class TMAP:
     ) -> Any:
         """Show an interactive scatter plot in a Jupyter notebook.
 
-        Requires the ``jupyter-scatter`` package (installed by default with
-        ``pip install -e .``).
+        Requires the ``jupyter-scatter`` package
+        (``pip install tmap[notebook]``).
 
         Parameters
         ----------
@@ -391,6 +470,117 @@ class TMAP:
             _display_scatter(scatter, controls=controls)
 
         return scatter
+
+    def plot_static(
+        self,
+        *,
+        color_by: Any | None = None,
+        color_map: str | None = None,
+        data: Any | None = None,
+        edges: bool = True,
+        edge_color: str = "#cccccc",
+        edge_alpha: float = 0.3,
+        edge_linewidth: float = 0.3,
+        point_size: float = 1.0,
+        alpha: float = 0.8,
+        ax: Any | None = None,
+        figsize: tuple[float, float] = (8, 8),
+    ) -> Any:
+        """Render the embedding as a static matplotlib scatter plot.
+
+        Parameters
+        ----------
+        color_by : str, array-like, or None
+            Column name in *data*, or a raw array of values.
+        color_map : str or None
+            Matplotlib colormap name.
+        data : DataFrame or None
+            Metadata DataFrame.
+        edges : bool, default True
+            If True, draw tree edges behind the points.
+        edge_color : str, default '#cccccc'
+            Color for edge lines.
+        edge_alpha : float, default 0.3
+            Opacity for edge lines.
+        edge_linewidth : float, default 0.3
+            Line width for edges.
+        point_size : float, default 1.0
+            Marker size.
+        alpha : float, default 0.8
+            Point opacity.
+        ax : matplotlib Axes or None
+            Draw into an existing axes.
+        figsize : tuple, default (8, 8)
+            Figure size when *ax* is None.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+        """
+        from tmap.visualization.static import plot_static
+
+        edge_arr = self.tree_.edges if edges else None
+        return plot_static(
+            self.embedding_,
+            color_by=color_by,
+            color_map=color_map,
+            data=data,
+            edges=edge_arr,
+            edge_color=edge_color,
+            edge_alpha=edge_alpha,
+            edge_linewidth=edge_linewidth,
+            point_size=point_size,
+            alpha=alpha,
+            ax=ax,
+            figsize=figsize,
+        )
+
+    # ------------------------------------------------------------------
+    # Tree exploration convenience methods
+    # ------------------------------------------------------------------
+
+    def path(self, from_idx: int, to_idx: int) -> list[int]:
+        """Shortest path in the tree between two points.
+
+        Delegates to :meth:`Tree.path`.
+
+        Parameters
+        ----------
+        from_idx : int
+            Source point index.
+        to_idx : int
+            Target point index.
+
+        Returns
+        -------
+        list[int]
+            Ordered node indices from source to target (inclusive).
+        """
+        return self.tree_.path(from_idx, to_idx)
+
+    def distance(self, from_idx: int, to_idx: int) -> float:
+        """Sum of edge weights along the tree path between two points.
+
+        Delegates to :meth:`Tree.distance`.
+        """
+        return self.tree_.distance(from_idx, to_idx)
+
+    def distances_from(self, source: int) -> NDArray[np.float32]:
+        """Tree distance from *source* to every other point (pseudotime).
+
+        Delegates to :meth:`Tree.distances_from`.
+
+        Parameters
+        ----------
+        source : int
+            Source point index.
+
+        Returns
+        -------
+        NDArray[np.float32]
+            Array of shape ``(n_samples,)`` with tree distances.
+        """
+        return self.tree_.distances_from(source)
 
     def _tree_from_ogdf_edges(
         self,
@@ -574,3 +764,19 @@ class TMAP:
             raise ValueError("Distance matrix must contain only finite values.")
 
         return distances
+
+    def _coerce_dense_matrix(self, X: Any | None) -> NDArray[np.float32]:
+        if X is None:
+            raise ValueError(f"X cannot be None for metric={self.metric!r}.")
+
+        arr = np.asarray(X, dtype=np.float32)
+        if arr.ndim != 2:
+            raise ValueError(
+                f"metric={self.metric!r} expects a 2D matrix of shape (n_samples, n_features)."
+            )
+        if arr.shape[0] < 2:
+            raise ValueError("Need at least 2 samples.")
+        if not np.all(np.isfinite(arr)):
+            raise ValueError("Input matrix must contain only finite values.")
+
+        return arr

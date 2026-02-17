@@ -94,11 +94,29 @@ def test_jaccard_rejects_non_binary_input() -> None:
         TMAP(metric="jaccard", n_neighbors=1).fit(data)
 
 
-def test_dense_metric_not_implemented() -> None:
+def test_dense_metric_requires_ann_backend() -> None:
+    """Cosine/euclidean should either work (if backend installed) or give ImportError."""
     data = np.random.default_rng(9).random((8, 4), dtype=np.float32)
 
-    with pytest.raises(NotImplementedError, match="not implemented"):
-        TMAP(metric="cosine", n_neighbors=3).fit(data)
+    try:
+        import pynndescent  # noqa: F401
+
+        has_backend = True
+    except ImportError:
+        try:
+            import faiss  # noqa: F401
+
+            has_backend = True
+        except ImportError:
+            has_backend = False
+
+    if has_backend:
+        # Should not raise NotImplementedError anymore
+        model = TMAP(metric="cosine", n_neighbors=3, seed=42).fit(data)
+        assert model.embedding_.shape == (8, 2)
+    else:
+        with pytest.raises(ImportError, match="pynndescent or faiss"):
+            TMAP(metric="cosine", n_neighbors=3).fit(data)
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
@@ -162,3 +180,38 @@ def test_invalid_layout_raises() -> None:
 def test_legacy_lsh_keywords_raise_type_error(kw: dict[str, int]) -> None:
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         TMAP(**kw)
+
+
+# =============================================================================
+# Tree exploration wrapper tests
+# =============================================================================
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_path_delegates_to_tree() -> None:
+    data = _clustered_binary_data()
+    model = TMAP(n_neighbors=5, n_permutations=64, seed=42).fit(data)
+    assert model.path(0, 5) == model.tree_.path(0, 5)
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_distance_delegates_to_tree() -> None:
+    data = _clustered_binary_data()
+    model = TMAP(n_neighbors=5, n_permutations=64, seed=42).fit(data)
+    assert model.distance(0, 5) == model.tree_.distance(0, 5)
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_distances_from_returns_array() -> None:
+    data = _clustered_binary_data()
+    model = TMAP(n_neighbors=5, n_permutations=64, seed=42).fit(data)
+    dists = model.distances_from(0)
+    assert dists.shape == (data.shape[0],)
+    assert dists.dtype == np.float32
+    assert dists[0] == 0.0
+
+
+def test_path_before_fit_raises() -> None:
+    model = TMAP()
+    with pytest.raises(RuntimeError, match="not fitted"):
+        model.path(0, 1)
