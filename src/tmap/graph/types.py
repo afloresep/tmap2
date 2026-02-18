@@ -188,9 +188,7 @@ class Tree:
                     parent_map[neighbor] = node
                     queue.append(neighbor)
 
-        raise IndexError(
-            f"No path from {from_idx} to {to_idx} (disconnected forest)."
-        )
+        raise IndexError(f"No path from {from_idx} to {to_idx} (disconnected forest).")
 
     def distance(self, from_idx: int, to_idx: int) -> float:
         """Sum of edge weights along the unique tree path between two nodes.

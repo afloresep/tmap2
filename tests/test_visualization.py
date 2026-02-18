@@ -354,7 +354,7 @@ class TestAddSmiles:
         """Should add SMILES column."""
         viz, data = viz_with_data
 
-        viz.add_smiles("structure", data["smiles"])
+        viz.add_smiles(data["smiles"],"structure")
 
         assert viz._smiles_column == "structure"
         assert "structure" in [label.name for label in viz.labels]
@@ -363,7 +363,7 @@ class TestAddSmiles:
         """Only one SMILES column should be allowed."""
         viz, data = viz_with_data
 
-        viz.add_smiles("structure1", data["smiles"])
+        viz.add_smiles(data["smiles"], "structure1")
 
         with pytest.raises(ValueError, match="Only one SMILES column"):
             viz.add_smiles("structure2", data["smiles"])
@@ -407,7 +407,7 @@ class TestRender:
     def test_render_with_smiles_uses_smiles_template(self, viz_with_data):
         """Adding SMILES should auto-switch to smiles template."""
         viz, data = viz_with_data
-        viz.add_smiles("structure", data["smiles"])
+        viz.add_smiles(data["smiles"], "structure")
 
         html = viz.render()
 
@@ -1083,9 +1083,7 @@ class TestPlotStatic:
 
     @pytest.fixture
     def embedding(self):
-        return np.column_stack(
-            [np.linspace(-1, 1, 50), np.linspace(-1, 1, 50)]
-        ).astype(np.float32)
+        return np.column_stack([np.linspace(-1, 1, 50), np.linspace(-1, 1, 50)]).astype(np.float32)
 
     def test_returns_axes(self, embedding):
         ax = plot_static(embedding)

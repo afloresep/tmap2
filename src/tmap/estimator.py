@@ -21,6 +21,7 @@ from tmap.layout._ogdf import (
 if TYPE_CHECKING:
     from tmap.visualization import TmapViz
 
+
 # Experimental graph-mode sparsification defaults.
 # these are internal until i figure out the graph mode and is fully stabilized.
 def _resolve_ann_backend(n_samples: int = 0, seed: int | None = None) -> Any:
@@ -273,9 +274,7 @@ class TMAP:
                 raise ValueError(
                     f"n_neighbors={self.n_neighbors} must be < n_samples={X_dense.shape[0]}"
                 )
-            index = _resolve_ann_backend(
-                n_samples=X_dense.shape[0], seed=self.seed
-            )
+            index = _resolve_ann_backend(n_samples=X_dense.shape[0], seed=self.seed)
             index.build_from_vectors(X_dense, metric=self.metric)
             knn = index.query_knn(k=self.n_neighbors)
             self._lsh_forest = None
@@ -460,9 +459,7 @@ class TMAP:
         with open(path, "rb") as f:
             model = pickle.load(f)
         if not isinstance(model, cls):
-            raise TypeError(
-                f"Expected a TMAP instance, got {type(model).__name__}"
-            )
+            raise TypeError(f"Expected a TMAP instance, got {type(model).__name__}")
         return model
 
     def plot(
@@ -639,9 +636,7 @@ class TMAP:
         - Positions are approximate (no force-directed optimisation).
         """
         if self._embedding is None or self._graph is None:
-            raise RuntimeError(
-                "Estimator is not fitted. Call fit() first."
-            )
+            raise RuntimeError("Estimator is not fitted. Call fit() first.")
 
         new_indices, new_distances, m = self._query_new_points(X)
 
@@ -662,9 +657,7 @@ class TMAP:
 
         return new_coords
 
-    def _query_new_points(
-        self, X: Any
-    ) -> tuple[NDArray[np.int32], NDArray[np.float32], int]:
+    def _query_new_points(self, X: Any) -> tuple[NDArray[np.int32], NDArray[np.float32], int]:
         """Dispatch neighbor queries based on metric.
 
         Returns ``(indices, distances, m)`` where shapes are ``(m, k)``.
@@ -687,8 +680,7 @@ class TMAP:
             forest = self._lsh_forest
             if forest is None:
                 raise RuntimeError(
-                    "No LSH Forest available. Cannot add_points without a "
-                    "jaccard-fitted estimator."
+                    "No LSH Forest available. Cannot add_points without a jaccard-fitted estimator."
                 )
 
             all_indices = np.empty((m, k), dtype=np.int32)
@@ -743,8 +735,7 @@ class TMAP:
             dist_matrix = np.asarray(X, dtype=np.float32)
             if dist_matrix.ndim != 2:
                 raise ValueError(
-                    "metric='precomputed' expects a 2D distance matrix "
-                    "(m_new, n_existing)."
+                    "metric='precomputed' expects a 2D distance matrix (m_new, n_existing)."
                 )
             n_existing = self._embedding.shape[0]
             if dist_matrix.shape[1] != n_existing:
@@ -762,9 +753,7 @@ class TMAP:
 
             actual_k = min(k, n_existing)
             sorted_idx = np.argsort(dist_matrix, axis=1)[:, :actual_k].astype(np.int32)
-            sorted_dist = np.take_along_axis(
-                dist_matrix, sorted_idx.astype(np.intp), axis=1
-            )
+            sorted_dist = np.take_along_axis(dist_matrix, sorted_idx.astype(np.intp), axis=1)
 
             # Pad to k columns if n_existing < k
             if actual_k < k:
@@ -814,9 +803,7 @@ class TMAP:
             for si in sample_idx:
                 nb = int(self._graph.indices[si, 0])
                 if nb >= 0:
-                    nn_embed_dists.append(
-                        float(np.linalg.norm(existing[si] - existing[nb]))
-                    )
+                    nn_embed_dists.append(float(np.linalg.norm(existing[si] - existing[nb])))
             local_scale = float(np.median(nn_embed_dists)) if nn_embed_dists else 1.0
         else:
             local_scale = 1.0
@@ -824,9 +811,14 @@ class TMAP:
         rng = np.random.default_rng(self.seed)
 
         for i in range(m):
+            """
+            New points have to be placed at parent + some offset along the direction 
+            because otherwise you get edges crossing over other branches or getting far 
+            away from the actual branch and it looks weird.
+            """
             valid = new_indices[i] >= 0
             idxs = new_indices[i][valid]
-            dists = new_distances[i][valid]
+            # dists = new_distances[i][valid] NOTE: could be used in the future
 
             if len(idxs) == 0:
                 new_coords[i] = centroid
@@ -835,7 +827,7 @@ class TMAP:
 
                 if len(idxs) >= 2:
                     # Compute a local direction from the neighborhood centroid
-                    nb_coords = existing[idxs[1:min(5, len(idxs))]]
+                    nb_coords = existing[idxs[1 : min(5, len(idxs))]]
                     nb_centroid = nb_coords.mean(axis=0)
                     direction = nb_centroid - parent_coord
                     norm = np.linalg.norm(direction)

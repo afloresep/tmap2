@@ -12,6 +12,7 @@ from tmap.layout import OGDF_AVAILABLE
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _clustered_dense_data(
     n_samples: int = 60,
     n_features: int = 32,
@@ -35,6 +36,7 @@ K = 5
 # NNDescentIndex tests
 # ---------------------------------------------------------------------------
 
+
 class TestNNDescentIndex:
     @pytest.fixture(autouse=True)
     def _skip_if_missing(self):
@@ -42,6 +44,7 @@ class TestNNDescentIndex:
 
     def _make_index(self):
         from tmap.index.nndescent import NNDescentIndex
+
         return NNDescentIndex(seed=42)
 
     @pytest.mark.parametrize("metric", ["cosine", "euclidean"])
@@ -96,6 +99,7 @@ class TestNNDescentIndex:
 
         # Brute-force ground truth
         from scipy.spatial.distance import cdist
+
         dists = cdist(data, data, metric="euclidean").astype(np.float32)
         np.fill_diagonal(dists, np.inf)
         gt_indices = np.argsort(dists, axis=1)[:, :k]
@@ -140,6 +144,7 @@ class TestNNDescentIndex:
 # FaissIndex tests
 # ---------------------------------------------------------------------------
 
+
 class TestFaissIndex:
     @pytest.fixture(autouse=True)
     def _skip_if_missing(self):
@@ -147,6 +152,7 @@ class TestFaissIndex:
 
     def _make_index(self, **kwargs):
         from tmap.index.faiss_index import FaissIndex
+
         kwargs.setdefault("seed", 42)
         return FaissIndex(**kwargs)
 
@@ -187,6 +193,7 @@ class TestFaissIndex:
 
     def test_unsupported_metric_raises(self) -> None:
         from tmap.index.faiss_index import FaissIndex
+
         index = FaissIndex()
         with pytest.raises(ValueError, match="does not support metric"):
             index.build_from_vectors(_clustered_dense_data(), metric="jaccard")
@@ -262,6 +269,7 @@ class TestFaissIndex:
 
     def test_invalid_mode_raises(self) -> None:
         from tmap.index.faiss_index import FaissIndex
+
         with pytest.raises(ValueError, match="mode must be"):
             FaissIndex(mode="bad")
 
@@ -269,6 +277,7 @@ class TestFaissIndex:
 # ---------------------------------------------------------------------------
 # Cross-backend consistency
 # ---------------------------------------------------------------------------
+
 
 def test_backends_produce_similar_knn() -> None:
     pytest.importorskip("pynndescent")
@@ -302,6 +311,7 @@ def test_backends_produce_similar_knn() -> None:
 # ---------------------------------------------------------------------------
 # Estimator integration
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
 class TestEstimatorDenseMetrics:

@@ -191,6 +191,4 @@ class Index(ABC):
     def _check_is_built(self) -> None:
         """Raise if index not built. Fail fast pattern."""
         if not self._is_built:
-            raise RuntimeError(
-                "Index not built. Call build_from_vectors() first."
-            )
+            raise RuntimeError("Index not built. Call build_from_vectors() first.")

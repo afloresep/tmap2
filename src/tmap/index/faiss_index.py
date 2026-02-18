@@ -174,9 +174,7 @@ class FaissIndex(Index):
         index.add(vectors)
         return index
 
-    def _sample_train_data(
-        self, vectors: NDArray[np.float32], n_train: int
-    ) -> NDArray[np.float32]:
+    def _sample_train_data(self, vectors: NDArray[np.float32], n_train: int) -> NDArray[np.float32]:
         n = vectors.shape[0]
         if n_train >= n:
             return vectors

@@ -265,10 +265,12 @@ def test_add_points_existing_coords_unchanged() -> None:
 def test_add_points_cosine_requires_store_index() -> None:
     try:
         import pynndescent  # noqa: F401
+
         has_backend = True
     except ImportError:
         try:
             import faiss  # noqa: F401
+
             has_backend = True
         except ImportError:
             has_backend = False
@@ -288,10 +290,12 @@ def test_add_points_cosine_requires_store_index() -> None:
 def test_add_points_cosine_with_store_index() -> None:
     try:
         import pynndescent  # noqa: F401
+
         has_backend = True
     except ImportError:
         try:
             import faiss  # noqa: F401
+
             has_backend = True
         except ImportError:
             has_backend = False
@@ -321,9 +325,7 @@ def test_add_points_precomputed() -> None:
 
     # New point at (0.5, 0.5) — distances to existing 4 points
     new_pt = np.array([[0.5, 0.5]], dtype=np.float32)
-    new_dists = np.linalg.norm(new_pt[:, None, :] - points[None, :, :], axis=2).astype(
-        np.float32
-    )
+    new_dists = np.linalg.norm(new_pt[:, None, :] - points[None, :, :], axis=2).astype(np.float32)
 
     coords = model.add_points(new_dists)
     assert coords.shape == (1, 2)
@@ -417,9 +419,7 @@ def test_add_points_duplicate_near_original() -> None:
 
     # Should be within a small radius of the original
     dist = np.linalg.norm(coords[0] - original_coord)
-    embedding_range = np.linalg.norm(
-        model.embedding_.max(axis=0) - model.embedding_.min(axis=0)
-    )
+    embedding_range = np.linalg.norm(model.embedding_.max(axis=0) - model.embedding_.min(axis=0))
     assert dist < 0.05 * embedding_range
 
 
@@ -432,6 +432,7 @@ def test_add_points_duplicate_near_original() -> None:
 def test_save_load_roundtrip(tmp_path: object) -> None:
     """Save, load, and verify all state is preserved."""
     import pathlib
+
     tmp = pathlib.Path(str(tmp_path))
 
     data = _clustered_binary_data(n_samples=40, n_features=128)
@@ -457,6 +458,7 @@ def test_save_load_roundtrip(tmp_path: object) -> None:
 def test_save_load_then_add_points(tmp_path: object) -> None:
     """Load a saved model and add_points should work."""
     import pathlib
+
     tmp = pathlib.Path(str(tmp_path))
 
     data = _clustered_binary_data(n_samples=40, n_features=128)
@@ -474,6 +476,7 @@ def test_save_load_then_add_points(tmp_path: object) -> None:
 
 def test_save_before_fit_raises(tmp_path: object) -> None:
     import pathlib
+
     tmp = pathlib.Path(str(tmp_path))
 
     model = TMAP()
