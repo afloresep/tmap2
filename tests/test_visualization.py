@@ -13,8 +13,14 @@ Tests cover:
 import json
 import re
 
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+
+from tmap.visualization.static import plot_static
+
+matplotlib.use("Agg")
 
 # Check if visualization dependencies are available
 try:
@@ -101,7 +107,7 @@ class TestTmapVizCreation:
         viz = TmapViz()
 
         assert viz.title == "MyTMAP"
-        assert viz.background_color == "#7A7A7A"
+        assert viz.background_color == "#FFFFFF"
         assert viz.point_color == "#4a9eff"
         assert viz.point_size == 4.0
         assert viz.opacity == 0.85
@@ -115,13 +121,13 @@ class TestTmapVizCreation:
         viz = TmapViz()
 
         viz.title = "Test Title"
-        viz.background_color = "#FFFFFF"
+        viz.background_color = "#7A7A7A"
         viz.point_color = "#FF0000"
         viz.point_size = 10.0
         viz.opacity = 0.5
 
         assert viz.title == "Test Title"
-        assert viz.background_color == "#FFFFFF"
+        assert viz.background_color == "#7A7A7A"
         assert viz.point_color == "#FF0000"
         assert viz.point_size == 10.0
         assert viz.opacity == 0.5
@@ -348,7 +354,7 @@ class TestAddSmiles:
         """Should add SMILES column."""
         viz, data = viz_with_data
 
-        viz.add_smiles("structure", data["smiles"])
+        viz.add_smiles(data["smiles"],"structure")
 
         assert viz._smiles_column == "structure"
         assert "structure" in [label.name for label in viz.labels]
@@ -357,7 +363,7 @@ class TestAddSmiles:
         """Only one SMILES column should be allowed."""
         viz, data = viz_with_data
 
-        viz.add_smiles("structure1", data["smiles"])
+        viz.add_smiles(data["smiles"], "structure1")
 
         with pytest.raises(ValueError, match="Only one SMILES column"):
             viz.add_smiles("structure2", data["smiles"])
@@ -401,7 +407,7 @@ class TestRender:
     def test_render_with_smiles_uses_smiles_template(self, viz_with_data):
         """Adding SMILES should auto-switch to smiles template."""
         viz, data = viz_with_data
-        viz.add_smiles("structure", data["smiles"])
+        viz.add_smiles(data["smiles"], "structure")
 
         html = viz.render()
 
@@ -1060,3 +1066,75 @@ class TestBinaryThreshold:
         content = output.read_text()
         # JSON mode includes points as array
         assert '"points"' in content or "points" in content
+
+
+# =============================================================================
+# Static Plot Tests
+# =============================================================================
+
+
+class TestPlotStatic:
+    """Tests for the matplotlib static plot function."""
+
+    @pytest.fixture(autouse=True)
+    def _close_figs(self):
+        yield
+        plt.close("all")
+
+    @pytest.fixture
+    def embedding(self):
+        return np.column_stack([np.linspace(-1, 1, 50), np.linspace(-1, 1, 50)]).astype(np.float32)
+
+    def test_returns_axes(self, embedding):
+        ax = plot_static(embedding)
+        assert isinstance(ax, matplotlib.axes.Axes)
+
+    def test_continuous_color(self, embedding):
+        values = np.linspace(0, 1, 50)
+        ax = plot_static(embedding, color_by=values)
+        # Should have a colorbar (figure has more than 1 axes)
+        assert len(ax.figure.axes) > 1
+
+    def test_categorical_color_with_legend(self, embedding):
+        labels = np.array(["A", "B"] * 25)
+        ax = plot_static(embedding, color_by=labels)
+        legend = ax.get_legend()
+        assert legend is not None
+        assert len(legend.get_texts()) == 2
+
+    def test_edges_drawn(self, embedding):
+        edges = np.array([[i, i + 1] for i in range(49)], dtype=np.int32)
+        ax = plot_static(embedding, edges=edges)
+        # Should have a LineCollection
+        from matplotlib.collections import LineCollection
+
+        lcs = [c for c in ax.collections if isinstance(c, LineCollection)]
+        assert len(lcs) == 1
+
+    def test_dataframe_color_by(self, embedding):
+        import pandas as pd
+
+        df = pd.DataFrame({"group": ["X", "Y", "Z", "W", "V"] * 10})
+        ax = plot_static(embedding, color_by="group", data=df)
+        legend = ax.get_legend()
+        assert legend is not None
+        assert len(legend.get_texts()) == 5
+
+    def test_existing_axes_passthrough(self, embedding):
+        fig, existing_ax = plt.subplots()
+        returned_ax = plot_static(embedding, ax=existing_ax)
+        assert returned_ax is existing_ax
+
+    def test_no_ticks_or_labels(self, embedding):
+        ax = plot_static(embedding)
+        assert ax.get_xticks().tolist() == []
+        assert ax.get_yticks().tolist() == []
+        assert ax.get_xlabel() == ""
+        assert ax.get_ylabel() == ""
+        for spine in ax.spines.values():
+            assert not spine.get_visible()
+
+    def test_invalid_shape_raises(self):
+        bad = np.ones((10, 3), dtype=np.float32)
+        with pytest.raises(ValueError, match="shape"):
+            plot_static(bad)

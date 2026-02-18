@@ -29,6 +29,8 @@ __all__ = [
     "MinHash",
     "WeightedMinHash",
     "LSHForest",
+    "NNDescentIndex",
+    "FaissIndex",
     "TMAP",
 ]
 
@@ -37,6 +39,8 @@ _LAZY_IMPORTS: dict[str, str] = {
     "LSHForest": "tmap.index.lsh_forest",
     "MinHash": "tmap.index.encoders.minhash",
     "WeightedMinHash": "tmap.index.encoders.minhash",
+    "NNDescentIndex": "tmap.index.nndescent",
+    "FaissIndex": "tmap.index.faiss_index",
 }
 
 

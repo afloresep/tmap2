@@ -276,7 +276,7 @@ class TmapViz:
 
     def __init__(self) -> None:
         self.title: str = "MyTMAP"
-        self.background_color: str = "#7A7A7A"
+        self.background_color: str = "#FFFFFF"
         self.point_color: str = "#4a9eff"
         self.point_size: float = 4.0
         self.opacity: float = 0.85
@@ -398,8 +398,8 @@ class TmapViz:
 
     def add_smiles(
         self,
-        name: str,
         values: list[str],
+        name: str = "SMILES",
     ) -> None:
         """Add a SMILES column for molecular structure visualization.
 
@@ -729,8 +729,10 @@ class TmapViz:
 
                 def _on_layout_change(change: dict[str, Any]) -> None:
                     layout_name = change["new"]
-                    cmap = self._columns[layout_name].color
-                    scatter.color(by=layout_name, map=cmap)
+                    col = self._columns[layout_name]
+                    cmap = col.color
+                    # Reset norm so jscatter re-derives min/max from the new column
+                    scatter.color(by=layout_name, map=cmap, norm=None)
                     scatter.legend(True)
 
                 color_dd.observe(_on_layout_change, names="value")

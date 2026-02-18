@@ -6,7 +6,7 @@ from typing import Any, Self
 import numpy as np
 from numpy.typing import NDArray
 
-from tmap.index.types import EdgeList, KNNGraph
+from tmap.index.types import KNNGraph
 
 
 class Index(ABC):
@@ -24,6 +24,7 @@ class Index(ABC):
         self._seed = seed
         self._is_built = False
         self._n_nodes: int = 0
+        self._metric: str | None = None
         self._rng = np.random.default_rng(seed)
 
     # =========================================================================
@@ -52,31 +53,8 @@ class Index(ABC):
         """
         self._validate_vectors(vectors)
         self._n_nodes = vectors.shape[0]
+        self._metric = metric
         self._build_from_vectors(vectors, metric)
-        self._is_built = True
-        return self
-
-    def build_from_edges(self, edges: EdgeList) -> Self:
-        """
-        Build index from pre-computed edges/distances.
-
-        Args:
-            edges: EdgeList with (source, target, distance) tuples
-
-        Returns:
-            self (for method chaining)
-
-        Example:
-            # Visualize arxiv papers by citation similarity
-            edges = EdgeList(
-                edges=[(0, 1, 0.9), (0, 2, 0.7), ...],
-                n_nodes=1000,
-            )
-            index = AnnoyIndex(seed=42)
-            index.build_from_edges(edges)
-        """
-        self._n_nodes = edges.n_nodes
-        self._build_from_edges(edges)
         self._is_built = True
         return self
 
@@ -128,6 +106,7 @@ class Index(ABC):
             "class": self.__class__.__name__,
             "n_nodes": self._n_nodes,
             "seed": self._seed,
+            "metric": self._metric,
         }
         with open(path.with_suffix(".meta"), "wb") as f:
             pickle.dump(metadata, f)
@@ -149,6 +128,7 @@ class Index(ABC):
 
         instance = cls(seed=metadata["seed"])
         instance._n_nodes = metadata["n_nodes"]
+        instance._metric = metadata.get("metric")
         instance._load_implementation(path)
         instance._is_built = True
         return instance
@@ -163,6 +143,11 @@ class Index(ABC):
         """Number of nodes/points in the index."""
         return self._n_nodes
 
+    @property
+    def metric(self) -> str | None:
+        """Distance metric used during build, or None if not yet built."""
+        return self._metric
+
     @abstractmethod
     def _build_from_vectors(
         self,
@@ -170,11 +155,6 @@ class Index(ABC):
         metric: str,
     ) -> None:
         """Implementation-specific vector indexing. Override this."""
-        ...
-
-    @abstractmethod
-    def _build_from_edges(self, edges: EdgeList) -> None:
-        """Implementation-specific edge-based building. Override this."""
         ...
 
     @abstractmethod
@@ -211,6 +191,4 @@ class Index(ABC):
     def _check_is_built(self) -> None:
         """Raise if index not built. Fail fast pattern."""
         if not self._is_built:
-            raise RuntimeError(
-                "Index not built. Call build_from_vectors() or build_from_edges() first."
-            )
+            raise RuntimeError("Index not built. Call build_from_vectors() first.")

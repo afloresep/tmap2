@@ -33,8 +33,12 @@ from typing import Any
 
 from tmap.visualization.tmapviz import BINARY_THRESHOLD, TmapViz
 
-__all__ = ["TmapViz", "BINARY_THRESHOLD"]
+__all__ = ["TmapViz", "BINARY_THRESHOLD", "plot_static"]
 
 
 def __getattr__(name: str) -> Any:  # noqa: N807
+    if name == "plot_static":
+        from tmap.visualization.static import plot_static
+
+        return plot_static
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

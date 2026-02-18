@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self, Tuple
 
@@ -20,8 +21,61 @@ from tmap.layout._ogdf import (
 if TYPE_CHECKING:
     from tmap.visualization import TmapViz
 
+
 # Experimental graph-mode sparsification defaults.
 # these are internal until i figure out the graph mode and is fully stabilized.
+def _resolve_ann_backend(n_samples: int = 0, seed: int | None = None) -> Any:
+    """Auto-detect and return the best available ANN index.
+
+    For large datasets (n >= 50k), prefers FaissIndex which supports IVF/IVFPQ
+    auto-selection for sub-linear query time.  For small datasets, prefers
+    NNDescentIndex (simpler, no training step).
+
+    Raises ImportError with install instructions if neither is available.
+    """
+    _have_nnd = False
+    _have_faiss = False
+
+    try:
+        import pynndescent  # noqa: F401
+
+        _have_nnd = True
+    except ImportError:
+        pass
+
+    try:
+        import faiss  # noqa: F401
+
+        _have_faiss = True
+    except ImportError:
+        pass
+
+    if not _have_nnd and not _have_faiss:
+        raise ImportError(
+            "metric='cosine' and metric='euclidean' require either pynndescent or faiss. "
+            "Install one with:\n"
+            "  pip install pynndescent\n"
+            "  pip install faiss-cpu"
+        )
+
+    # Large data: prefer FAISS (IVF/IVFPQ auto-selection handles scale)
+    if n_samples >= 50_000 and _have_faiss:
+        from tmap.index.faiss_index import FaissIndex
+
+        return FaissIndex(seed=seed)
+
+    # Small data: prefer NNDescent (simpler, no training)
+    if _have_nnd:
+        from tmap.index.nndescent import NNDescentIndex
+
+        return NNDescentIndex(seed=seed)
+
+    # Fallback: whatever is available
+    from tmap.index.faiss_index import FaissIndex
+
+    return FaissIndex(seed=seed)
+
+
 _GRAPH_LAYOUT_REQUIRE_MUTUAL_DEFAULT = True
 _GRAPH_LAYOUT_MAX_DEGREE_DEFAULT = 8
 
@@ -58,7 +112,8 @@ class TMAP:
         - ``'precomputed'``: X is a square distance matrix. Suitable for
           small datasets (< ~50k points due to O(n^2) memory). For larger
           datasets, compute k-NN externally and pass via ``knn_graph=``.
-        - ``'cosine'``, ``'euclidean'``: Not yet implemented.
+        - ``'cosine'``, ``'euclidean'``: For dense float vectors (e.g. protein
+          embeddings). Requires ``pynndescent`` or ``faiss-cpu``.
     n_permutations : int, default=512
         Number of MinHash permutations. Only used with ``metric='jaccard'``.
     kc : int, default=10
@@ -80,6 +135,11 @@ class TMAP:
         non-MST graph layout for quick cluster-oriented overview.
     layout_iterations : int, default=1000
         Number of iterations for the force-directed layout algorithm.
+    store_index : bool, default=False
+        If True, keep the ANN index in memory after ``fit()``. Access it
+        via ``index_``. Useful for later ``query_point`` calls (e.g.
+        embedding new data). Only applies to ``metric='cosine'`` and
+        ``metric='euclidean'``.
     layout_config : LayoutConfig or None, default=None
         Advanced OGDF layout configuration. Overrides ``layout_iterations``
         and ``seed`` when provided.
@@ -129,6 +189,7 @@ class TMAP:
         layout: str = "tree",
         layout_iterations: int = 1000,
         layout_config: Any | None = None,
+        store_index: bool = False,
     ) -> None:
         if n_neighbors <= 0:
             raise ValueError(f"n_neighbors must be > 0, got {n_neighbors}")
@@ -161,8 +222,10 @@ class TMAP:
         self.layout = layout
         self.layout_iterations = layout_iterations
         self.layout_config = layout_config
+        self.store_index = store_index
 
         self._embedding: NDArray[np.float32] | None = None
+        self._index: Any | None = None
         self._tree: Tree | None = None
         self._graph: KNNGraph | None = None
         self._lsh_forest: LSHForest | None = None
@@ -206,10 +269,16 @@ class TMAP:
             knn = KNNGraph.from_distance_matrix(distance_matrix, k=self.n_neighbors)
             self._lsh_forest = None
         elif self.metric in {"cosine", "euclidean"}:
-            raise NotImplementedError(
-                f"metric={self.metric!r} is not implemented yet. "
-                "Use metric='jaccard' or metric='precomputed'."
-            )
+            X_dense = self._coerce_dense_matrix(X)
+            if self.n_neighbors >= X_dense.shape[0]:
+                raise ValueError(
+                    f"n_neighbors={self.n_neighbors} must be < n_samples={X_dense.shape[0]}"
+                )
+            index = _resolve_ann_backend(n_samples=X_dense.shape[0], seed=self.seed)
+            index.build_from_vectors(X_dense, metric=self.metric)
+            knn = index.query_knn(k=self.n_neighbors)
+            self._lsh_forest = None
+            self._index = index if self.store_index else None
         else:
             # Defensive fallback; __init__ already validates metrics.
             raise ValueError(f"Unsupported metric {self.metric!r}")
@@ -294,6 +363,16 @@ class TMAP:
             )
         return self._lsh_forest
 
+    @property
+    def index_(self) -> Any:
+        """ANN index retained after fit (only when ``store_index=True``)."""
+        if self._index is None:
+            raise RuntimeError(
+                "No index stored. Use store_index=True when constructing TMAP "
+                "to retain the ANN index after fit()."
+            )
+        return self._index
+
     def to_tmapviz(self, include_edges: bool = True) -> TmapViz:
         """Create a TmapViz object preloaded with fitted coordinates."""
         from tmap.visualization import TmapViz
@@ -325,6 +404,64 @@ class TMAP:
             viz.title = title
         return viz.write_html(path)
 
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str | Path) -> Path:
+        """Save the fitted model to disk.
+
+        The entire estimator state is serialised, including the embedding,
+        tree, KNN graph, and — when present — the LSH Forest and ANN index.
+        A saved model can later be loaded and extended with
+        :meth:`add_points`.
+
+        Parameters
+        ----------
+        path : str or Path
+            Destination file path (e.g. ``"model.tmap"``).
+
+        Returns
+        -------
+        Path
+            The path the model was written to.
+
+        Examples
+        --------
+        >>> model = TMAP(n_neighbors=10).fit(X)
+        >>> model.save("my_model.tmap")
+        >>> loaded = TMAP.load("my_model.tmap")
+        >>> loaded.add_points(X_new)
+        """
+        if self._embedding is None:
+            raise RuntimeError("Estimator is not fitted. Call fit() first.")
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+        return path
+
+    @classmethod
+    def load(cls, path: str | Path) -> TMAP:
+        """Load a previously saved model from disk.
+
+        Parameters
+        ----------
+        path : str or Path
+            File previously written by :meth:`save`.
+
+        Returns
+        -------
+        TMAP
+            The restored estimator, ready for queries or :meth:`add_points`.
+        """
+        path = Path(path)
+        with open(path, "rb") as f:
+            model = pickle.load(f)
+        if not isinstance(model, cls):
+            raise TypeError(f"Expected a TMAP instance, got {type(model).__name__}")
+        return model
+
     def plot(
         self,
         *,
@@ -341,8 +478,8 @@ class TMAP:
     ) -> Any:
         """Show an interactive scatter plot in a Jupyter notebook.
 
-        Requires the ``jupyter-scatter`` package (installed by default with
-        ``pip install -e .``).
+        Requires the ``jupyter-scatter`` package
+        (``pip install tmap[notebook]``).
 
         Parameters
         ----------
@@ -391,6 +528,430 @@ class TMAP:
             _display_scatter(scatter, controls=controls)
 
         return scatter
+
+    def plot_static(
+        self,
+        *,
+        color_by: Any | None = None,
+        color_map: str | None = None,
+        data: Any | None = None,
+        edges: bool = True,
+        edge_color: str = "#cccccc",
+        edge_alpha: float = 0.3,
+        edge_linewidth: float = 0.3,
+        point_size: float = 1.0,
+        alpha: float = 0.8,
+        ax: Any | None = None,
+        figsize: tuple[float, float] = (8, 8),
+    ) -> Any:
+        """Render the embedding as a static matplotlib scatter plot.
+
+        Parameters
+        ----------
+        color_by : str, array-like, or None
+            Column name in *data*, or a raw array of values.
+        color_map : str or None
+            Matplotlib colormap name.
+        data : DataFrame or None
+            Metadata DataFrame.
+        edges : bool, default True
+            If True, draw tree edges behind the points.
+        edge_color : str, default '#cccccc'
+            Color for edge lines.
+        edge_alpha : float, default 0.3
+            Opacity for edge lines.
+        edge_linewidth : float, default 0.3
+            Line width for edges.
+        point_size : float, default 1.0
+            Marker size.
+        alpha : float, default 0.8
+            Point opacity.
+        ax : matplotlib Axes or None
+            Draw into an existing axes.
+        figsize : tuple, default (8, 8)
+            Figure size when *ax* is None.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+        """
+        from tmap.visualization.static import plot_static
+
+        edge_arr = self.tree_.edges if edges else None
+        return plot_static(
+            self.embedding_,
+            color_by=color_by,
+            color_map=color_map,
+            data=data,
+            edges=edge_arr,
+            edge_color=edge_color,
+            edge_alpha=edge_alpha,
+            edge_linewidth=edge_linewidth,
+            point_size=point_size,
+            alpha=alpha,
+            ax=ax,
+            figsize=figsize,
+        )
+
+    # ------------------------------------------------------------------
+    # Incremental insertion
+    # ------------------------------------------------------------------
+
+    def add_points(self, X: Any) -> NDArray[np.float32]:
+        """Add new points to an existing embedding without re-fitting.
+
+        Positions new points as inverse-distance weighted centroids of their
+        nearest existing neighbors, then extends the tree and KNN graph.
+        Existing coordinates are never modified.
+
+        Parameters
+        ----------
+        X : array-like
+            New data to insert. Interpretation depends on ``metric``:
+
+            - ``'jaccard'``: ``(m, n_features)`` binary matrix
+            - ``'cosine'``/``'euclidean'``: ``(m, n_features)`` float matrix
+            - ``'precomputed'``: ``(m, n_existing)`` distance matrix (new→existing)
+
+        Returns
+        -------
+        NDArray[np.float32]
+            ``(m, 2)`` coordinates of the newly placed points.
+
+        Raises
+        ------
+        RuntimeError
+            If the estimator has not been fitted, or if ``metric`` is
+            ``'cosine'``/``'euclidean'`` and ``store_index`` was ``False``.
+        ValueError
+            If ``metric='precomputed'`` and ``X.shape[1] != n_existing``.
+
+        Notes
+        -----
+        - FAISS/NNDescent indices are not updated; subsequent ``add_points``
+          calls only see the original fit data as neighbors.
+        - For ``metric='jaccard'``, the LSH Forest *is* updated, so subsequent
+          calls can discover previously added points.
+        - For ``m > 0.2 * n``, quality degrades; consider re-fitting instead.
+        - Positions are approximate (no force-directed optimisation).
+        """
+        if self._embedding is None or self._graph is None:
+            raise RuntimeError("Estimator is not fitted. Call fit() first.")
+
+        new_indices, new_distances, m = self._query_new_points(X)
+
+        if m == 0:
+            return np.empty((0, 2), dtype=np.float32)
+
+        new_coords = self._position_new_points(new_indices, new_distances)
+        self._extend_tree(new_indices, new_distances, m)
+
+        # Extend KNN graph
+        self._graph = KNNGraph(
+            indices=np.concatenate([self._graph.indices, new_indices]),
+            distances=np.concatenate([self._graph.distances, new_distances]),
+        )
+
+        # Update embedding
+        self._embedding = np.concatenate([self._embedding, new_coords])
+
+        return new_coords
+
+    def _query_new_points(self, X: Any) -> tuple[NDArray[np.int32], NDArray[np.float32], int]:
+        """Dispatch neighbor queries based on metric.
+
+        Returns ``(indices, distances, m)`` where shapes are ``(m, k)``.
+        """
+        k = self.n_neighbors
+
+        if self.metric == "jaccard":
+            binary = self._coerce_binary_matrix_allow_one(X)
+            m = binary.shape[0]
+            if m == 0:
+                return (
+                    np.empty((0, k), dtype=np.int32),
+                    np.empty((0, k), dtype=np.float32),
+                    0,
+                )
+
+            encoder = MinHash(num_perm=self.n_permutations, seed=self.minhash_seed)
+            signatures = encoder.batch_from_binary_array(binary)
+
+            forest = self._lsh_forest
+            if forest is None:
+                raise RuntimeError(
+                    "No LSH Forest available. Cannot add_points without a jaccard-fitted estimator."
+                )
+
+            all_indices = np.empty((m, k), dtype=np.int32)
+            all_distances = np.empty((m, k), dtype=np.float32)
+
+            for i in range(m):
+                results = forest.query_linear_scan(signatures[i], k, self.kc)
+                for j, (dist, idx) in enumerate(results[:k]):
+                    all_indices[i, j] = idx
+                    all_distances[i, j] = dist
+                # Pad with -1 if fewer than k results
+                for j in range(len(results), k):
+                    all_indices[i, j] = -1
+                    all_distances[i, j] = np.inf
+
+            # Update LSH Forest so future add_points sees these points
+            forest.batch_add(signatures)
+            forest.index()
+
+            return all_indices, all_distances, m
+
+        elif self.metric in {"cosine", "euclidean"}:
+            if self._index is None:
+                raise RuntimeError(
+                    "No ANN index stored. Reconstruct with store_index=True "
+                    "to use add_points() with metric={!r}.".format(self.metric)
+                )
+            X_dense = self._coerce_dense_matrix_allow_one(X)
+            m = X_dense.shape[0]
+            if m == 0:
+                return (
+                    np.empty((0, k), dtype=np.int32),
+                    np.empty((0, k), dtype=np.float32),
+                    0,
+                )
+
+            all_indices = np.empty((m, k), dtype=np.int32)
+            all_distances = np.empty((m, k), dtype=np.float32)
+
+            for i in range(m):
+                idx_arr, dist_arr = self._index.query_point(X_dense[i], k)
+                n_returned = min(len(idx_arr), k)
+                all_indices[i, :n_returned] = idx_arr[:n_returned]
+                all_distances[i, :n_returned] = dist_arr[:n_returned]
+                for j in range(n_returned, k):
+                    all_indices[i, j] = -1
+                    all_distances[i, j] = np.inf
+
+            return all_indices, all_distances, m
+
+        elif self.metric == "precomputed":
+            dist_matrix = np.asarray(X, dtype=np.float32)
+            if dist_matrix.ndim != 2:
+                raise ValueError(
+                    "metric='precomputed' expects a 2D distance matrix (m_new, n_existing)."
+                )
+            n_existing = self._embedding.shape[0]
+            if dist_matrix.shape[1] != n_existing:
+                raise ValueError(
+                    f"X.shape[1]={dist_matrix.shape[1]} must equal "
+                    f"n_existing={n_existing} for metric='precomputed'."
+                )
+            m = dist_matrix.shape[0]
+            if m == 0:
+                return (
+                    np.empty((0, k), dtype=np.int32),
+                    np.empty((0, k), dtype=np.float32),
+                    0,
+                )
+
+            actual_k = min(k, n_existing)
+            sorted_idx = np.argsort(dist_matrix, axis=1)[:, :actual_k].astype(np.int32)
+            sorted_dist = np.take_along_axis(dist_matrix, sorted_idx.astype(np.intp), axis=1)
+
+            # Pad to k columns if n_existing < k
+            if actual_k < k:
+                pad_idx = np.full((m, k - actual_k), -1, dtype=np.int32)
+                pad_dist = np.full((m, k - actual_k), np.inf, dtype=np.float32)
+                sorted_idx = np.concatenate([sorted_idx, pad_idx], axis=1)
+                sorted_dist = np.concatenate([sorted_dist, pad_dist], axis=1)
+
+            return sorted_idx, sorted_dist, m
+
+        else:
+            raise RuntimeError(f"Unsupported metric {self.metric!r}")
+
+    def _position_new_points(
+        self,
+        new_indices: NDArray[np.int32],
+        new_distances: NDArray[np.float32],
+    ) -> NDArray[np.float32]:
+        """Position new points near their tree parent with a local offset.
+
+        Each new point is placed close to its nearest existing neighbor
+        (the tree parent) with a small offset toward the local neighborhood
+        centroid.  This keeps tree edges short while still reflecting the
+        broader neighborhood structure.
+        """
+        m = new_indices.shape[0]
+        existing = self._embedding  # (n, 2)
+        new_coords = np.empty((m, 2), dtype=np.float32)
+
+        centroid = existing.mean(axis=0)
+        coord_range = existing.max(axis=0) - existing.min(axis=0)
+        jitter_scale = coord_range * 0.001  # 0.1% of range
+
+        # Typical edge length in the existing embedding for scale reference.
+        # Use the mean distance between each node and its nearest KNN neighbor.
+        if self._graph is not None and self._graph.distances.shape[0] > 0:
+            finite_dists = self._graph.distances[:, 0]
+            finite_dists = finite_dists[np.isfinite(finite_dists)]
+        else:
+            finite_dists = np.array([], dtype=np.float32)
+
+        if len(finite_dists) > 0:
+            # Median embedding distance between KNN-connected pairs
+            nn_embed_dists = []
+            sample_n = min(200, existing.shape[0])
+            sample_idx = np.linspace(0, existing.shape[0] - 1, sample_n, dtype=int)
+            for si in sample_idx:
+                nb = int(self._graph.indices[si, 0])
+                if nb >= 0:
+                    nn_embed_dists.append(float(np.linalg.norm(existing[si] - existing[nb])))
+            local_scale = float(np.median(nn_embed_dists)) if nn_embed_dists else 1.0
+        else:
+            local_scale = 1.0
+
+        rng = np.random.default_rng(self.seed)
+
+        for i in range(m):
+            """
+            New points have to be placed at parent + some offset along the direction 
+            because otherwise you get edges crossing over other branches or getting far 
+            away from the actual branch and it looks weird.
+            """
+            valid = new_indices[i] >= 0
+            idxs = new_indices[i][valid]
+            # dists = new_distances[i][valid] NOTE: could be used in the future
+
+            if len(idxs) == 0:
+                new_coords[i] = centroid
+            else:
+                parent_coord = existing[idxs[0]]  # nearest neighbor = tree parent
+
+                if len(idxs) >= 2:
+                    # Compute a local direction from the neighborhood centroid
+                    nb_coords = existing[idxs[1 : min(5, len(idxs))]]
+                    nb_centroid = nb_coords.mean(axis=0)
+                    direction = nb_centroid - parent_coord
+                    norm = np.linalg.norm(direction)
+                    if norm > 1e-8:
+                        direction = direction / norm
+                    else:
+                        direction = rng.normal(0, 1, size=2).astype(np.float32)
+                        direction /= np.linalg.norm(direction)
+                    # Place at parent + small offset along the direction
+                    offset_mag = local_scale * 0.3
+                    new_coords[i] = parent_coord + direction * offset_mag
+                else:
+                    new_coords[i] = parent_coord
+
+            # Small jitter to avoid exact overlaps
+            new_coords[i] += rng.normal(0, 1, size=2).astype(np.float32) * jitter_scale
+
+        return new_coords
+
+    def _extend_tree(
+        self,
+        new_indices: NDArray[np.int32],
+        new_distances: NDArray[np.float32],
+        m: int,
+    ) -> None:
+        """Append each new point to the tree via its nearest existing neighbor."""
+        old_tree = self.tree_  # force lazy extraction if needed
+        n_existing = old_tree.n_nodes
+
+        new_edges = np.empty((m, 2), dtype=np.int32)
+        new_weights = np.empty(m, dtype=np.float32)
+
+        for i in range(m):
+            new_node = n_existing + i
+            # Connect to nearest valid existing neighbor
+            nn_idx = int(new_indices[i, 0]) if new_indices[i, 0] >= 0 else 0
+            nn_dist = float(new_distances[i, 0]) if new_indices[i, 0] >= 0 else 1.0
+            new_edges[i] = [nn_idx, new_node]
+            new_weights[i] = nn_dist
+
+        all_edges = np.concatenate([old_tree.edges, new_edges])
+        all_weights = np.concatenate([old_tree.weights, new_weights])
+
+        self._tree = Tree(
+            n_nodes=n_existing + m,
+            edges=all_edges,
+            weights=all_weights,
+            root=old_tree.root,
+        )
+
+    def _coerce_binary_matrix_allow_one(self, X: Any) -> NDArray[np.uint8]:
+        """Like _coerce_binary_matrix but allows m >= 1 (single row)."""
+        if X is None:
+            raise ValueError("X cannot be None for metric='jaccard'.")
+        arr = np.asarray(X)
+        if arr.ndim != 2:
+            raise ValueError(
+                "metric='jaccard' expects a 2D binary matrix of shape (n_samples, n_features)."
+            )
+        if arr.dtype != np.bool_ and not np.issubdtype(arr.dtype, np.number):
+            raise ValueError("Binary matrix must contain numeric/boolean values.")
+        if arr.shape[0] > 0 and not np.all((arr == 0) | (arr == 1)):
+            raise ValueError("Binary matrix must contain only 0/1 values.")
+        return arr.astype(np.uint8, copy=False)
+
+    def _coerce_dense_matrix_allow_one(self, X: Any) -> NDArray[np.float32]:
+        """Like _coerce_dense_matrix but allows m >= 1."""
+        if X is None:
+            raise ValueError(f"X cannot be None for metric={self.metric!r}.")
+        arr = np.asarray(X, dtype=np.float32)
+        if arr.ndim != 2:
+            raise ValueError(
+                f"metric={self.metric!r} expects a 2D matrix of shape (n_samples, n_features)."
+            )
+        if arr.shape[0] > 0 and not np.all(np.isfinite(arr)):
+            raise ValueError("Input matrix must contain only finite values.")
+        return arr
+
+    # ------------------------------------------------------------------
+    # Tree exploration convenience methods
+    # ------------------------------------------------------------------
+
+    def path(self, from_idx: int, to_idx: int) -> list[int]:
+        """Shortest path in the tree between two points.
+
+        Delegates to :meth:`Tree.path`.
+
+        Parameters
+        ----------
+        from_idx : int
+            Source point index.
+        to_idx : int
+            Target point index.
+
+        Returns
+        -------
+        list[int]
+            Ordered node indices from source to target (inclusive).
+        """
+        return self.tree_.path(from_idx, to_idx)
+
+    def distance(self, from_idx: int, to_idx: int) -> float:
+        """Sum of edge weights along the tree path between two points.
+
+        Delegates to :meth:`Tree.distance`.
+        """
+        return self.tree_.distance(from_idx, to_idx)
+
+    def distances_from(self, source: int) -> NDArray[np.float32]:
+        """Tree distance from *source* to every other point (pseudotime).
+
+        Delegates to :meth:`Tree.distances_from`.
+
+        Parameters
+        ----------
+        source : int
+            Source point index.
+
+        Returns
+        -------
+        NDArray[np.float32]
+            Array of shape ``(n_samples,)`` with tree distances.
+        """
+        return self.tree_.distances_from(source)
 
     def _tree_from_ogdf_edges(
         self,
@@ -574,3 +1135,19 @@ class TMAP:
             raise ValueError("Distance matrix must contain only finite values.")
 
         return distances
+
+    def _coerce_dense_matrix(self, X: Any | None) -> NDArray[np.float32]:
+        if X is None:
+            raise ValueError(f"X cannot be None for metric={self.metric!r}.")
+
+        arr = np.asarray(X, dtype=np.float32)
+        if arr.ndim != 2:
+            raise ValueError(
+                f"metric={self.metric!r} expects a 2D matrix of shape (n_samples, n_features)."
+            )
+        if arr.shape[0] < 2:
+            raise ValueError("Need at least 2 samples.")
+        if not np.all(np.isfinite(arr)):
+            raise ValueError("Input matrix must contain only finite values.")
+
+        return arr
