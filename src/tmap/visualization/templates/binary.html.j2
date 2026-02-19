@@ -445,6 +445,7 @@
   <div id="controls">
     <label for="color-select">Color By Layout</label>
     <select id="color-select"></select>
+    <label style="margin-top:6px;cursor:pointer;"><input type="checkbox" id="edge-toggle" checked style="cursor:pointer;"> Show edges</label>
   </div>
   <canvas id="canvas"></canvas>
   <div id="tooltip">
@@ -734,6 +735,7 @@ const scatterplot = createScatterplot({
   lassoInitiator: false,
   xScale: edgeXScale,
   yScale: edgeYScale,
+  performanceMode: N > 500000,
 });
 
 const zeroArray = new Float32Array(n);
@@ -741,6 +743,9 @@ const zeroArray = new Float32Array(n);
 // === Edge Canvas Overlay ===
 let redrawEdges = function() {};
 let edgeNeedsRedraw = hasEdges;
+let edgesVisible = true;
+
+const edgeToggle = document.getElementById('edge-toggle');
 
 if (hasEdges) {
   canvas.style.position = 'fixed';
@@ -763,10 +768,24 @@ if (hasEdges) {
   resizeEdgeCanvas();
 
   redrawEdges = function() {
-    const canvasRect = canvas.getBoundingClientRect();
     const w = window.innerWidth;
     const h = window.innerHeight;
     edgeCtx.clearRect(0, 0, w, h);
+
+    if (!edgesVisible) {
+      edgeNeedsRedraw = false;
+      return;
+    }
+
+    const canvasRect = canvas.getBoundingClientRect();
+    const left = canvasRect.left;
+    const top = canvasRect.top;
+    const margin = 50;
+    const minX = 0 - margin;
+    const maxX = w + margin;
+    const minY = 0 - margin;
+    const maxY = h + margin;
+
     edgeCtx.beginPath();
     edgeCtx.strokeStyle = edgeStrokeStyle;
     edgeCtx.lineWidth = edgeWidth;
@@ -774,10 +793,13 @@ if (hasEdges) {
     edgeCtx.lineJoin = 'round';
 
     for (let i = 0; i < E; i++) {
-      const sx = canvasRect.left + edgeXScale(x[edgesS[i]]);
-      const sy = canvasRect.top + edgeYScale(y[edgesS[i]]);
-      const tx = canvasRect.left + edgeXScale(x[edgesT[i]]);
-      const ty = canvasRect.top + edgeYScale(y[edgesT[i]]);
+      const sx = left + edgeXScale(x[edgesS[i]]);
+      const sy = top + edgeYScale(y[edgesS[i]]);
+      const tx = left + edgeXScale(x[edgesT[i]]);
+      const ty = top + edgeYScale(y[edgesT[i]]);
+      // Skip edges entirely outside viewport
+      if ((sx < minX && tx < minX) || (sx > maxX && tx > maxX) ||
+          (sy < minY && ty < minY) || (sy > maxY && ty > maxY)) continue;
       edgeCtx.moveTo(sx, sy);
       edgeCtx.lineTo(tx, ty);
     }
@@ -798,6 +820,15 @@ if (hasEdges) {
     edgeNeedsRedraw = true;
     redrawEdges();
   });
+
+  edgeToggle.addEventListener('change', (e) => {
+    edgesVisible = e.target.checked;
+    edgeNeedsRedraw = true;
+    redrawEdges();
+  });
+} else {
+  // Hide edge toggle when no edges
+  edgeToggle.parentElement.style.display = 'none';
 }
 const NAN_FALLBACK_COLOR = '#000000';
 
