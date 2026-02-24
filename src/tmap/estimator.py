@@ -25,52 +25,18 @@ if TYPE_CHECKING:
 # Experimental graph-mode sparsification defaults.
 # these are internal until i figure out the graph mode and is fully stabilized.
 def _resolve_ann_backend(n_samples: int = 0, seed: int | None = None) -> Any:
-    """Auto-detect and return the best available ANN index.
+    """Return a FaissIndex for cosine/euclidean kNN search.
 
-    For large datasets (n >= 50k), prefers FaissIndex which supports IVF/IVFPQ
-    auto-selection for sub-linear query time.  For small datasets, prefers
-    NNDescentIndex (simpler, no training step).
-
-    Raises ImportError with install instructions if neither is available.
+    Raises ImportError with install instructions if faiss is not available.
     """
-    _have_nnd = False
-    _have_faiss = False
-
-    try:
-        import pynndescent  # noqa: F401
-
-        _have_nnd = True
-    except ImportError:
-        pass
-
     try:
         import faiss  # noqa: F401
-
-        _have_faiss = True
     except ImportError:
-        pass
-
-    if not _have_nnd and not _have_faiss:
         raise ImportError(
-            "metric='cosine' and metric='euclidean' require either pynndescent or faiss. "
-            "Install one with:\n"
-            "  pip install pynndescent\n"
-            "  pip install faiss-cpu"
+            "metric='cosine' and metric='euclidean' require faiss. "
+            "Install with:\n  pip install faiss-cpu"
         )
 
-    # Large data: prefer FAISS (IVF/IVFPQ auto-selection handles scale)
-    if n_samples >= 50_000 and _have_faiss:
-        from tmap.index.faiss_index import FaissIndex
-
-        return FaissIndex(seed=seed)
-
-    # Small data: prefer NNDescent (simpler, no training)
-    if _have_nnd:
-        from tmap.index.nndescent import NNDescentIndex
-
-        return NNDescentIndex(seed=seed)
-
-    # Fallback: whatever is available
     from tmap.index.faiss_index import FaissIndex
 
     return FaissIndex(seed=seed)
@@ -113,7 +79,7 @@ class TMAP:
           small datasets (< ~50k points due to O(n^2) memory). For larger
           datasets, compute k-NN externally and pass via ``knn_graph=``.
         - ``'cosine'``, ``'euclidean'``: For dense float vectors (e.g. protein
-          embeddings). Requires ``pynndescent`` or ``faiss-cpu``.
+          embeddings). Requires ``faiss-cpu``.
     n_permutations : int, default=512
         Number of MinHash permutations. Only used with ``metric='jaccard'``.
     kc : int, default=10
@@ -628,7 +594,7 @@ class TMAP:
 
         Notes
         -----
-        - FAISS/NNDescent indices are not updated; subsequent ``add_points``
+        - FAISS indices are not updated; subsequent ``add_points``
           calls only see the original fit data as neighbors.
         - For ``metric='jaccard'``, the LSH Forest *is* updated, so subsequent
           calls can discover previously added points.

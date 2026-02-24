@@ -33,14 +33,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-nndescent = ["pynndescent>=0.5"]
 faiss = ["faiss-cpu>=1.7"]
-faiss-gpu = ["faiss-gpu>=1.7"]
 notebook = ["jupyter-scatter>=0.22.2"]
 all = [
-    "pynndescent>=0.5",
     "faiss-cpu>=1.7",
-    "faiss-gpu>=1.7",
     "jupyter-scatter>=0.22.2",
 ]
 dev = [
