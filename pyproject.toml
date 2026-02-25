@@ -43,7 +43,6 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff>=0.1",
-    "mypy>=1.0",
     "matplotlib>=3.7",
 ]
 
@@ -67,17 +66,6 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E741", "E743", "N806"]
-
-[tool.mypy]
-python_version = "3.12"
-strict = true
-
-[[tool.mypy.overrides]]
-module = [
-    "tmap.index._lsh_numba",
-    "tmap.index.encoders._minhash_numba",
-]
-ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
