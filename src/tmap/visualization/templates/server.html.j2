@@ -1,14 +1,11 @@
 {#
-  Binary Template - Optimized for large datasets (5M+ points)
+  Server Template - Fetch-based loading for large datasets (1M+ points)
 
-  Uses:
-  - Uint16 quantized coordinates (4x smaller than JSON)
-  - Gzip-compressed typed arrays
-  - WebWorker decoding (non-blocking)
-  - Transferable buffers (zero-copy)
+  Loads data via HTTP fetch instead of inline base64.
+  Color columns are loaded lazily on demand.
 
   Usage:
-    viz.render(template_name="binary.html.j2")
+    viz.serve(port=8050)
 #}
 <!DOCTYPE html>
 <html lang="en">
@@ -85,33 +82,11 @@
       z-index: 120;
     }
     #legend.hidden { display: none; }
-    #legend-title {
-      font-weight: 600;
-      margin-bottom: 6px;
-    }
-    .legend-gradient {
-      height: 10px;
-      border-radius: 4px;
-      border: 1px solid #fff;
-    }
-    .legend-range {
-      display: flex;
-      justify-content: space-between;
-      font-size: 11px;
-      margin-top: 4px;
-    }
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 2px 0;
-    }
-    .legend-swatch {
-      width: 12px;
-      height: 12px;
-      border-radius: 3px;
-      border: 1px solid #fff;
-    }
+    #legend-title { font-weight: 600; margin-bottom: 6px; }
+    .legend-gradient { height: 10px; border-radius: 4px; border: 1px solid #fff; }
+    .legend-range { display: flex; justify-content: space-between; font-size: 11px; margin-top: 4px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
+    .legend-swatch { width: 12px; height: 12px; border-radius: 3px; border: 1px solid #fff; }
     #tooltip {
       position: fixed;
       pointer-events: none;
@@ -131,6 +106,22 @@
     #tooltip .row { display: flex; justify-content: space-between; gap: 12px; margin: 2px 0; }
     #tooltip .key { color: #9ca3af; flex-shrink: 0; }
     #tooltip .value { color: #e5e7eb; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    #loading {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: {{ background_color }};
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    #loading.hidden { display: none; }
+    #loading-text { font-size: 18px; margin-bottom: 20px; }
+    #progress-bar { width: 300px; height: 8px; background: rgba(255,255,255,0.2); border-radius: 4px; overflow: hidden; }
+    #progress-fill { height: 100%; background: #4a9eff; width: 0%; transition: width 0.2s; }
+    #progress-text { margin-top: 10px; font-size: 14px; color: #9ca3af; }
 
     /* Card stack - pinned cards from single clicks */
     #card-stack {
@@ -262,7 +253,31 @@
     }
     .card-copy-btn:hover { background: #3a8eef; }
     .card-copy-btn.copied { background: #22c55e; }
-    .card-structure-container { display: none; }
+    /* Structure rendering for SMILES tooltips and cards */
+    #tooltip .structure-container {
+      width: 240px;
+      height: 200px;
+      background: #fff;
+      border-radius: 4px;
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #tooltip .structure-container.hidden { display: none; }
+    #tooltip #structure-svg { width: 240px; height: 200px; }
+    .card .card-structure-container {
+      display: flex;
+      width: 216px;
+      height: 200px;
+      background: #fff;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      align-items: center;
+      justify-content: center;
+    }
+    .card .card-structure-container.hidden { display: none; }
+    .card #card-structure-svg { width: 216px; height: 200px; }
 
     /* Search panel - top left below title */
     #search-panel {
@@ -393,45 +408,6 @@
       border: 1px solid #555;
     }
     .export-btn.secondary:hover { background: #444; }
-
-    /* Loading overlay */
-    #loading {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: {{ background_color }};
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-    }
-    #loading.hidden { display: none; }
-    #loading-text {
-      font-size: 18px;
-      margin-bottom: 20px;
-    }
-    #progress-bar {
-      width: 300px;
-      height: 8px;
-      background: rgba(255, 255, 255, 0.2);
-      border-radius: 4px;
-      overflow: hidden;
-    }
-    #progress-fill {
-      height: 100%;
-      background: #4a9eff;
-      width: 0%;
-      transition: width 0.2s;
-    }
-    #progress-text {
-      margin-top: 10px;
-      font-size: 14px;
-      color: #9ca3af;
-    }
-{% block extra_styles %}{% endblock %}
   </style>
 </head>
 <body>
@@ -451,6 +427,7 @@
   <div id="tooltip">
     <div class="label" id="tooltip-label"></div>
     <div id="tooltip-content"></div>
+    <div class="structure-container hidden" id="tooltip-structure"></div>
   </div>
   <div id="legend" class="hidden">
     <div id="legend-title"></div>
@@ -486,22 +463,11 @@
     <div id="search-results"></div>
   </div>
 
-{% block extra_elements %}{% endblock %}
-
-  <!-- Binary data sections -->
-  <script id="tmap-header" type="application/json">{{ header_json }}</script>
-  <script id="tmap-coords" type="application/octet-stream">{{ coords_b64 }}</script>
-{% for name, data in columns_b64.items() %}
-  <script id="tmap-col-{{ name }}" type="application/octet-stream">{{ data }}</script>
-{% endfor %}
-{% if edges_b64 %}
-  <script id="tmap-edges" type="application/octet-stream">{{ edges_b64 }}</script>
-{% endif %}
-
-  <!-- fflate for decompression (UMD build) -->
+  <!-- fflate for decompression -->
   <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.min.js"></script>
+  <!-- SmilesDrawer for molecule rendering -->
+  <script src="https://unpkg.com/smiles-drawer@2.1.7/dist/smiles-drawer.min.js"></script>
 
-  <!-- Scatterplot libraries -->
   <script type="module">
     const decode = (b64) => atob(b64);
     const mkModule = (code) =>
@@ -531,10 +497,6 @@ export default module.exports || globalThisRef.createREGL || createREGL;
 import createScatterplot from '${scatterUrl}';
 import createREGL from '${reglUrl}';
 
-// ============================================
-// Binary Data Decoding
-// ============================================
-
 const loading = document.getElementById('loading');
 const progressFill = document.getElementById('progress-fill');
 const progressText = document.getElementById('progress-text');
@@ -544,16 +506,10 @@ function updateProgress(percent, text) {
   progressText.textContent = text;
 }
 
-// Decode gzip-compressed base64 using fflate
-function decodeGzipBase64(base64, dtype) {
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-
+// Decode gzip-compressed binary data using fflate
+function decodeGzipBuffer(buffer, dtype) {
+  const bytes = new Uint8Array(buffer);
   const decompressed = fflate.gunzipSync(bytes);
-
   switch (dtype) {
     case 'uint16': return new Uint16Array(decompressed.buffer);
     case 'uint32': return new Uint32Array(decompressed.buffer);
@@ -563,94 +519,80 @@ function decodeGzipBase64(base64, dtype) {
   }
 }
 
-// Dequantize coords
 function dequantizeCoords(quantized, bits = 16) {
   const n = quantized.length / 2;
   const maxVal = bits === 16 ? 65535 : 4294967295;
   const scale = 2.0 / maxVal;
-
   const x = new Float32Array(n);
   const y = new Float32Array(n);
-
   for (let i = 0; i < n; i++) {
     x[i] = quantized[i * 2] * scale - 1.0;
     y[i] = quantized[i * 2 + 1] * scale - 1.0;
   }
-
   return { x, y };
 }
 
 // ============================================
-// Load Data
+// Fetch Data from Server
 // ============================================
 
-updateProgress(5, 'Parsing header...');
+updateProgress(5, 'Fetching metadata...');
+const metadata = await fetch('/metadata.json').then(r => r.json());
 
-const header = JSON.parse(document.getElementById('tmap-header').textContent);
-const coordsB64 = document.getElementById('tmap-coords').textContent;
-
-const metadata = header.metadata || {};
 const colormaps = metadata.colormaps || {};
 const layoutOptions = metadata.layoutOptions || [];
 const labelOptions = metadata.labelOptions || [];
-const columnMeta = header.columns || {};
+const columnMeta = metadata.columns || {};
+const nEdges = metadata.nEdges || 0;
 
-updateProgress(10, 'Decoding coordinates...');
-
-// Decode coordinates
-const coordDtype = header.coordDtype || 'uint16';
+updateProgress(10, 'Fetching coordinates...');
+const coordsBuffer = await fetch('/coords.bin').then(r => r.arrayBuffer());
+const coordDtype = metadata.coordDtype || 'uint16';
 const coordBits = coordDtype === 'uint16' ? 16 : 32;
-const quantizedCoords = decodeGzipBase64(coordsB64, coordDtype);
+const quantizedCoords = decodeGzipBuffer(coordsBuffer, coordDtype);
 const { x, y } = dequantizeCoords(quantizedCoords, coordBits);
 const n = x.length;
+const N = n;
 
-// Decode edges
-const edgesEl = document.getElementById('tmap-edges');
-let edgesS = null, edgesT = null;
-const nEdges = (metadata.nEdges || 0);
-if (edgesEl && nEdges > 0) {
-  const edgesRaw = decodeGzipBase64(edgesEl.textContent, 'uint32');
-  edgesS = edgesRaw.subarray(0, nEdges);
-  edgesT = edgesRaw.subarray(nEdges, 2 * nEdges);
-}
-const hasEdges = edgesS !== null && edgesS.length > 0 && metadata.showEdges !== false;
+updateProgress(30, 'Preparing visualization...');
+const hasEdges = nEdges > 0;
 const parsedEdgeWidth = Number(metadata.edgeWidth);
 const edgeWidth = Number.isFinite(parsedEdgeWidth) && parsedEdgeWidth > 0 ? parsedEdgeWidth : 2;
 const edgeStrokeStyle = metadata.edgeStrokeStyle || 'rgba(0, 0, 0, 0.5)';
-const N = n;
 
-updateProgress(40, 'Decoding columns...');
+updateProgress(40, 'Fetching columns...');
 
-// Decode columns
+// Load initial color layout column eagerly, others lazily
 const columns = {};
 const columnNames = Object.keys(columnMeta);
-let colIdx = 0;
+const initialColor = layoutOptions[0] || '';
 
+// Load string columns from metadata (they're embedded)
 for (const name of columnNames) {
   const meta = columnMeta[name];
-  const el = document.getElementById('tmap-col-' + name);
-
-  // String columns (labels / SMILES) are embedded in metadata, not separate script tags
-  if (!el) {
-    if (meta && meta.dtype === 'string' && Array.isArray(meta.values)) {
-      columns[name] = {
-        values: meta.values,
-        dtype: 'string',
-        role: meta.role,
-        colormap: meta.colormap,
-      };
-      colIdx++;
-      const pct = 40 + (colIdx / columnNames.length) * 40;
-      updateProgress(pct, 'Decoding ' + name + '...');
-    }
-    continue;
+  if (meta.dtype === 'string' && Array.isArray(meta.values)) {
+    columns[name] = {
+      values: meta.values,
+      dtype: 'string',
+      role: meta.role,
+      colormap: meta.colormap,
+    };
   }
+}
 
-  const b64 = el.textContent;
-  const decoded = decodeGzipBase64(b64, meta.dtype);
+// Fetch a binary column from the server
+async function fetchColumn(name) {
+  if (columns[name]) return columns[name];
+  const meta = columnMeta[name];
+  if (!meta) return null;
+  if (meta.dtype === 'string') return columns[name] || null;
+
+  const resp = await fetch('/col_' + encodeURIComponent(name) + '.bin');
+  if (!resp.ok) return null;
+  const buffer = await resp.arrayBuffer();
+  const decoded = decodeGzipBuffer(buffer, meta.dtype);
 
   if (meta.dictionary) {
-    // Categorical: map indices to values
     columns[name] = {
       values: Array.from(decoded).map(i => meta.dictionary[i]),
       dtype: 'categorical',
@@ -665,13 +607,18 @@ for (const name of columnNames) {
       colormap: meta.colormap,
     };
   }
-
-  colIdx++;
-  const pct = 40 + (colIdx / columnNames.length) * 40;
-  updateProgress(pct, 'Decoding ' + name + '...');
+  return columns[name];
 }
 
-updateProgress(85, 'Initializing visualization...');
+// Pre-fetch the initial color column and all label columns
+const fetchPromises = [];
+if (initialColor) fetchPromises.push(fetchColumn(initialColor));
+for (const name of labelOptions) {
+  fetchPromises.push(fetchColumn(name));
+}
+await Promise.all(fetchPromises);
+
+updateProgress(80, 'Initializing visualization...');
 
 // ============================================
 // Visualization Setup
@@ -687,34 +634,21 @@ const legendTitle = document.getElementById('legend-title');
 const legendContent = document.getElementById('legend-content');
 
 function createLinearScale(initialDomain, initialRange) {
-  let d0 = initialDomain[0];
-  let d1 = initialDomain[1];
-  let r0 = initialRange[0];
-  let r1 = initialRange[1];
+  let d0 = initialDomain[0], d1 = initialDomain[1];
+  let r0 = initialRange[0], r1 = initialRange[1];
   const scale = (value) => {
     const denom = d1 - d0;
     if (denom === 0) return r0;
     return r0 + ((value - d0) / denom) * (r1 - r0);
   };
-  scale.domain = (nextDomain) => {
-    if (nextDomain === undefined) return [d0, d1];
-    d0 = nextDomain[0];
-    d1 = nextDomain[1];
-    return scale;
-  };
-  scale.range = (nextRange) => {
-    if (nextRange === undefined) return [r0, r1];
-    r0 = nextRange[0];
-    r1 = nextRange[1];
-    return scale;
-  };
+  scale.domain = (nd) => { if (nd === undefined) return [d0,d1]; d0=nd[0]; d1=nd[1]; return scale; };
+  scale.range = (nr) => { if (nr === undefined) return [r0,r1]; r0=nr[0]; r1=nr[1]; return scale; };
   return scale;
 }
 
 const edgeXScale = createLinearScale([-1, 1], [0, canvas.clientWidth || window.innerWidth]);
 const edgeYScale = createLinearScale([-1, 1], [canvas.clientHeight || window.innerHeight, 0]);
 
-const initialColor = layoutOptions[0] || '';
 const fallbackPointColor = metadata.pointColor || '#4a9eff';
 
 const scatterplot = createScatterplot({
@@ -722,9 +656,9 @@ const scatterplot = createScatterplot({
   width: canvas.clientWidth || window.innerWidth,
   height: canvas.clientHeight || window.innerHeight,
   pointSize: metadata.pointSize || 4,
-  pointSizeSelected: 8,  // 2x size when selected
+  pointSizeSelected: 8,
   opacity: metadata.opacity ?? 0.85,
-  opacityInactiveScale: 0.5,  // Dim non-selected points when selection active
+  opacityInactiveScale: 0.5,
   backgroundColor: metadata.backgroundColor || [0, 0, 0, 1],
   pointColor: fallbackPointColor,
   pointOutlineWidth: 2,
@@ -736,10 +670,14 @@ const scatterplot = createScatterplot({
 });
 
 const zeroArray = new Float32Array(n);
+const NAN_FALLBACK_COLOR = '#000000';
 
 // === WebGL Edge Rendering ===
+// Edges rendered via regl on a separate WebGL canvas (GPU-accelerated).
+// For N > 1M, edges default to OFF and load lazily on first toggle.
 let edgeNeedsRedraw = false;
 let edgesVisible = hasEdges && N <= 1_000_000;
+let edgesLoaded = false;
 let edgeRegl = null;
 let drawEdgesCmd = null;
 let edgeCanvas = null;
@@ -772,17 +710,28 @@ if (hasEdges) {
     edgeNeedsRedraw = true;
   }
   resizeEdgeCanvas();
+}
 
-  // Build WebGL buffers from already-decoded edge data
+async function loadEdges() {
+  if (edgesLoaded || !hasEdges) return;
+
+  const buf = await fetch('/edges.bin').then(r => r.arrayBuffer());
+  const raw = decodeGzipBuffer(buf, 'uint32');
+  const eS = raw.subarray(0, nEdges);
+  const eT = raw.subarray(nEdges, 2 * nEdges);
+
+  // Interleaved position buffer from point coordinates
   const positions = new Float32Array(n * 2);
   for (let i = 0; i < n; i++) {
     positions[i * 2] = x[i];
     positions[i * 2 + 1] = y[i];
   }
+
+  // Element index buffer: pairs of vertex indices per edge
   const elements = new Uint32Array(nEdges * 2);
   for (let i = 0; i < nEdges; i++) {
-    elements[i * 2] = edgesS[i];
-    elements[i * 2 + 1] = edgesT[i];
+    elements[i * 2] = eS[i];
+    elements[i * 2 + 1] = eT[i];
   }
 
   edgeRegl = createREGL({
@@ -813,14 +762,16 @@ if (hasEdges) {
     depth: { enable: false },
   });
 
+  edgesLoaded = true;
   edgeNeedsRedraw = true;
 }
 
 function renderEdges() {
-  if (!drawEdgesCmd || !edgesVisible || !edgeRegl) return;
+  if (!edgesLoaded || !edgesVisible || !edgeRegl) return;
   edgeRegl.poll();
   edgeRegl.clear({ color: [0, 0, 0, 0] });
 
+  // Derive data-to-clip-space transform from scatterplot's live scales
   const xd = edgeXScale.domain();
   const yd = edgeYScale.domain();
   const xRange = xd[1] - xd[0] || 1;
@@ -838,7 +789,7 @@ const redrawEdges = renderEdges;
 
 if (hasEdges) {
   scatterplot.subscribe('drawing', (event) => {
-    if (!edgesVisible) return;
+    if (!edgesVisible || !edgesLoaded) return;
     if (edgeNeedsRedraw || (event && event.isViewChanged)) renderEdges();
   });
 
@@ -847,8 +798,21 @@ if (hasEdges) {
     renderEdges();
   });
 
-  edgeToggle.addEventListener('change', (e) => {
+  edgeToggle.addEventListener('change', async (e) => {
     edgesVisible = e.target.checked;
+    if (edgesVisible && !edgesLoaded) {
+      edgeToggle.disabled = true;
+      try {
+        await loadEdges();
+      } catch (err) {
+        console.error('Failed to load edges:', err);
+        edgesVisible = false;
+        edgeToggle.checked = false;
+        edgeToggle.disabled = false;
+        return;
+      }
+      edgeToggle.disabled = false;
+    }
     if (edgesVisible) {
       edgeNeedsRedraw = true;
       renderEdges();
@@ -857,18 +821,18 @@ if (hasEdges) {
       edgeRegl.clear({ color: [0, 0, 0, 0] });
     }
   });
+
+  // For small datasets (<=1M), load edges eagerly during startup
+  if (edgesVisible) await loadEdges();
 } else {
-  // Hide edge toggle when no edges
   edgeToggle.parentElement.style.display = 'none';
 }
-const NAN_FALLBACK_COLOR = '#000000';
 
+// Color mapping
 function buildContinuousMapping(rawValues, baseCmap) {
   const nums = new Float64Array(rawValues.length);
   const missing = new Array(rawValues.length);
-  let min = Infinity;
-  let max = -Infinity;
-  let hasNaN = false;
+  let min = Infinity, max = -Infinity, hasNaN = false;
 
   for (let i = 0; i < rawValues.length; i++) {
     const raw = rawValues[i];
@@ -876,34 +840,18 @@ function buildContinuousMapping(rawValues, baseCmap) {
     nums[i] = v;
     const isMissing = raw === null || raw === undefined || !Number.isFinite(v);
     missing[i] = isMissing;
-    if (isMissing) {
-      hasNaN = true;
-      continue;
-    }
-
+    if (isMissing) { hasNaN = true; continue; }
     if (v < min) min = v;
     if (v > max) max = v;
   }
 
-  if (min === Infinity) {
-    min = 0;
-    max = 0;
-  }
-
+  if (min === Infinity) { min = 0; max = 0; }
   const range = max === min ? 1 : max - min;
   const w = new Float32Array(rawValues.length);
 
   if (!hasNaN) {
-    for (let i = 0; i < rawValues.length; i++) {
-      w[i] = (nums[i] - min) / range;
-    }
-    return {
-      cmap: baseCmap,
-      w,
-      min,
-      max,
-      hasNaN: false,
-    };
+    for (let i = 0; i < rawValues.length; i++) w[i] = (nums[i] - min) / range;
+    return { cmap: baseCmap, w, min, max, hasNaN: false };
   }
 
   const baseCount = Math.max(1, baseCmap.length);
@@ -912,25 +860,16 @@ function buildContinuousMapping(rawValues, baseCmap) {
   for (let i = 0; i < rawValues.length; i++) {
     w[i] = missing[i] ? 0 : ((nums[i] - min) / range) * scale + offset;
   }
-
-  return {
-    cmap: [NAN_FALLBACK_COLOR, ...baseCmap],
-    w,
-    min,
-    max,
-    hasNaN: true,
-  };
+  return { cmap: [NAN_FALLBACK_COLOR, ...baseCmap], w, min, max, hasNaN: true };
 }
 
-function applyColor(columnName) {
-  const col = columns[columnName];
+async function applyColor(columnName) {
+  const col = await fetchColumn(columnName);
   if (!col) {
     scatterplot.set({ colorBy: null, pointColor: fallbackPointColor });
     edgeNeedsRedraw = true;
-    scatterplot.draw({ x, y }).then(() => {
-      redrawEdges();
-    });
-    updateLegend('');
+    scatterplot.draw({ x, y }).then(() => { redrawEdges(); });
+    updateLegend('', null);
     return;
   }
 
@@ -947,18 +886,14 @@ function applyColor(columnName) {
     }
     edgeNeedsRedraw = true;
     scatterplot.set({ colorBy: 'valueA', pointColor: cmap });
-    scatterplot.draw({ x, y, z, w: zeroArray }).then(() => {
-      redrawEdges();
-    });
+    scatterplot.draw({ x, y, z, w: zeroArray }).then(() => { redrawEdges(); });
   } else {
     const mapping = buildContinuousMapping(col.values, cmap);
     edgeNeedsRedraw = true;
     scatterplot.set({ colorBy: 'valueB', pointColor: mapping.cmap });
-    scatterplot.draw({ x, y, z: zeroArray, w: mapping.w }).then(() => {
-      redrawEdges();
-    });
+    scatterplot.draw({ x, y, z: zeroArray, w: mapping.w }).then(() => { redrawEdges(); });
   }
-  updateLegend(columnName);
+  updateLegend(columnName, col);
 }
 
 function formatValue(val) {
@@ -983,8 +918,7 @@ function buildGradient(colors) {
   return 'linear-gradient(90deg, ' + stops.join(', ') + ')';
 }
 
-function updateLegend(columnName) {
-  const col = columns[columnName];
+function updateLegend(columnName, col) {
   if (!col || col.role === 'label') {
     legend.classList.add('hidden');
     return;
@@ -998,10 +932,7 @@ function updateLegend(columnName) {
     const items = [];
     for (let i = 0; i < col.values.length; i++) {
       const v = col.values[i];
-      if (!mapping.has(v)) {
-        mapping.set(v, mapping.size);
-        items.push(v);
-      }
+      if (!mapping.has(v)) { mapping.set(v, mapping.size); items.push(v); }
     }
     let html = '';
     for (let i = 0; i < items.length; i++) {
@@ -1030,14 +961,10 @@ let mouseX = 0, mouseY = 0;
 canvas.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
 
 function showTooltip(idx) {
-  // Get label from first label column
   let label = 'Point ' + idx;
   for (const name of labelOptions) {
     const col = columns[name];
-    if (col && col.values[idx] !== undefined) {
-      label = col.values[idx];
-      break;
-    }
+    if (col && col.values[idx] !== undefined) { label = col.values[idx]; break; }
   }
   tooltipLabel.textContent = label;
 
@@ -1060,9 +987,7 @@ function showTooltip(idx) {
   tooltip.style.top = top + 'px';
 }
 
-function hideTooltip() {
-  tooltip.classList.remove('visible');
-}
+function hideTooltip() { tooltip.classList.remove('visible'); }
 
 scatterplot.subscribe('pointover', (idx) => showTooltip(idx));
 scatterplot.subscribe('pointout', hideTooltip);
@@ -1075,11 +1000,12 @@ window.addEventListener('resize', () => {
 
 // Color selector
 for (const name of layoutOptions) {
-  const col = columns[name];
-  if (!col) continue;
+  const meta = columnMeta[name];
+  if (!meta) continue;
   const opt = document.createElement('option');
   opt.value = name;
-  opt.textContent = name + ' (' + col.dtype + ')';
+  const dtype = meta.dictionary ? 'categorical' : (meta.dtype === 'float32' ? 'continuous' : meta.dtype);
+  opt.textContent = name + ' (' + dtype + ')';
   colorSelect.appendChild(opt);
 }
 if (initialColor) colorSelect.value = initialColor;
@@ -1087,16 +1013,13 @@ colorSelect.addEventListener('change', (e) => applyColor(e.target.value));
 
 // Initial render
 updateProgress(95, 'Rendering...');
-applyColor(initialColor || '');
+await applyColor(initialColor || '');
 redrawEdges();
 
-// Hide loading
 updateProgress(100, 'Complete!');
-setTimeout(() => {
-  loading.classList.add('hidden');
-}, 200);
+setTimeout(() => { loading.classList.add('hidden'); }, 200);
 
-console.log('Loaded ' + n.toLocaleString() + ' points');
+console.log('Loaded ' + n.toLocaleString() + ' points (server mode)');
 
 // ============================================
 // Card Stack System (single-click pinned cards)
@@ -1106,7 +1029,6 @@ const cardStack = document.getElementById('card-stack');
 const pinnedCards = []; // Array of point indices
 let currentCardIndex = 0;
 
-// >>> CARD_STACK_LIMIT: Change this value to adjust maximum pinned cards <<<
 const MAX_CARDS = 50;
 
 function getLabel(idx) {
@@ -1126,7 +1048,7 @@ scatterplot.subscribe('pointout', () => { hoveredPointIndex = -1; });
 
 // Drag detection - only select on click, not drag
 let mouseDownPos = null;
-const DRAG_THRESHOLD = 5; // pixels
+const DRAG_THRESHOLD = 5;
 
 canvas.addEventListener('mousedown', (e) => {
   mouseDownPos = { x: e.clientX, y: e.clientY };
@@ -1135,15 +1057,12 @@ canvas.addEventListener('mousedown', (e) => {
 canvas.addEventListener('mouseup', (e) => {
   if (!mouseDownPos) return;
 
-  // Check if this was a drag (moved more than threshold)
   const dx = e.clientX - mouseDownPos.x;
   const dy = e.clientY - mouseDownPos.y;
   const distance = Math.sqrt(dx * dx + dy * dy);
   mouseDownPos = null;
 
-  if (distance > DRAG_THRESHOLD) return; // Was a drag, not a click
-
-  // Ignore if shift/ctrl held (multi-select mode)
+  if (distance > DRAG_THRESHOLD) return;
   if (e.shiftKey || e.ctrlKey || e.metaKey) return;
   if (hoveredPointIndex < 0) return;
 
@@ -1151,10 +1070,8 @@ canvas.addEventListener('mouseup', (e) => {
   const existingIndex = pinnedCards.indexOf(idx);
 
   if (existingIndex >= 0) {
-    // Jump to existing card
     currentCardIndex = existingIndex;
   } else {
-    // Add new card (remove oldest if at limit)
     if (pinnedCards.length >= MAX_CARDS) {
       pinnedCards.shift();
     }
@@ -1200,16 +1117,14 @@ function renderCardStack() {
   html += '</div>';
   html += '</div>';
 
-  // Card body (hidden when minimized)
+  // Card body
   html += '<div class="card-body">';
-
-  // Label
   html += '<div class="card-label">' + truncateString(String(label), 40) + '</div>';
 
-  // Structure container placeholder (extended by SMILES templates)
+  // Structure container placeholder
   html += '<div class="card-structure-container" id="card-structure"></div>';
 
-  // SMILES row with copy button (if present)
+  // SMILES row with copy button
   if (smilesValue && typeof smilesValue === 'string') {
     html += '<div class="card-copy-row">';
     html += '<span class="key">SMILES</span>';
@@ -1220,13 +1135,12 @@ function renderCardStack() {
 
   // Other label fields
   for (const name of labelOptions) {
-    if (name === smilesColName) continue; // Already shown above
+    if (name === smilesColName) continue;
     const col = columns[name];
     if (!col) continue;
     const val = col.values[idx];
     const displayVal = truncateString(formatValue(val), 30);
 
-    // Add copy button for string values
     if (typeof val === 'string' && val.length > 0) {
       html += '<div class="card-copy-row">';
       html += '<span class="key">' + name + '</span>';
@@ -1297,11 +1211,11 @@ const exportCloseBtn = document.getElementById('export-close');
 
 let selectedIndices = [];
 
-// Build column checkboxes
-function buildExportColumns() {
+// Build column checkboxes (fetch all label columns first)
+async function buildExportColumns() {
   let html = '';
   for (const name of labelOptions) {
-    const col = columns[name];
+    const col = await fetchColumn(name);
     if (!col) continue;
     html += '<label><input type="checkbox" value="' + name + '" checked> ' + name + '</label>';
   }
@@ -1320,7 +1234,6 @@ function hideExportPanel() {
   exportPanel.classList.add('hidden');
 }
 
-// Listen for scatterplot selection events (only show export for multi-select, not single click)
 scatterplot.subscribe('select', (selection) => {
   const indices = selection.points || selection;
   if (Array.isArray(indices) && indices.length > 1) {
@@ -1338,21 +1251,23 @@ function getSelectedColumns() {
   return checked;
 }
 
-function exportData(separator, extension) {
+async function exportData(separator, extension) {
   const colNames = getSelectedColumns();
   if (colNames.length === 0 || selectedIndices.length === 0) return;
 
-  // Build header
+  // Ensure all selected columns are fetched
+  for (const name of colNames) {
+    await fetchColumn(name);
+  }
+
   const rows = [colNames.join(separator)];
 
-  // Build data rows
   for (const idx of selectedIndices) {
     const rowValues = colNames.map((name) => {
       const col = columns[name];
       if (!col) return '';
       const val = col.values[idx];
       let strVal = typeof val === 'number' ? formatValue(val) : String(val ?? '');
-      // Escape quotes and wrap in quotes if contains separator or quotes
       if (strVal.includes(separator) || strVal.includes('"') || strVal.includes('\\n')) {
         strVal = '"' + strVal.replace(/"/g, '""') + '"';
       }
@@ -1392,7 +1307,6 @@ document.addEventListener('keydown', (e) => {
       currentCardIndex = 0;
       renderCardStack();
     }
-    // Also clear search
     if (searchMatches.length > 0) {
       clearSearch();
     }
@@ -1412,13 +1326,12 @@ const searchResults = document.getElementById('search-results');
 
 let searchMatches = [];
 
-// Populate search column dropdown with string columns only
-function buildSearchColumnOptions() {
+// Populate search column dropdown with string columns
+async function buildSearchColumnOptions() {
   searchColumn.innerHTML = '';
   for (const name of labelOptions) {
-    const col = columns[name];
+    const col = await fetchColumn(name);
     if (!col) continue;
-    // Only include string columns (check first value)
     const firstVal = col.values[0];
     if (typeof firstVal !== 'string') continue;
 
@@ -1430,7 +1343,7 @@ function buildSearchColumnOptions() {
   // Add SMILES column if present and not already in labelOptions
   const smilesCol = metadata.smilesColumn;
   if (smilesCol && !labelOptions.includes(smilesCol)) {
-    const col = columns[smilesCol];
+    const col = await fetchColumn(smilesCol);
     if (col && typeof col.values[0] === 'string') {
       const opt = document.createElement('option');
       opt.value = smilesCol;
@@ -1441,19 +1354,18 @@ function buildSearchColumnOptions() {
 }
 buildSearchColumnOptions();
 
-// Search function
-function performSearch() {
+async function performSearch() {
   const colName = searchColumn.value;
   const query = searchInput.value.trim();
   const partial = partialMatchCheckbox.checked;
 
   if (!query || !colName) {
     searchResults.textContent = '';
-    clearMarkers();
+    scatterplot.select([]);
     return;
   }
 
-  const col = columns[colName];
+  const col = await fetchColumn(colName);
   if (!col) {
     searchResults.textContent = 'Column not found';
     return;
@@ -1480,7 +1392,7 @@ function performSearch() {
     scatterplot.select([]);
   } else {
     searchResults.textContent = matches.length.toLocaleString() + ' match(es) found';
-    scatterplot.select(matches);  // Highlights points and triggers export panel for 2+ matches
+    scatterplot.select(matches);
   }
 }
 
@@ -1491,14 +1403,132 @@ function clearSearch() {
   scatterplot.select([]);
 }
 
-// Event handlers
 searchBtn.addEventListener('click', performSearch);
 searchInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') performSearch();
 });
 clearSearchBtn.addEventListener('click', clearSearch);
 
-{% block extra_runtime %}{% endblock %}
+// ============================================
+// SMILES Rendering via SmilesDrawer
+// ============================================
+
+const smilesColumn = metadata.smilesColumn;
+const tooltipStructure = document.getElementById('tooltip-structure');
+
+if (smilesColumn && columnMeta[smilesColumn]) {
+  // Create SVG element inside the tooltip structure container
+  const structureSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  structureSvg.id = 'structure-svg';
+  tooltipStructure.appendChild(structureSvg);
+
+  const g = typeof window !== 'undefined' ? window : globalThis;
+  const SmiDrawerCtor = g.SmiDrawer;
+  const SmilesDrawerLib = g.SmilesDrawer;
+
+  const drawerOptions = { width: 240, height: 200, bondThickness: 1.0, compactDrawing: false };
+
+  let drawer = null;
+  let drawSmiles = null;
+
+  if (SmiDrawerCtor) {
+    drawer = new SmiDrawerCtor(drawerOptions);
+    drawSmiles = (smiles) => drawer.draw(smiles, '#structure-svg', 'light');
+  } else if (SmilesDrawerLib && SmilesDrawerLib.Drawer && SmilesDrawerLib.parse) {
+    drawer = new SmilesDrawerLib.Drawer(drawerOptions);
+    drawSmiles = (smiles) =>
+      SmilesDrawerLib.parse(
+        smiles,
+        (tree) => drawer.draw(tree, 'structure-svg', 'light', false),
+        (err) => {
+          console.warn('Failed to parse SMILES:', smiles, err);
+          tooltipStructure.classList.add('hidden');
+        },
+      );
+  }
+
+  if (!drawSmiles) {
+    console.error('SmilesDrawer not loaded! Tried SmiDrawer and SmilesDrawer');
+  } else {
+    const originalShowTooltip = showTooltip;
+    showTooltip = function(idx) {
+      originalShowTooltip(idx);
+
+      const smilesCol = columns[smilesColumn];
+      if (!smilesCol) { tooltipStructure.classList.add('hidden'); return; }
+
+      const smiles = smilesCol.values[idx];
+      if (!smiles || typeof smiles !== 'string' || !smiles.trim()) {
+        tooltipStructure.classList.add('hidden');
+        return;
+      }
+
+      tooltipStructure.classList.remove('hidden');
+      structureSvg.innerHTML = '';
+
+      try {
+        drawSmiles(smiles);
+      } catch (err) {
+        console.warn('Failed to render SMILES:', smiles, err);
+        tooltipStructure.classList.add('hidden');
+      }
+    };
+
+    const originalHideTooltip = hideTooltip;
+    hideTooltip = function() {
+      originalHideTooltip();
+      tooltipStructure.classList.add('hidden');
+    };
+
+    console.log('SMILES rendering enabled for column:', smilesColumn);
+
+    // Card structure rendering
+    cardStack.addEventListener('cardrendered', (e) => {
+      const { idx, smilesValue } = e.detail;
+      const cardStructure = document.getElementById('card-structure');
+      if (!cardStructure) return;
+
+      if (!smilesValue || typeof smilesValue !== 'string' || !smilesValue.trim()) {
+        cardStructure.classList.add('hidden');
+        return;
+      }
+
+      let cardSvg = document.getElementById('card-structure-svg');
+      if (!cardSvg) {
+        cardSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        cardSvg.id = 'card-structure-svg';
+        cardStructure.appendChild(cardSvg);
+      }
+
+      cardStructure.classList.remove('hidden');
+      cardSvg.innerHTML = '';
+
+      const cardDrawerOptions = { width: 216, height: 200, bondThickness: 1.0, compactDrawing: false };
+
+      try {
+        if (SmiDrawerCtor) {
+          const cardDrawer = new SmiDrawerCtor(cardDrawerOptions);
+          cardDrawer.draw(smilesValue, '#card-structure-svg', 'light');
+        } else if (SmilesDrawerLib && SmilesDrawerLib.Drawer && SmilesDrawerLib.parse) {
+          const cardDrawer = new SmilesDrawerLib.Drawer(cardDrawerOptions);
+          SmilesDrawerLib.parse(
+            smilesValue,
+            (tree) => cardDrawer.draw(tree, 'card-structure-svg', 'light', false),
+            (err) => {
+              console.warn('Failed to parse SMILES for card:', smilesValue, err);
+              cardStructure.classList.add('hidden');
+            },
+          );
+        }
+      } catch (err) {
+        console.warn('Failed to render SMILES in card:', smilesValue, err);
+        cardStructure.classList.add('hidden');
+      }
+    });
+  }
+} else if (smilesColumn) {
+  console.log('SMILES column specified but not found in columns');
+}
 `;
 
     const runtimeUrl = mkModule(runtime);
