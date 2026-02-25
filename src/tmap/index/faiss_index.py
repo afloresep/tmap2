@@ -1,15 +1,15 @@
-"""FAISS-based exact/approximate nearest neighbor index.
+"""FAISS-based nearest neighbor index.
 
 Wraps Facebook AI Similarity Search (https://github.com/facebookresearch/faiss)
-for cosine/euclidean kNN search. Supports GPU acceleration and automatic index
-type selection (flat, IVF, IVFPQ) based on dataset size.
+for cosine/euclidean kNN search.
 
-Requires: ``pip install faiss-cpu`` or ``pip install faiss-gpu``
+Auto mode: flat (exact) for n < 50k, HNSW (approximate) for n >= 50k.
+
+Requires: ``pip install faiss-cpu``
 """
 
 from __future__ import annotations
 
-import math
 import pickle
 from pathlib import Path
 from typing import Any
@@ -20,60 +20,46 @@ from numpy.typing import NDArray
 from tmap.index.base import Index
 from tmap.index.types import KNNGraph
 
-# Auto-selection thresholds
-_IVF_THRESHOLD = 50_000
-_IVFPQ_THRESHOLD = 500_000
-
-
-def _largest_divisor_leq(d: int, max_val: int) -> int:
-    """Return the largest divisor of *d* that is <= *max_val*."""
-    for m in range(min(max_val, d), 0, -1):
-        if d % m == 0:
-            return m
-    return 1  # pragma: no cover – d >= 1 always
+_HNSW_THRESHOLD = 50_000
 
 
 class FaissIndex(Index):
     """Nearest neighbor index using FAISS.
 
-    Supports exact (flat) and approximate (IVF, IVFPQ) search modes.
-    Use ``mode="auto"`` (default) to let the index pick the best strategy
-    based on dataset size.
-
     Parameters
     ----------
     seed : int or None
-        Random seed (used for IVF training sample selection).
-    use_gpu : bool
-        If True, transfer the index to GPU 0 for faster search.
+        Random seed.
     mode : str
-        Index mode. One of:
-
-        - ``"auto"`` (default): flat for n < 50k, IVF for n < 500k, IVFPQ above.
-        - ``"flat"``: Exact brute-force search. O(n) query time.
-        - ``"ivf"``: Inverted file index. Approximate, no compression.
-        - ``"ivfpq"``: Inverted file + product quantization. Approximate, compressed.
-    nprobe : int
-        Number of cells to probe during IVF/IVFPQ search. Higher = better
-        recall, slower search. Default 32.
+        ``"auto"`` (default): flat for n < 50k, hnsw for n >= 50k.
+        ``"flat"``: Exact brute-force search.
+        ``"hnsw"``: Hierarchical Navigable Small World graph.
+    hnsw_m : int
+        Connections per node in the HNSW graph. Default 32.
+    hnsw_ef_construction : int
+        Search depth during HNSW build. Default 40.
+    hnsw_ef_search : int
+        Search depth during HNSW query. Default 64.
     """
 
     def __init__(
         self,
         seed: int | None = None,
-        use_gpu: bool = False,
         mode: str = "auto",
-        nprobe: int = 32,
+        hnsw_m: int = 32,
+        hnsw_ef_construction: int = 40,
+        hnsw_ef_search: int = 64,
     ) -> None:
         super().__init__(seed=seed)
-        if mode not in {"auto", "flat", "ivf", "ivfpq"}:
-            raise ValueError(f"mode must be auto/flat/ivf/ivfpq, got {mode!r}")
-        self._use_gpu = use_gpu
+        if mode not in {"auto", "flat", "hnsw"}:
+            raise ValueError(f"mode must be auto/flat/hnsw, got {mode!r}")
         self._mode = mode
-        self._nprobe = nprobe
-        self._effective_mode: str | None = None  # resolved after build
+        self._hnsw_m = hnsw_m
+        self._hnsw_ef_construction = hnsw_ef_construction
+        self._hnsw_ef_search = hnsw_ef_search
+        self._effective_mode: str | None = None
         self._vectors: NDArray[np.float32] | None = None
-        self._faiss_index = None  # faiss.Index (typed as Any to avoid import)
+        self._faiss_index = None
 
     @property
     def effective_mode(self) -> str | None:
@@ -94,14 +80,8 @@ class FaissIndex(Index):
         else:
             raise ValueError(f"FaissIndex does not support metric={metric!r}")
 
-        # Resolve auto mode
         if self._mode == "auto":
-            if n < _IVF_THRESHOLD:
-                effective = "flat"
-            elif n < _IVFPQ_THRESHOLD:
-                effective = "ivf"
-            else:
-                effective = "ivfpq"
+            effective = "flat" if n < _HNSW_THRESHOLD else "hnsw"
         else:
             effective = self._mode
         self._effective_mode = effective
@@ -109,16 +89,8 @@ class FaissIndex(Index):
         if effective == "flat":
             index = self._build_flat(d, metric_type)
             index.add(vectors)
-        elif effective == "ivf":
-            index = self._build_ivf(vectors, n, d, metric_type)
-        elif effective == "ivfpq":
-            index = self._build_ivfpq(vectors, n, d, metric_type)
         else:
-            raise ValueError(f"Unknown effective mode {effective!r}")
-
-        if self._use_gpu:
-            res = faiss.StandardGpuResources()
-            index = faiss.index_cpu_to_gpu(res, 0, index)
+            index = self._build_hnsw(vectors, d, metric_type)
 
         self._faiss_index = index
         self._vectors = vectors
@@ -130,75 +102,34 @@ class FaissIndex(Index):
             return faiss.IndexFlatIP(d)
         return faiss.IndexFlatL2(d)
 
-    def _build_ivf(
+    def _build_hnsw(
         self,
         vectors: NDArray[np.float32],
-        n: int,
         d: int,
         metric_type: int,
     ) -> Any:
         import faiss
 
-        nlist = max(int(math.sqrt(n)), 1)
-        quantizer = self._build_flat(d, metric_type)
-        index = faiss.IndexIVFFlat(quantizer, d, nlist, metric_type)
-        index.nprobe = self._nprobe
-
-        # Train on a subset
-        n_train = min(n, max(nlist * 40, 100_000))
-        train_data = self._sample_train_data(vectors, n_train)
-        index.train(train_data)
+        index = faiss.IndexHNSWFlat(d, self._hnsw_m, metric_type)
+        index.hnsw.efConstruction = self._hnsw_ef_construction
+        index.hnsw.efSearch = self._hnsw_ef_search
         index.add(vectors)
         return index
-
-    def _build_ivfpq(
-        self,
-        vectors: NDArray[np.float32],
-        n: int,
-        d: int,
-        metric_type: int,
-    ) -> Any:
-        import faiss
-
-        nlist = max(int(4 * math.sqrt(n)), 1)
-        m = _largest_divisor_leq(d, 64)
-        nbits = 8
-        quantizer = self._build_flat(d, metric_type)
-        index = faiss.IndexIVFPQ(quantizer, d, nlist, m, nbits, metric_type)
-        index.nprobe = self._nprobe
-
-        # Train on a subset
-        n_train = min(n, max(nlist * 40, 500_000))
-        train_data = self._sample_train_data(vectors, n_train)
-        index.train(train_data)
-        index.add(vectors)
-        return index
-
-    def _sample_train_data(self, vectors: NDArray[np.float32], n_train: int) -> NDArray[np.float32]:
-        n = vectors.shape[0]
-        if n_train >= n:
-            return vectors
-        rng = np.random.default_rng(self._seed)
-        idx = rng.choice(n, size=n_train, replace=False)
-        return vectors[idx]
 
     def _query_all(self, k: int) -> KNNGraph:
         n = self._vectors.shape[0]
         distances, indices = self._faiss_index.search(self._vectors, k + 1)
 
         if self._effective_mode == "flat":
-            # Exact index: self is always at position 0
             indices = indices[:, 1:]
             distances = distances[:, 1:]
         else:
-            # Approximate index: self may not be at position 0
+            # HNSW: self may not be at position 0
             row_ids = np.arange(n)
             if (indices[:, 0] == row_ids).all():
-                # Fast path
                 indices = indices[:, 1:]
                 distances = distances[:, 1:]
             else:
-                # Slow path: per-row filter
                 out_idx = np.empty((n, k), dtype=indices.dtype)
                 out_dist = np.empty((n, k), dtype=distances.dtype)
                 for i in range(n):
@@ -246,18 +177,14 @@ class FaissIndex(Index):
     def _save_implementation(self, path: Path) -> None:
         import faiss
 
-        # GPU index must be transferred back to CPU before saving
-        index = self._faiss_index
-        if self._use_gpu:
-            index = faiss.index_gpu_to_cpu(index)
-        faiss.write_index(index, str(path))
+        faiss.write_index(self._faiss_index, str(path))
 
-        # Save extra metadata (mode, nprobe)
         extra = {
             "mode": self._mode,
             "effective_mode": self._effective_mode,
-            "nprobe": self._nprobe,
-            "use_gpu": self._use_gpu,
+            "hnsw_m": self._hnsw_m,
+            "hnsw_ef_construction": self._hnsw_ef_construction,
+            "hnsw_ef_search": self._hnsw_ef_search,
         }
         with open(str(path) + ".faiss_meta", "wb") as f:
             pickle.dump(extra, f)
@@ -266,22 +193,17 @@ class FaissIndex(Index):
         import faiss
 
         self._faiss_index = faiss.read_index(str(path))
-        if self._use_gpu:
-            res = faiss.StandardGpuResources()
-            self._faiss_index = faiss.index_cpu_to_gpu(res, 0, self._faiss_index)
 
-        # Load extra metadata
         meta_path = str(path) + ".faiss_meta"
         try:
             with open(meta_path, "rb") as f:
                 extra = pickle.load(f)
             self._mode = extra.get("mode", "auto")
             self._effective_mode = extra.get("effective_mode")
-            self._nprobe = extra.get("nprobe", 32)
+            self._hnsw_m = extra.get("hnsw_m", 32)
+            self._hnsw_ef_construction = extra.get("hnsw_ef_construction", 40)
+            self._hnsw_ef_search = extra.get("hnsw_ef_search", 64)
         except FileNotFoundError:
-            # Backwards-compatible: old indices saved without extra metadata
             self._effective_mode = "flat"
 
-        # Vectors are not persisted; _query_all won't work after load.
-        # _query_single works fine without stored vectors.
         self._vectors = None

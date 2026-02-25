@@ -180,7 +180,7 @@ class TestSetPoints:
         viz.set_points(x, y)
 
         # Internal points should be normalized
-        points = viz._points
+        points = viz._points_array
         for p in points:
             assert -1.0 <= p[0] <= 1.0
             assert -1.0 <= p[1] <= 1.0
@@ -354,7 +354,7 @@ class TestAddSmiles:
         """Should add SMILES column."""
         viz, data = viz_with_data
 
-        viz.add_smiles(data["smiles"],"structure")
+        viz.add_smiles(data["smiles"], "structure")
 
         assert viz._smiles_column == "structure"
         assert "structure" in [label.name for label in viz.labels]

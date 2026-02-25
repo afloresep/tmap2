@@ -189,9 +189,9 @@ class LSHForest:
         """
         self._validate_signature_shape(signature)
 
-        # Store signature
+        # Store as 2D/3D batch of size 1 so index() can use np.concatenate
         if self._store:
-            self._signatures_list.append(signature.copy())
+            self._signatures_list.append(signature[np.newaxis].copy())
 
         self._needs_reindex = True
 
@@ -205,16 +205,12 @@ class LSHForest:
         Note:
             Call index() after adding signatures to build/update the index.
         """
-        # This is now very fast - just appends signatures to a list.
-        # The actual hash computation is deferred to index().
         self._validate_signature_shape(signatures, batch=True)
 
-        n_samples = signatures.shape[0]
-
         if self._store:
-            # Store each signature individually for incremental adds
-            for i in range(n_samples):
-                self._signatures_list.append(signatures[i].copy())
+            # Store whole batch as one contiguous array (not individual rows).
+            # This avoids N separate Python objects and cuts memory by ~50%.
+            self._signatures_list.append(signatures.copy())
 
         self._needs_reindex = True
 
@@ -235,8 +231,17 @@ class LSHForest:
             self._needs_reindex = False
             return
 
-        # Convert list to contiguous array for efficient Numba access
-        self._signatures = np.stack(self._signatures_list)
+        # Convert list to contiguous array for efficient Numba access.
+        # Include previously indexed signatures if this is a re-index.
+        all_parts = self._signatures_list
+        if self._signatures is not None and len(self._signatures) > 0:
+            all_parts = [self._signatures] + all_parts
+
+        if len(all_parts) == 1:
+            self._signatures = all_parts[0]
+        else:
+            self._signatures = np.concatenate(all_parts)
+        self._signatures_list = []  # free intermediate copies
         n = self._signatures.shape[0]
 
         # Compute hash bands for all signatures (Numba-parallel)

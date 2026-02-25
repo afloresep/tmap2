@@ -94,28 +94,22 @@ def test_jaccard_rejects_non_binary_input() -> None:
         TMAP(metric="jaccard", n_neighbors=1).fit(data)
 
 
-def test_dense_metric_requires_ann_backend() -> None:
-    """Cosine/euclidean should either work (if backend installed) or give ImportError."""
+def test_dense_metric_requires_faiss() -> None:
+    """Cosine/euclidean should either work (if faiss installed) or give ImportError."""
     data = np.random.default_rng(9).random((8, 4), dtype=np.float32)
 
     try:
-        import pynndescent  # noqa: F401
+        import faiss  # noqa: F401
 
-        has_backend = True
+        has_faiss = True
     except ImportError:
-        try:
-            import faiss  # noqa: F401
+        has_faiss = False
 
-            has_backend = True
-        except ImportError:
-            has_backend = False
-
-    if has_backend:
-        # Should not raise NotImplementedError anymore
+    if has_faiss:
         model = TMAP(metric="cosine", n_neighbors=3, seed=42).fit(data)
         assert model.embedding_.shape == (8, 2)
     else:
-        with pytest.raises(ImportError, match="pynndescent or faiss"):
+        with pytest.raises(ImportError, match="faiss"):
             TMAP(metric="cosine", n_neighbors=3).fit(data)
 
 
@@ -263,20 +257,7 @@ def test_add_points_existing_coords_unchanged() -> None:
 
 
 def test_add_points_cosine_requires_store_index() -> None:
-    try:
-        import pynndescent  # noqa: F401
-
-        has_backend = True
-    except ImportError:
-        try:
-            import faiss  # noqa: F401
-
-            has_backend = True
-        except ImportError:
-            has_backend = False
-
-    if not has_backend:
-        pytest.skip("No ANN backend available")
+    pytest.importorskip("faiss")
 
     data = np.random.default_rng(9).random((20, 8), dtype=np.float32)
     model = TMAP(metric="cosine", n_neighbors=3, store_index=False, seed=42).fit(data)
@@ -288,20 +269,7 @@ def test_add_points_cosine_requires_store_index() -> None:
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
 def test_add_points_cosine_with_store_index() -> None:
-    try:
-        import pynndescent  # noqa: F401
-
-        has_backend = True
-    except ImportError:
-        try:
-            import faiss  # noqa: F401
-
-            has_backend = True
-        except ImportError:
-            has_backend = False
-
-    if not has_backend:
-        pytest.skip("No ANN backend available")
+    pytest.importorskip("faiss")
 
     data = np.random.default_rng(9).random((20, 8), dtype=np.float32)
     model = TMAP(metric="cosine", n_neighbors=3, store_index=True, seed=42).fit(data)

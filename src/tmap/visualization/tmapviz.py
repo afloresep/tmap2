@@ -191,12 +191,27 @@ def _contains_nan(values: Sequence[Any]) -> bool:
 
 
 def _to_json_safe(value: Any) -> Any:
-    """Convert values to JSON-safe types, mapping non-finite numbers to null."""
+    """Convert values to JSON-safe types, mapping non-finite numbers to null.
+
+    Optimized to avoid deep-copying large lists of strings or plain numbers.
+    """
     if isinstance(value, np.ndarray):
-        return [_to_json_safe(v) for v in value.tolist()]
+        # For float arrays that may contain NaN/Inf, replace with None
+        if np.issubdtype(value.dtype, np.floating) and not np.all(np.isfinite(value)):
+            return [None if not np.isfinite(v) else float(v) for v in value.flat]
+        return value.tolist()
     if isinstance(value, dict):
         return {k: _to_json_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
+        if not value:
+            return value if isinstance(value, list) else list(value)
+        # Check first element to decide strategy — avoid per-element recursion
+        # for homogeneous lists of strings or plain ints (common for columns).
+        first = value[0]
+        if isinstance(first, str):
+            return value  # strings are already JSON-safe, no copy needed
+        if isinstance(first, int) and not isinstance(first, (bool, np.integer)):
+            return value  # plain Python ints are JSON-safe
         return [_to_json_safe(v) for v in value]
     if isinstance(value, (np.integer,)):
         return int(value)
@@ -285,8 +300,6 @@ class TmapViz:
         self.edge_opacity: float = 0.5
         self.edge_width: float = 2.0
 
-        # Store both formats for flexibility
-        self._points: list[list[float]] = []
         self._points_array: np.ndarray | None = None  # Shape: (n, 2)
         self._edges_s: np.ndarray | None = None
         self._edges_t: np.ndarray | None = None
@@ -298,7 +311,7 @@ class TmapViz:
     def add_color_layout(
         self,
         name: str,
-        values: list[Any],
+        values: list[Any] | NDArray,
         categorical: bool = False,
         add_as_label: bool = True,
         color: str | None = None,
@@ -306,7 +319,10 @@ class TmapViz:
 
         import matplotlib
 
-        if isinstance(values, np.ndarray):
+        if isinstance(values, np.ndarray) and not categorical:
+            # Keep numeric arrays as numpy — avoid costly .tolist()
+            values = np.asarray(values, dtype=np.float32)
+        elif isinstance(values, np.ndarray):
             values = values.tolist()
         else:
             values = list(values)
@@ -429,7 +445,7 @@ class TmapViz:
     @property
     def n_points(self) -> int:
         """Return the number of points set."""
-        return len(self._points) if self._points else 0
+        return len(self._points_array) if self._points_array is not None else 0
 
     @property
     def layouts(self) -> list[Column]:
@@ -586,14 +602,13 @@ class TmapViz:
             )
 
         normalized_coords = _normalize_coords(x_arr, y_arr)
-        self._points_array = normalized_coords  # Keep numpy array for binary mode
-        self._points = normalized_coords.tolist()  # Keep list for JSON mode
+        self._points_array = normalized_coords
 
         for col in self._columns.values():
-            if len(col.values) != len(self._points):
+            if len(col.values) != len(self._points_array):
                 raise ValueError(
                     f"Column '{col.name}' has {len(col.values)} values but there are "
-                    f"{len(self._points)} points"
+                    f"{len(self._points_array)} points"
                 )
 
     def to_widget(
@@ -843,7 +858,7 @@ class TmapViz:
         if mode == "binary":
             return self.render_binary()
 
-        n_points = len(self._points) if self._points else 0
+        n_points = len(self._points_array) if self._points_array is not None else 0
         use_binary = n_points > binary_threshold
         if use_binary:
             return self.render_binary()
@@ -863,7 +878,7 @@ class TmapViz:
         Returns:
             HTML string ready to be written to a file or served.
         """
-        if not self._points:
+        if self._points_array is None:
             raise ValueError("Call set_points() before rendering.")
 
         # Auto-switch to the SMILES template when a SMILES column is present
@@ -871,7 +886,7 @@ class TmapViz:
         if template_name == "base.html.j2" and self._smiles_column:
             template_name = "smiles.html.j2"
 
-        n_points = len(self._points)
+        n_points = len(self._points_array)
         for col in self._columns.values():
             if len(col.values) != n_points:
                 raise ValueError(
@@ -906,11 +921,21 @@ class TmapViz:
                 "t": self._edges_t.tolist(),
             }
 
+        # Auto-scale point size for large datasets (only override default)
+        effective_point_size = self.point_size
+        if self.point_size == 4.0:
+            if n_points > 2_000_000:
+                effective_point_size = 0.5
+            elif n_points > 500_000:
+                effective_point_size = 1.0
+            elif n_points > 100_000:
+                effective_point_size = 2.0
+
         payload = {
             "title": self.title,
-            "points": self._points,
+            "points": self._points_array,
             "pointColor": self.point_color,
-            "pointSize": self.point_size,
+            "pointSize": effective_point_size,
             "opacity": self.opacity,
             "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
             "edgeWidth": self.edge_width,
@@ -939,6 +964,7 @@ class TmapViz:
             title=self.title,
             background_color=self.background_color,
             payload_json=payload_json,
+            n_points=n_points,
             runtime_regl=runtime["regl"],
             runtime_pubsub=runtime["pubsub"],
             runtime_scatterplot=runtime["scatterplot"],
@@ -1034,6 +1060,16 @@ class TmapViz:
         layout_options = list(self._layout_keys)
         label_options = [name for name in self._labels_keys if name in self._columns]
 
+        # Auto-scale point size for large datasets (only override default)
+        effective_point_size = self.point_size
+        if self.point_size == 4.0:
+            if n_points > 2_000_000:
+                effective_point_size = 0.5
+            elif n_points > 500_000:
+                effective_point_size = 1.0
+            elif n_points > 100_000:
+                effective_point_size = 2.0
+
         header = {
             "version": 1,
             "nPoints": n_points,
@@ -1042,7 +1078,7 @@ class TmapViz:
             "metadata": {
                 "title": self.title,
                 "pointColor": self.point_color,
-                "pointSize": self.point_size,
+                "pointSize": effective_point_size,
                 "opacity": self.opacity,
                 "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
                 "edgeWidth": self.edge_width,
@@ -1077,6 +1113,7 @@ class TmapViz:
             coords_b64=coords_b64,
             columns_b64=columns_b64_filtered,
             edges_b64=edges_b64,
+            n_points=n_points,
             runtime_regl=runtime["regl"],
             runtime_pubsub=runtime["pubsub"],
             runtime_scatterplot=runtime["scatterplot"],
@@ -1137,3 +1174,160 @@ class TmapViz:
 
         output_path.write_text(html, encoding="utf-8")
         return output_path
+
+    def serve(self, port: int = 8050, open_browser: bool = True) -> None:
+        """Serve the visualization on a local HTTP server.
+
+        For datasets beyond what a single HTML file handles well (>1M points),
+        this avoids embedding all data as base64 in one file.  Binary data
+        files are served separately and color columns are loaded lazily.
+
+        Args:
+            port: TCP port for the local HTTP server.
+            open_browser: If True, open the default browser automatically.
+        """
+        import http.server
+        import tempfile
+        import threading
+        import webbrowser
+
+        if self._points_array is None:
+            raise ValueError("Call set_points() before serving.")
+
+        n_points = len(self._points_array)
+        for col in self._columns.values():
+            if len(col.values) != n_points:
+                raise ValueError(
+                    f"Column '{col.name}' has {len(col.values)} values but there are "
+                    f"{n_points} points"
+                )
+
+        tmpdir = Path(tempfile.mkdtemp(prefix="tmap_serve_"))
+
+        # --- Write binary data files ---
+        # Coordinates
+        coords_compressed = _pack_coords_binary(self._points_array, bits=16)
+        (tmpdir / "coords.bin").write_bytes(coords_compressed)
+
+        # Edges
+        n_edges = 0
+        if self._edges_s is not None and self._edges_t is not None:
+            n_edges = len(self._edges_s)
+            edges_combined = np.concatenate([self._edges_s, self._edges_t]).astype(np.uint32)
+            edges_compressed = gzip.compress(edges_combined.tobytes(), compresslevel=6)
+            (tmpdir / "edges.bin").write_bytes(edges_compressed)
+
+        # Columns
+        columns_meta: dict[str, dict[str, Any]] = {}
+        colormaps_payload: dict[str, list[str]] = {}
+
+        for name, col in self._columns.items():
+            colormap_name = col.color if col.role in ("layout", "layout+label") else None
+
+            if col.dtype == "categorical":
+                compressed, dictionary = _pack_categorical_binary(col.values)
+                (tmpdir / f"col_{name}.bin").write_bytes(compressed)
+                columns_meta[name] = {
+                    "dtype": "uint32",
+                    "role": col.role,
+                    "colormap": colormap_name,
+                    "dictionary": dictionary,
+                }
+            elif col.dtype == "continuous":
+                arr = np.array(col.values, dtype=np.float32)
+                compressed = _pack_numeric_binary(arr, "float32")
+                (tmpdir / f"col_{name}.bin").write_bytes(compressed)
+                columns_meta[name] = {
+                    "dtype": "float32",
+                    "role": col.role,
+                    "colormap": colormap_name,
+                }
+            else:
+                # String columns (labels, SMILES) — embed in metadata
+                columns_meta[name] = {
+                    "dtype": "string",
+                    "role": col.role,
+                    "values": col.values,
+                }
+
+            if colormap_name and colormap_name not in colormaps_payload:
+                colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
+
+        # Auto-scale point size
+        effective_point_size = self.point_size
+        if self.point_size == 4.0:
+            if n_points > 2_000_000:
+                effective_point_size = 0.5
+            elif n_points > 500_000:
+                effective_point_size = 1.0
+            elif n_points > 100_000:
+                effective_point_size = 2.0
+
+        layout_options = list(self._layout_keys)
+        label_options = [name for name in self._labels_keys if name in self._columns]
+
+        metadata = {
+            "title": self.title,
+            "nPoints": n_points,
+            "coordDtype": "uint16",
+            "pointColor": self.point_color,
+            "pointSize": effective_point_size,
+            "opacity": self.opacity,
+            "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
+            "edgeWidth": self.edge_width,
+            "backgroundColor": _hex_to_rgba(self.background_color),
+            "layoutOptions": layout_options,
+            "labelOptions": label_options,
+            "colormaps": colormaps_payload,
+            "smilesColumn": self._smiles_column,
+            "nEdges": n_edges,
+            "columns": columns_meta,
+        }
+
+        metadata_json = json.dumps(
+            _to_json_safe(metadata),
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        (tmpdir / "metadata.json").write_text(metadata_json, encoding="utf-8")
+
+        # --- Render the HTML shell ---
+        runtime = _runtime_base64()
+        env = _get_jinja_env()
+        template = env.get_template("server.html.j2")
+        html = template.render(
+            title=self.title,
+            background_color=self.background_color,
+            n_points=n_points,
+            runtime_regl=runtime["regl"],
+            runtime_pubsub=runtime["pubsub"],
+            runtime_scatterplot=runtime["scatterplot"],
+        )
+        (tmpdir / "index.html").write_text(html, encoding="utf-8")
+
+        # --- Start HTTP server ---
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, directory=str(tmpdir), **kwargs)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                pass  # Suppress request logs
+
+        server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+        url = f"http://127.0.0.1:{port}"
+
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        print(f"Serving TMAP visualization at {url}")
+        print(f"  {n_points:,} points, {n_edges:,} edges")
+        print("  Press Ctrl+C to stop.")
+
+        if open_browser:
+            webbrowser.open(url)
+
+        try:
+            thread.join()
+        except KeyboardInterrupt:
+            print("\nShutting down server...")
+            server.shutdown()
