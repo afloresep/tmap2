@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from tmap.estimator import TMAP
     from tmap.index.encoders.minhash import MinHash, WeightedMinHash
     from tmap.index.lsh_forest import LSHForest
+    from tmap.utils.chemistry import fingerprints_from_smiles, molecular_properties
 
 __version__ = "0.1.0"
 
@@ -29,8 +30,9 @@ __all__ = [
     "MinHash",
     "WeightedMinHash",
     "LSHForest",
-    "FaissIndex",
     "TMAP",
+    "fingerprints_from_smiles",
+    "molecular_properties",
 ]
 
 _LAZY_IMPORTS: dict[str, str] = {
@@ -39,6 +41,8 @@ _LAZY_IMPORTS: dict[str, str] = {
     "MinHash": "tmap.index.encoders.minhash",
     "WeightedMinHash": "tmap.index.encoders.minhash",
     "FaissIndex": "tmap.index.faiss_index",
+    "fingerprints_from_smiles": "tmap.utils.chemistry",
+    "molecular_properties": "tmap.utils.chemistry",
 }
 
 
