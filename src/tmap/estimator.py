@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import pickle
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self, Tuple
@@ -44,6 +45,28 @@ def _resolve_ann_backend(n_samples: int = 0, seed: int | None = None) -> Any:
 
 _GRAPH_LAYOUT_REQUIRE_MUTUAL_DEFAULT = True
 _GRAPH_LAYOUT_MAX_DEGREE_DEFAULT = 8
+
+
+def _select_lsh_l(d: int, n_samples: int) -> int:
+    """Auto-select number of LSH prefix trees based on d and dataset size.
+
+    The LSH band width (k_band = d // l) controls discrimination:
+    - Short bands (small k_band): high recall but many false positives.
+      At large N, the candidate budget (k*kc) overflows with random matches.
+    - Long bands (large k_band): precise candidates but low recall.
+      At small N, too few collisions to find any neighbors.
+
+    We use k_band=4 up to ~1M points (tested optimal for 100k molecules),
+    then gradually increase for larger datasets where the collision pool
+    would otherwise overwhelm the candidate budget.
+    """
+    if n_samples <= 1_000_000:
+        k_band = 4
+    else:
+        # Scale up gently: k_band=5 at ~2M, 6 at ~4M, 7 at ~8M
+        k_band = max(4, 4 + round(math.log2(n_samples / 1_000_000)))
+    n_trees = max(8, d // k_band)
+    return min(n_trees, d)
 
 
 class TMAP:
@@ -224,9 +247,13 @@ class TMAP:
 
             encoder = MinHash(num_perm=self.n_permutations, seed=self.minhash_seed)
             signatures = encoder.batch_from_binary_array(binary_matrix)
+            n_samples = binary_matrix.shape[0]
+            del binary_matrix  # free input matrix before building forest
 
-            forest = LSHForest(d=self.n_permutations)
+            lsh_l = _select_lsh_l(self.n_permutations, n_samples)
+            forest = LSHForest(d=self.n_permutations, l=lsh_l)
             forest.batch_add(signatures)
+            del signatures  # forest has its own copy
             forest.index()
             knn = forest.get_knn_graph(k=self.n_neighbors, kc=self.kc)
             self._lsh_forest = forest
@@ -356,6 +383,24 @@ class TMAP:
             )
 
         return viz
+
+    def serve(self, port: int = 8050, include_edges: bool = True, **kwargs: Any) -> None:
+        """Serve the TMAP visualization on a local HTTP server.
+
+        For large datasets (>1M points), this avoids embedding all data
+        inline in a single HTML file.
+
+        Parameters
+        ----------
+        port : int, default 8050
+            TCP port for the local server.
+        include_edges : bool, default True
+            Include tree edges in the visualization.
+        **kwargs
+            Forwarded to ``TmapViz.serve()``.
+        """
+        viz = self.to_tmapviz(include_edges=include_edges)
+        viz.serve(port=port, **kwargs)
 
     def to_html(
         self,
@@ -609,7 +654,7 @@ class TMAP:
         if m == 0:
             return np.empty((0, 2), dtype=np.float32)
 
-        new_coords = self._position_new_points(new_indices, new_distances)
+        new_coords = self._position_new_points(new_indices)
         self._extend_tree(new_indices, new_distances, m)
 
         # Extend KNN graph
@@ -736,7 +781,6 @@ class TMAP:
     def _position_new_points(
         self,
         new_indices: NDArray[np.int32],
-        new_distances: NDArray[np.float32],
     ) -> NDArray[np.float32]:
         """Position new points near their tree parent with a local offset.
 
