@@ -14,7 +14,7 @@ from numpy.typing import NDArray
 
 # default params
 _FP_RADIUS: int = 2
-_FP_NBITS: int = 1024 
+_FP_NBITS: int = 1024
 
 
 def _init_fp_worker(radius: int, n_bits: int) -> None:
@@ -50,14 +50,16 @@ def _mqn_fp_batch(smiles_batch: list[str]) -> tuple[NDArray[np.uint8], list[int]
     for i, smi in enumerate(smiles_batch):
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
-            mqn = np.array(Descriptors.MQNs_(mol), dtype=np.float32) #type: ignore
+            mqn = np.array(Descriptors.MQNs_(mol), dtype=np.float32)  # type: ignore
             fps.append((mqn > 0).astype(np.uint8))
             valid.append(i)
     if fps:
         return np.stack(fps), valid
     return np.empty((0, 42), dtype=np.uint8), valid
 
-#TODO: Probably add more fp
+
+# TODO: Probably add more fp
+
 
 def _mol_props_batch(smiles_batch: list[str]) -> NDArray[np.float64]:
     """Process a batch, return (len(batch), 3) array. Invalid rows are NaN."""
@@ -68,12 +70,13 @@ def _mol_props_batch(smiles_batch: list[str]) -> NDArray[np.float64]:
     for i, smi in enumerate(smiles_batch):
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
-            out[i, 0] = Descriptors.ExactMolWt(mol) #type:ignore
-            out[i, 1] = Descriptors.MolLogP(mol) #type: ignore
-            out[i, 2] = Chem.rdMolDescriptors.CalcNumRings(mol) #type:ignore
+            out[i, 0] = Descriptors.ExactMolWt(mol)  # type:ignore
+            out[i, 1] = Descriptors.MolLogP(mol)  # type: ignore
+            out[i, 2] = Chem.rdMolDescriptors.CalcNumRings(mol)  # type:ignore
     return out
 
-def _get_mp_context() -> multiprocessing.context.BaseContext: #type:ignore
+
+def _get_mp_context() -> multiprocessing.context.BaseContext:  # type:ignore
     if sys.platform == "darwin":
         return multiprocessing.get_context("spawn")
     return multiprocessing.get_context("forkserver")
@@ -86,7 +89,7 @@ def _default_n_workers() -> int:
 def _split_into_chunks(lst: list[Any], n_chunks: int) -> list[list[Any]]:
     """Split list into roughly equal chunks."""
     k, m = divmod(len(lst), n_chunks)
-    return [lst[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
+    return [lst[i * k + min(i, m) : (i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
 
 
 def fingerprints_from_smiles(
@@ -169,7 +172,7 @@ def fingerprints_from_smiles(
     return fps, np.array(valid_idx2, dtype=np.int64)
 
 
-#TODO: Add more properties and select by passing a list
+# TODO: Add more properties and select by passing a list
 def molecular_properties(
     smiles: list[str],
     n_workers: int | None = None,

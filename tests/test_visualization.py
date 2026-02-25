@@ -354,7 +354,7 @@ class TestAddSmiles:
         """Should add SMILES column."""
         viz, data = viz_with_data
 
-        viz.add_smiles(data["smiles"],"structure")
+        viz.add_smiles(data["smiles"], "structure")
 
         assert viz._smiles_column == "structure"
         assert "structure" in [label.name for label in viz.labels]
