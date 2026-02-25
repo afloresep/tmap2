@@ -191,12 +191,27 @@ def _contains_nan(values: Sequence[Any]) -> bool:
 
 
 def _to_json_safe(value: Any) -> Any:
-    """Convert values to JSON-safe types, mapping non-finite numbers to null."""
+    """Convert values to JSON-safe types, mapping non-finite numbers to null.
+
+    Optimized to avoid deep-copying large lists of strings or plain numbers.
+    """
     if isinstance(value, np.ndarray):
-        return [_to_json_safe(v) for v in value.tolist()]
+        # For float arrays that may contain NaN/Inf, replace with None
+        if np.issubdtype(value.dtype, np.floating) and not np.all(np.isfinite(value)):
+            return [None if not np.isfinite(v) else float(v) for v in value.flat]
+        return value.tolist()
     if isinstance(value, dict):
         return {k: _to_json_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
+        if not value:
+            return value if isinstance(value, list) else list(value)
+        # Check first element to decide strategy — avoid per-element recursion
+        # for homogeneous lists of strings or plain ints (common for columns).
+        first = value[0]
+        if isinstance(first, str):
+            return value  # strings are already JSON-safe, no copy needed
+        if isinstance(first, int) and not isinstance(first, (bool, np.integer)):
+            return value  # plain Python ints are JSON-safe
         return [_to_json_safe(v) for v in value]
     if isinstance(value, (np.integer,)):
         return int(value)
@@ -285,8 +300,6 @@ class TmapViz:
         self.edge_opacity: float = 0.5
         self.edge_width: float = 2.0
 
-        # Store both formats for flexibility
-        self._points: list[list[float]] = []
         self._points_array: np.ndarray | None = None  # Shape: (n, 2)
         self._edges_s: np.ndarray | None = None
         self._edges_t: np.ndarray | None = None
@@ -298,7 +311,7 @@ class TmapViz:
     def add_color_layout(
         self,
         name: str,
-        values: list[Any],
+        values: list[Any] | NDArray,
         categorical: bool = False,
         add_as_label: bool = True,
         color: str | None = None,
@@ -306,7 +319,10 @@ class TmapViz:
 
         import matplotlib
 
-        if isinstance(values, np.ndarray):
+        if isinstance(values, np.ndarray) and not categorical:
+            # Keep numeric arrays as numpy — avoid costly .tolist()
+            values = np.asarray(values, dtype=np.float32)
+        elif isinstance(values, np.ndarray):
             values = values.tolist()
         else:
             values = list(values)
@@ -429,7 +445,7 @@ class TmapViz:
     @property
     def n_points(self) -> int:
         """Return the number of points set."""
-        return len(self._points) if self._points else 0
+        return len(self._points_array) if self._points_array is not None else 0
 
     @property
     def layouts(self) -> list[Column]:
@@ -586,14 +602,13 @@ class TmapViz:
             )
 
         normalized_coords = _normalize_coords(x_arr, y_arr)
-        self._points_array = normalized_coords  # Keep numpy array for binary mode
-        self._points = normalized_coords.tolist()  # Keep list for JSON mode
+        self._points_array = normalized_coords
 
         for col in self._columns.values():
-            if len(col.values) != len(self._points):
+            if len(col.values) != len(self._points_array):
                 raise ValueError(
                     f"Column '{col.name}' has {len(col.values)} values but there are "
-                    f"{len(self._points)} points"
+                    f"{len(self._points_array)} points"
                 )
 
     def to_widget(
@@ -843,7 +858,7 @@ class TmapViz:
         if mode == "binary":
             return self.render_binary()
 
-        n_points = len(self._points) if self._points else 0
+        n_points = len(self._points_array) if self._points_array is not None else 0
         use_binary = n_points > binary_threshold
         if use_binary:
             return self.render_binary()
@@ -863,7 +878,7 @@ class TmapViz:
         Returns:
             HTML string ready to be written to a file or served.
         """
-        if not self._points:
+        if self._points_array is None:
             raise ValueError("Call set_points() before rendering.")
 
         # Auto-switch to the SMILES template when a SMILES column is present
@@ -871,7 +886,7 @@ class TmapViz:
         if template_name == "base.html.j2" and self._smiles_column:
             template_name = "smiles.html.j2"
 
-        n_points = len(self._points)
+        n_points = len(self._points_array)
         for col in self._columns.values():
             if len(col.values) != n_points:
                 raise ValueError(
@@ -918,7 +933,7 @@ class TmapViz:
 
         payload = {
             "title": self.title,
-            "points": self._points,
+            "points": self._points_array,
             "pointColor": self.point_color,
             "pointSize": effective_point_size,
             "opacity": self.opacity,
@@ -1232,7 +1247,7 @@ class TmapViz:
                 columns_meta[name] = {
                     "dtype": "string",
                     "role": col.role,
-                    "values": list(col.values),
+                    "values": col.values,
                 }
 
             if colormap_name and colormap_name not in colormaps_payload:

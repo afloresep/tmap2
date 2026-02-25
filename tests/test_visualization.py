@@ -180,7 +180,7 @@ class TestSetPoints:
         viz.set_points(x, y)
 
         # Internal points should be normalized
-        points = viz._points
+        points = viz._points_array
         for p in points:
             assert -1.0 <= p[0] <= 1.0
             assert -1.0 <= p[1] <= 1.0
