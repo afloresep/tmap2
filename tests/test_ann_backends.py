@@ -83,6 +83,23 @@ class TestFaissIndex:
         assert indices.shape == (K,)
         assert distances.shape == (K,)
 
+    @pytest.mark.parametrize("metric", ["cosine", "euclidean"])
+    def test_query_batch(self, metric: str) -> None:
+        data = _clustered_dense_data()
+        index = self._make_index()
+        index.build_from_vectors(data, metric=metric)
+
+        query = data[:5]
+        indices, distances = index.query_batch(query, k=K)
+
+        assert indices.shape == (5, K)
+        assert distances.shape == (5, K)
+        assert indices.dtype == np.int32
+        assert distances.dtype == np.float32
+        assert np.all(indices >= 0)
+        assert np.all(indices < data.shape[0])
+        assert np.all(distances >= -1e-6)
+
     def test_unsupported_metric_raises(self) -> None:
         from tmap.index.faiss_index import FaissIndex
 

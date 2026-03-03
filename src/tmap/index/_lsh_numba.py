@@ -152,6 +152,7 @@ if NUMBA_AVAILABLE:
         candidate_indices: NDArray[np.int32],
         candidate_counts: NDArray[np.int32],
         k: int,
+        exclude_self: bool = True,
     ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
         """
         Perform linear scan for multiple queries in parallel.
@@ -165,6 +166,8 @@ if NUMBA_AVAILABLE:
                               Padded with -1 for queries with fewer candidates
             candidate_counts: Number of valid candidates per query, shape (n_queries,)
             k: Number of nearest neighbors to return per query
+            exclude_self: If True, candidate with index == query index is
+                skipped (for self-kNN).  Set False for external queries.
 
         Returns:
             Tuple of:
@@ -188,7 +191,7 @@ if NUMBA_AVAILABLE:
                 cand_idx = candidate_indices[q, i]
                 if cand_idx < 0:
                     cand_distances[i] = 2.0  # Invalid candidate
-                elif cand_idx == q:
+                elif exclude_self and cand_idx == q:
                     cand_distances[i] = 2.0  # Exclude self
                 else:
                     # Compute Jaccard distance
@@ -220,6 +223,7 @@ if NUMBA_AVAILABLE:
         candidate_indices: NDArray[np.int32],
         candidate_counts: NDArray[np.int32],
         k: int,
+        exclude_self: bool = True,
     ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
         """
         Perform linear scan for multiple weighted queries in parallel.
@@ -230,6 +234,8 @@ if NUMBA_AVAILABLE:
             candidate_indices: Candidate indices, shape (n_queries, max_candidates)
             candidate_counts: Number of valid candidates per query
             k: Number of nearest neighbors to return
+            exclude_self: If True, candidate with index == query index is
+                skipped (for self-kNN).  Set False for external queries.
 
         Returns:
             Tuple of (indices, distances) arrays
@@ -248,7 +254,7 @@ if NUMBA_AVAILABLE:
             cand_distances = np.empty(n_cand, dtype=np.float32)
             for i in range(n_cand):
                 cand_idx = candidate_indices[q, i]
-                if cand_idx < 0 or cand_idx == q:
+                if cand_idx < 0 or (exclude_self and cand_idx == q):
                     cand_distances[i] = 2.0
                 else:
                     matches = 0
@@ -582,6 +588,7 @@ else:
         candidate_indices: NDArray[np.int32],
         candidate_counts: NDArray[np.int32],
         k: int,
+        exclude_self: bool = True,
     ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
         """Linear scan batch (fallback)."""
         n_queries = queries.shape[0]
@@ -597,9 +604,9 @@ else:
             cand_sigs = signatures[cand_idx]
             distances = compute_distances_to_candidates(queries[q], cand_sigs)
 
-            # Exclude self
-            self_mask = cand_idx == q
-            distances[self_mask] = 2.0
+            if exclude_self:
+                self_mask = cand_idx == q
+                distances[self_mask] = 2.0
 
             # Get top-k
             actual_k = min(k, n_cand)
@@ -621,6 +628,7 @@ else:
         candidate_indices: NDArray[np.int32],
         candidate_counts: NDArray[np.int32],
         k: int,
+        exclude_self: bool = True,
     ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
         """Linear scan batch for weighted signatures (fallback)."""
         n_queries = queries.shape[0]
@@ -636,8 +644,9 @@ else:
             cand_sigs = signatures[cand_idx]
             distances = compute_weighted_distances_to_candidates(queries[q], cand_sigs)
 
-            self_mask = cand_idx == q
-            distances[self_mask] = 2.0
+            if exclude_self:
+                self_mask = cand_idx == q
+                distances[self_mask] = 2.0
 
             actual_k = min(k, n_cand)
             top_k = np.argpartition(distances, actual_k - 1)[:actual_k]
@@ -651,137 +660,3 @@ else:
             result_distances[q, :n_valid] = distances[valid_top_k]
 
         return result_indices, result_distances
-
-    # Fallback LSH Forest functions TODO: Remove this part bc Numba is now a core dependency
-
-    def compute_hash_bands(
-        signatures: NDArray[np.uint64],
-        l: int,
-        k: int,
-    ) -> NDArray[np.uint64]:
-        """Compute hash bands (fallback)."""
-        n = signatures.shape[0]
-        hash_bands = np.empty((n, l), dtype=np.uint64)
-        GOLDEN = np.uint64(0x9E3779B97F4A7C15)
-
-        for i in range(n):
-            for band in range(l):
-                start = band * k
-                end = start + k
-                h = np.uint64(0)
-                for j in range(start, end):
-                    v = signatures[i, j]
-                    v ^= v >> np.uint64(33)
-                    v *= GOLDEN
-                    v ^= v >> np.uint64(33)
-                    h ^= v + GOLDEN + (h << np.uint64(6)) + (h >> np.uint64(2))
-                hash_bands[i, band] = h
-
-        return hash_bands
-
-    def compute_hash_bands_weighted(
-        signatures: NDArray[np.uint64],
-        l: int,
-        k: int,
-    ) -> NDArray[np.uint64]:
-        """Compute hash bands for weighted signatures (fallback)."""
-        n = signatures.shape[0]
-        hash_bands = np.empty((n, l), dtype=np.uint64)
-        GOLDEN = np.uint64(0x9E3779B97F4A7C15)
-
-        for i in range(n):
-            for band in range(l):
-                start = band * k
-                end = start + k
-                h = np.uint64(0)
-                for j in range(start, end):
-                    v = signatures[i, j, 0]
-                    v ^= v >> np.uint64(33)
-                    v *= GOLDEN
-                    v ^= v >> np.uint64(33)
-                    h ^= v + GOLDEN + (h << np.uint64(6)) + (h >> np.uint64(2))
-                hash_bands[i, band] = h
-
-        return hash_bands
-
-    def query_single_band(
-        query_hash: np.uint64,
-        sorted_hashes: NDArray[np.uint64],
-        sorted_indices: NDArray[np.int32],
-    ) -> NDArray[np.int32]:
-        """Query single band (fallback)."""
-        if len(sorted_hashes) == 0:
-            return np.empty(0, dtype=np.int32)
-
-        left = np.searchsorted(sorted_hashes, query_hash, side="left")
-        right = np.searchsorted(sorted_hashes, query_hash, side="right")
-
-        if left >= right:
-            return np.empty(0, dtype=np.int32)
-
-        return sorted_indices[left:right].copy()
-
-    def query_lsh_forest_single(
-        query_bands: NDArray[np.uint64],
-        sorted_hashes_list: tuple,
-        sorted_indices_list: tuple,
-        max_results: int,
-    ) -> NDArray[np.int32]:
-        """Query LSH forest for single signature (fallback)."""
-        candidates = set()
-
-        for band in range(len(query_bands)):
-            matches = query_single_band(
-                query_bands[band],
-                sorted_hashes_list[band],
-                sorted_indices_list[band],
-            )
-            candidates.update(matches.tolist())
-            if len(candidates) >= max_results:
-                break
-
-        result = np.array(list(candidates)[:max_results], dtype=np.int32)
-        return result
-
-    def query_lsh_forest_batch(
-        query_bands: NDArray[np.uint64],
-        sorted_hashes_flat: NDArray[np.uint64],
-        sorted_indices_flat: NDArray[np.int32],
-        band_offsets: NDArray[np.int64],
-        max_results: int,
-    ) -> tuple[NDArray[np.int32], NDArray[np.int32]]:
-        """Query LSH forest batch (fallback)."""
-        n_queries = query_bands.shape[0]
-        l = query_bands.shape[1]
-
-        candidates = np.full((n_queries, max_results), -1, dtype=np.int32)
-        counts = np.zeros(n_queries, dtype=np.int32)
-
-        for q in range(n_queries):
-            seen = set()
-            n_cand = 0
-
-            for band in range(l):
-                start = band_offsets[band]
-                end = band_offsets[band + 1]
-                band_hashes = sorted_hashes_flat[start:end]
-                band_indices = sorted_indices_flat[start:end]
-
-                query_hash = query_bands[q, band]
-                left = np.searchsorted(band_hashes, query_hash, side="left")
-                right = np.searchsorted(band_hashes, query_hash, side="right")
-
-                for i in range(left, right):
-                    idx = band_indices[i]
-                    if idx not in seen:
-                        seen.add(idx)
-                        if n_cand < max_results:
-                            candidates[q, n_cand] = idx
-                            n_cand += 1
-
-                if n_cand >= max_results:
-                    break
-
-            counts[q] = n_cand
-
-        return candidates, counts

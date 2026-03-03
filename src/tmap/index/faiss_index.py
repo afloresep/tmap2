@@ -174,6 +174,28 @@ class FaissIndex(Index):
 
         return indices[0].astype(np.int32), dists.astype(np.float32)
 
+    def _query_batch(
+        self,
+        points: NDArray[np.float32],
+        k: int,
+    ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
+        import faiss
+
+        queries = np.ascontiguousarray(points, dtype=np.float32)
+        if self._metric == "cosine":
+            faiss.normalize_L2(queries)
+
+        distances, indices = self._faiss_index.search(queries, k)
+
+        dists = distances.copy()
+        if self._metric == "cosine":
+            dists = 1.0 - dists
+        elif self._metric == "euclidean":
+            np.maximum(dists, 0, out=dists)
+            np.sqrt(dists, out=dists)
+
+        return indices.astype(np.int32), dists.astype(np.float32)
+
     def _save_implementation(self, path: Path) -> None:
         import faiss
 

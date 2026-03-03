@@ -93,6 +93,23 @@ class Index(ABC):
         self._check_is_built()
         return self._query_single(point, k)
 
+    def query_batch(
+        self,
+        points: NDArray[np.float32],
+        k: int,
+    ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
+        """Query k-nearest neighbors for a batch of new points.
+
+        Args:
+            points: Shape ``(m, n_features)``
+            k: Number of neighbors per point
+
+        Returns:
+            ``(indices, distances)`` each of shape ``(m, k)``
+        """
+        self._check_is_built()
+        return self._query_batch(points, k)
+
     def save(self, path: str | Path) -> None:
         """
         Save index to disk.
@@ -170,6 +187,24 @@ class Index(ABC):
     ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
         """Query k-NN for single point. Override this."""
         ...
+
+    def _query_batch(
+        self,
+        points: NDArray[np.float32],
+        k: int,
+    ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
+        """Query k-NN for a batch.  Override for backend-native batching."""
+        m = points.shape[0]
+        all_idx = np.empty((m, k), dtype=np.int32)
+        all_dist = np.empty((m, k), dtype=np.float32)
+        for i in range(m):
+            idx, dist = self._query_single(points[i], k)
+            n = min(len(idx), k)
+            all_idx[i, :n] = idx[:n]
+            all_dist[i, :n] = dist[:n]
+            all_idx[i, n:] = -1
+            all_dist[i, n:] = np.inf
+        return all_idx, all_dist
 
     @abstractmethod
     def _save_implementation(self, path: Path) -> None:

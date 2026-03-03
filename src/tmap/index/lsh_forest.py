@@ -543,6 +543,85 @@ class LSHForest:
 
         return KNNGraph(indices=indices, distances=distances)
 
+    def query_external_batch(
+        self,
+        signatures: NDArray[np.uint64],
+        k: int,
+        kc: int = 10,
+    ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
+        """Query k-nearest stored neighbors for a batch of *external* signatures.
+
+        Uses the same Numba-parallel pipeline as :meth:`get_knn_graph`
+        (hash-band retrieval → linear scan) but does **not** exclude
+        self-matches, since the query signatures are not part of the index.
+
+        Parameters
+        ----------
+        signatures : NDArray[np.uint64]
+            ``(m, d)`` array of MinHash signatures to query.
+        k : int
+            Number of nearest neighbors per query.
+        kc : int
+            Candidate multiplier for LSH retrieval (retrieves ``k * kc``
+            candidates, then refines with exact distances).
+
+        Returns
+        -------
+        indices : NDArray[np.int32]
+            ``(m, k)`` neighbor indices (padded with ``-1``).
+        distances : NDArray[np.float32]
+            ``(m, k)`` Jaccard distances (padded with ``inf``).
+        """
+        if not self._store:
+            raise ValueError("query_external_batch requires store=True")
+        if self._signatures is None or self._n_indexed == 0:
+            raise RuntimeError("Must add signatures and call index() first")
+        if (
+            self._sorted_hashes_flat is None
+            or self._sorted_indices_flat is None
+            or self._band_offsets is None
+        ):
+            raise RuntimeError("Index structures not initialized")
+
+        max_candidates = k * kc
+
+        # Compute hash bands for the external signatures
+        query_bands = compute_hash_bands(signatures, self._l, self._k)
+
+        # Batch LSH candidate retrieval (Numba-parallel)
+        all_candidates, candidate_counts = query_lsh_forest_batch(
+            query_bands,
+            self._sorted_hashes_flat,
+            self._sorted_indices_flat,
+            self._band_offsets,
+            max_candidates,
+        )
+
+        # Batch linear scan with exclude_self=False (Numba-parallel)
+        if self._weighted:
+            indices, distances = linear_scan_batch_weighted(
+                signatures,
+                self._signatures,
+                all_candidates,
+                candidate_counts,
+                k,
+                False,
+            )
+        else:
+            indices, distances = linear_scan_batch(
+                signatures,
+                self._signatures,
+                all_candidates,
+                candidate_counts,
+                k,
+                False,
+            )
+
+        # Replace sentinel 2.0 distances with inf for consistency
+        distances[indices < 0] = np.inf
+
+        return indices, distances
+
     # =========================================================================
     # Distance methods
     # =========================================================================
