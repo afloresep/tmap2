@@ -114,34 +114,6 @@ def test_dense_metric_requires_faiss() -> None:
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
-def test_graph_layout_builds_valid_embedding_and_tree() -> None:
-    data = _clustered_binary_data()
-    model_tree = TMAP(n_neighbors=5, n_permutations=64, seed=1, layout="tree").fit(data)
-    model_graph = TMAP(n_neighbors=5, n_permutations=64, seed=1, layout="graph").fit(data)
-
-    # Same KNN graph and MST
-    np.testing.assert_array_equal(model_tree.graph_.indices, model_graph.graph_.indices)
-    np.testing.assert_array_equal(model_tree.tree_.edges, model_graph.tree_.edges)
-
-    # Graph mode should produce a different embedding from tree mode.
-    assert model_tree.embedding_.shape == model_graph.embedding_.shape
-    assert not np.allclose(model_tree.embedding_, model_graph.embedding_)
-
-
-@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
-def test_graph_layout_with_precomputed_knn() -> None:
-    knn = KNNGraph.from_arrays(
-        indices=[[1, 2], [0, 2], [1, 3], [2, 0]],
-        distances=[[0.1, 0.2], [0.1, 0.3], [0.3, 0.1], [0.1, 0.4]],
-    )
-
-    model = TMAP(seed=13, layout="graph").fit(knn_graph=knn)
-
-    assert model.embedding_.shape == (4, 2)
-    assert model.tree_ is not None
-
-
-@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
 def test_jaccard_knn_is_stable_across_layout_seeds_by_default() -> None:
     data = _clustered_binary_data(n_samples=80, n_features=256, seed=321)
 
@@ -163,11 +135,6 @@ def test_jaccard_knn_changes_when_minhash_seed_changes() -> None:
     same_distances = np.allclose(model_seed_1.graph_.distances, model_seed_42.graph_.distances)
 
     assert not (same_indices and same_distances)
-
-
-def test_invalid_layout_raises() -> None:
-    with pytest.raises(ValueError, match="Unsupported layout"):
-        TMAP(layout="invalid")
 
 
 @pytest.mark.parametrize("kw", [{"l": 8}, {"lsh_num_trees": 8}])

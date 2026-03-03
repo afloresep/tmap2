@@ -14,7 +14,6 @@ from tmap.index.lsh_forest import LSHForest
 from tmap.index.types import KNNGraph
 from tmap.layout._ogdf import (
     LayoutConfig,
-    layout_from_edge_list,
     layout_from_knn_graph,
     require_ogdf,
 )
@@ -23,8 +22,6 @@ if TYPE_CHECKING:
     from tmap.visualization import TmapViz
 
 
-# Experimental graph-mode sparsification defaults.
-# these are internal until i figure out the graph mode and is fully stabilized.
 def _resolve_ann_backend(n_samples: int = 0, seed: int | None = None) -> Any:
     """Return a FaissIndex for cosine/euclidean kNN search.
 
@@ -41,10 +38,6 @@ def _resolve_ann_backend(n_samples: int = 0, seed: int | None = None) -> Any:
     from tmap.index.faiss_index import FaissIndex
 
     return FaissIndex(seed=seed)
-
-
-_GRAPH_LAYOUT_REQUIRE_MUTUAL_DEFAULT = True
-_GRAPH_LAYOUT_MAX_DEGREE_DEFAULT = 8
 
 
 def _select_lsh_l(d: int, n_samples: int) -> int:
@@ -73,21 +66,10 @@ class TMAP:
     """High-level estimator API for the TMAP pipeline.
 
     Provides a scikit-learn-style interface for computing TMAP embeddings.
-    Supports two layout modes that share the same underlying k-NN graph:
-
-    - ``layout='tree'`` (default): Computes a minimum spanning tree from the
-      k-NN graph and uses force-directed layout on the tree edges. This
-      produces the classic TMAP visualization where paths between any two
-      points can be traced through the tree structure. Best for exploring
-      local neighborhoods and relationships between specific data points.
-
-    - ``layout='graph'``: Experimental overview mode for cluster inspection.
-      It layouts a sparsified k-NN graph using reciprocal neighbor filtering
-      plus per-node top-edge capping (defaults: ``mutual=True``,
-      ``max_degree=8``) to improve runtime and quality versus dense full-graph
-      layout.
-
-    Both modes compute the same k-NN graph and expose an MST via ``tree_``.
+    Computes a minimum spanning tree from the k-NN graph and uses
+    force-directed layout on the tree edges. This produces the classic TMAP
+    visualization where paths between any two points can be traced through
+    the tree structure.
 
     Parameters
     ----------
@@ -118,10 +100,6 @@ class TMAP:
     mst_bias : float, default=0.0
         Reserved for low-level MST tuning. The high-level ``TMAP`` estimator
         currently ignores this value.
-    layout : str, default='tree'
-        Layout mode. ``'tree'`` uses the stable OGDF MST path for detailed
-        path exploration. ``'graph'`` is experimental and uses a sparsified
-        non-MST graph layout for quick cluster-oriented overview.
     layout_iterations : int, default=1000
         Number of iterations for the force-directed layout algorithm.
     store_index : bool, default=False
@@ -138,7 +116,7 @@ class TMAP:
     embedding_ : ndarray of shape (n_samples, 2)
         2D coordinates after fitting.
     tree_ : Tree
-        Minimum spanning tree. Available in both layout modes.
+        Minimum spanning tree.
     graph_ : KNNGraph
         The k-NN graph computed during fitting.
     lsh_forest_ : LSHForest
@@ -150,10 +128,6 @@ class TMAP:
 
     >>> model = TMAP(n_neighbors=20).fit(binary_matrix)
     >>> coords = model.embedding_
-
-    Cluster-oriented overview:
-
-    >>> model = TMAP(n_neighbors=20, layout='graph').fit(binary_matrix)
 
     Precomputed distance matrix (small datasets):
 
@@ -175,7 +149,6 @@ class TMAP:
         seed: int = 42,
         minhash_seed: int = 42,
         mst_bias: float = 0.0,
-        layout: str = "tree",
         layout_iterations: int = 1000,
         layout_config: Any | None = None,
         store_index: bool = False,
@@ -195,12 +168,6 @@ class TMAP:
             valid_list = ", ".join(sorted(valid_metrics))
             raise ValueError(f"Unsupported metric {metric!r}. Supported metrics: {valid_list}")
 
-        layout = layout.lower()
-        valid_layouts = {"tree", "graph"}
-        if layout not in valid_layouts:
-            valid_list = ", ".join(sorted(valid_layouts))
-            raise ValueError(f"Unsupported layout {layout!r}. Supported layouts: {valid_list}")
-
         self.n_neighbors = n_neighbors
         self.metric = metric
         self.n_permutations = n_permutations
@@ -208,7 +175,6 @@ class TMAP:
         self.seed = seed
         self.minhash_seed = minhash_seed
         self.mst_bias = mst_bias
-        self.layout = layout
         self.layout_iterations = layout_iterations
         self.layout_config = layout_config
         self.store_index = store_index
@@ -218,10 +184,6 @@ class TMAP:
         self._tree: Tree | None = None
         self._graph: KNNGraph | None = None
         self._lsh_forest: LSHForest | None = None
-
-        # Graph mode defaults are module-level constants by design.
-        self._graph_mode_mutual = _GRAPH_LAYOUT_REQUIRE_MUTUAL_DEFAULT
-        self._graph_mode_max_degree = _GRAPH_LAYOUT_MAX_DEGREE_DEFAULT
 
     def fit(
         self,
@@ -280,24 +242,8 @@ class TMAP:
 
         require_ogdf()
         config = self._make_layout_config()
-
-        if self.layout == "tree":
-            x, y, s, t = layout_from_knn_graph(knn, config=config, create_mst=True)
-            self._tree = self._tree_from_ogdf_edges(knn, s, t)
-        else:
-            edges = self._graph_edges_from_knn(
-                knn,
-                max_degree=min(self._graph_mode_max_degree, knn.k),
-                mutual=self._graph_mode_mutual,
-            )
-            x, y, s, t = layout_from_edge_list(
-                knn.n_nodes,
-                edges,
-                config=config,
-                create_mst=False,
-            )
-            # Defer MST extraction until tree_ is requested.
-            self._tree = None
+        x, y, s, t = layout_from_knn_graph(knn, config=config, create_mst=True)
+        self._tree = self._tree_from_ogdf_edges(knn, s, t)
 
         self._embedding = np.column_stack([x, y]).astype(np.float32, copy=False)
         return self
@@ -1038,62 +984,6 @@ class TMAP:
         if hasattr(config, "seed"):
             config.seed = self.seed
         return config
-
-    def _graph_edges_from_knn(
-        self,
-        knn: KNNGraph,
-        *,
-        max_degree: int,
-        mutual: bool,
-    ) -> list[tuple[int, int, float]]:
-        """Build a sparsified undirected edge list from a k-NN graph.
-
-        Parameters
-        ----------
-        knn : KNNGraph
-            Input k-NN graph.
-        max_degree : int
-            Keep at most this many ranked neighbors per node when proposing
-            edges. Lower values reduce density and runtime.
-        mutual : bool
-            If True, keep an edge only when the neighbor relation is reciprocal
-            (i in N(j) and j in N(i)).
-        """
-        n = knn.n_nodes
-        k = knn.k
-        if max_degree < 1:
-            raise ValueError(f"max_degree must be >= 1, got {max_degree}")
-
-        neighbor_sets: list[set[int]] = [set() for _ in range(n)]
-        for i in range(n):
-            for j_idx in range(k):
-                j = int(knn.indices[i, j_idx])
-                if j < 0 or j == i:
-                    continue
-                neighbor_sets[i].add(j)
-
-        edges: list[tuple[int, int, float]] = []
-        seen: set[tuple[int, int]] = set()
-
-        for i in range(n):
-            degree_limit = min(max_degree, k)
-            for j_idx in range(degree_limit):
-                j = int(knn.indices[i, j_idx])
-                if j < 0 or j == i:
-                    continue
-                w = float(knn.distances[i, j_idx])
-                if not np.isfinite(w):
-                    continue
-                if mutual and i not in neighbor_sets[j]:
-                    continue
-                a, b = (i, j) if i < j else (j, i)
-                key = (a, b)
-                if key in seen:
-                    continue
-                seen.add(key)
-                edges.append((i, j, w))
-
-        return edges
 
     def _make_layout_config(self) -> Any | None:
         if self.layout_config is not None:
