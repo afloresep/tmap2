@@ -181,6 +181,23 @@ def _colormap_to_hex(name: str) -> list[str]:
     return hex_colors
 
 
+def _cycle_colormaps(
+    colormaps_payload: dict[str, list[str]],
+    columns: dict[str, Any],
+) -> None:
+    """Extend colormap hex lists by cycling to cover all categorical values."""
+    max_cats: dict[str, int] = {}
+    for col in columns.values():
+        cmap_name = col.color if col.role in ("layout", "layout+label") else None
+        if cmap_name and col.dtype == "categorical":
+            n = len(set(col.values))
+            max_cats[cmap_name] = max(max_cats.get(cmap_name, 0), n)
+    for cmap_name, needed in max_cats.items():
+        if cmap_name in colormaps_payload and needed > len(colormaps_payload[cmap_name]):
+            base = colormaps_payload[cmap_name]
+            colormaps_payload[cmap_name] = [base[i % len(base)] for i in range(needed)]
+
+
 def _contains_nan(values: Sequence[Any]) -> bool:
     """Return True when values contain at least one NaN."""
     try:
@@ -225,8 +242,8 @@ def _to_json_safe(value: Any) -> Any:
 class Column:
     name: str
     values: Sequence[int | np.floating | str]
-    role: Literal["layout", "label", "layout+label", "smiles"]
-    dtype: Literal["continuous", "categorical", "label", "smiles"]
+    role: Literal["layout", "label", "layout+label", "smiles", "images"]
+    dtype: Literal["continuous", "categorical", "label", "smiles", "images"]
     color: str | None = None
 
 
@@ -306,6 +323,8 @@ class TmapViz:
         self._layout_keys: list[str] = []
         self._labels_keys: list[str] = []
         self._smiles_column: str | None = None
+        self._images_column: str | None = None
+        self._images_tooltip_size: int = 128
         self._columns: dict[str, Column] = {}
 
     def add_color_layout(
@@ -365,9 +384,12 @@ class TmapViz:
 
             cmap_size = matplotlib.colormaps[color].N
             if unique_count > cmap_size:
-                raise ValueError(
+                warnings.warn(
                     f"Categorical layout '{name}' has {unique_count} unique values but "
-                    f"colormap '{color}' only provides {cmap_size} colors."
+                    f"colormap '{color}' only provides {cmap_size} colors. "
+                    f"Colors will cycle.",
+                    UserWarning,
+                    stacklevel=2,
                 )
 
         if not categorical and _contains_nan(values):
@@ -441,6 +463,41 @@ class TmapViz:
         if name not in self._labels_keys:
             self._labels_keys.append(name)
         self._columns[name] = Column(name, values, "smiles", "smiles")
+
+    def add_images(
+        self,
+        values: list[str],
+        name: str = "image",
+        tooltip_size: int = 128,
+    ) -> None:
+        """Add an image column for thumbnail rendering in tooltips.
+
+        Each value should be a data URI (e.g. ``"data:image/jpeg;base64,..."``).
+        When hovering over a point the image is rendered in the tooltip.
+
+        Args:
+            values: List of data-URI strings, one per point.
+            name: Column name (displayed in tooltip header).
+            tooltip_size: Display size in pixels for the tooltip thumbnail.
+                Images are scaled to this size with nearest-neighbor
+                interpolation (crisp pixel art).  Default 128.
+        """
+        if isinstance(values, np.ndarray):
+            values = values.tolist()
+        else:
+            values = list(values)
+
+        if self._images_column is not None:
+            raise ValueError(
+                f"Only one images column is supported. "
+                f"Already have '{self._images_column}', cannot add '{name}'."
+            )
+
+        self._images_column = name
+        self._images_tooltip_size = int(tooltip_size)
+        # Don't add to _labels_keys we don't want the raw data URI shown as
+        # text in the tooltip rows; the template renders it visually instead.
+        self._columns[name] = Column(name, values, "images", "images")
 
     @property
     def n_points(self) -> int:
@@ -881,10 +938,13 @@ class TmapViz:
         if self._points_array is None:
             raise ValueError("Call set_points() before rendering.")
 
-        # Auto-switch to the SMILES template when a SMILES column is present
+        # Auto-switch template when a special column is present
         # and the caller didn't request a custom template.
-        if template_name == "base.html.j2" and self._smiles_column:
-            template_name = "smiles.html.j2"
+        if template_name == "base.html.j2":
+            if self._smiles_column:
+                template_name = "smiles.html.j2"
+            elif self._images_column:
+                template_name = "images.html.j2"
 
         n_points = len(self._points_array)
         for col in self._columns.values():
@@ -909,6 +969,8 @@ class TmapViz:
 
             if colormap_name and colormap_name not in colormaps_payload:
                 colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
+
+        _cycle_colormaps(colormaps_payload, self._columns)
 
         layout_options = list(self._layout_keys)
         label_options = [name for name in self._labels_keys if name in self._columns]
@@ -946,6 +1008,8 @@ class TmapViz:
             "initialColor": initial_color,
             "colormaps": colormaps_payload,
             "smilesColumn": self._smiles_column,
+            "imagesColumn": self._images_column,
+            "imagesTooltipSize": self._images_tooltip_size,
             "edges": edges_payload,
         }
 
@@ -992,9 +1056,12 @@ class TmapViz:
         if self._points_array is None:
             raise ValueError("Call set_points() before rendering.")
 
-        # Auto-switch to SMILES-aware binary template when needed.
-        if template_name == "binary.html.j2" and self._smiles_column:
-            template_name = "smiles_binary.html.j2"
+        # Auto-switch to special binary template when needed.
+        if template_name == "binary.html.j2":
+            if self._smiles_column:
+                template_name = "smiles_binary.html.j2"
+            elif self._images_column:
+                template_name = "images_binary.html.j2"
 
         n_points = len(self._points_array)
         for col in self._columns.values():
@@ -1035,17 +1102,20 @@ class TmapViz:
                     "colormap": colormap_name,
                 }
             else:
-                # Labels and SMILES - keep as strings for now (will be optimized later)
-                # For now, we skip binary encoding for string columns
-                # They'll be included in metadata
+                # String columns (labels, SMILES, images) — gzip-compress as JSON
+                json_bytes = json.dumps(col.values, separators=(",", ":")).encode("utf-8")
+                compressed = gzip.compress(json_bytes, compresslevel=6)
+                columns_b64[name] = base64.b64encode(compressed).decode("ascii")
                 columns_meta[name] = {
                     "dtype": "string",
                     "role": col.role,
-                    "values": col.values,  # Include directly in metadata for now
+                    "colormap": None,
                 }
 
             if colormap_name and colormap_name not in colormaps_payload:
                 colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
+
+        _cycle_colormaps(colormaps_payload, self._columns)
 
         # Pack edges if present
         edges_b64 = ""
@@ -1087,6 +1157,8 @@ class TmapViz:
                 "labelOptions": label_options,
                 "colormaps": colormaps_payload,
                 "smilesColumn": self._smiles_column,
+                "imagesColumn": self._images_column,
+                "imagesTooltipSize": self._images_tooltip_size,
                 "nEdges": n_edges,
             },
         }
@@ -1098,11 +1170,6 @@ class TmapViz:
             allow_nan=False,
         )
 
-        # Filter out string columns from binary data (they're in header)
-        columns_b64_filtered = {
-            k: v for k, v in columns_b64.items() if columns_meta[k]["dtype"] != "string"
-        }
-
         env = _get_jinja_env()
         template = env.get_template(template_name)
 
@@ -1111,7 +1178,7 @@ class TmapViz:
             background_color=self.background_color,
             header_json=header_json,
             coords_b64=coords_b64,
-            columns_b64=columns_b64_filtered,
+            columns_b64=columns_b64,
             edges_b64=edges_b64,
             n_points=n_points,
             runtime_regl=runtime["regl"],
@@ -1243,15 +1310,20 @@ class TmapViz:
                     "colormap": colormap_name,
                 }
             else:
-                # String columns (labels, SMILES) — embed in metadata
+                # String columns (labels, SMILES, images) — gzip-compress as JSON
+                json_bytes = json.dumps(col.values, separators=(",", ":")).encode("utf-8")
+                compressed = gzip.compress(json_bytes, compresslevel=6)
+                (tmpdir / f"col_{name}.bin").write_bytes(compressed)
                 columns_meta[name] = {
                     "dtype": "string",
                     "role": col.role,
-                    "values": col.values,
+                    "colormap": None,
                 }
 
             if colormap_name and colormap_name not in colormaps_payload:
                 colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
+
+        _cycle_colormaps(colormaps_payload, self._columns)
 
         # Auto-scale point size
         effective_point_size = self.point_size
@@ -1280,6 +1352,8 @@ class TmapViz:
             "labelOptions": label_options,
             "colormaps": colormaps_payload,
             "smilesColumn": self._smiles_column,
+            "imagesColumn": self._images_column,
+            "imagesTooltipSize": self._images_tooltip_size,
             "nEdges": n_edges,
             "columns": columns_meta,
         }

@@ -1,0 +1,74 @@
+{#
+  Binary Image Tooltip Template - Extends binary template to show image thumbnails
+
+  Usage:
+    viz.add_images(data_uri_list, tooltip_size=128)
+    viz.render_binary(template_name="images_binary.html.j2")
+    or let TmapViz auto-pick when an images column exists.
+#}
+{% extends "binary.html.j2" %}
+
+{% block extra_styles %}
+    #tooltip .image-container {
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #tooltip .image-container.hidden {
+      display: none;
+    }
+    #tooltip .image-container img {
+      image-rendering: pixelated;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.3);
+    }
+{% endblock %}
+
+{% block extra_runtime %}
+// Image tooltip extension (binary mode)
+const imagesColumn = metadata.imagesColumn;
+const imgSize = metadata.imagesTooltipSize || 128;
+
+if (imagesColumn) {
+  const imageContainer = document.createElement('div');
+  imageContainer.className = 'image-container hidden';
+  imageContainer.id = 'image-container';
+  tooltip.appendChild(imageContainer);
+
+  const imgEl = document.createElement('img');
+  imgEl.style.width = imgSize + 'px';
+  imgEl.style.height = imgSize + 'px';
+  imageContainer.appendChild(imgEl);
+
+  const originalShowTooltip = showTooltip;
+  showTooltip = function(idx) {
+    originalShowTooltip(idx);
+
+    const imgCol = columns[imagesColumn];
+    if (!imgCol) {
+      imageContainer.classList.add('hidden');
+      return;
+    }
+
+    const dataUri = imgCol.values[idx];
+    if (!dataUri || typeof dataUri !== 'string' || !dataUri.startsWith('data:')) {
+      imageContainer.classList.add('hidden');
+      return;
+    }
+
+    imgEl.src = dataUri;
+    imageContainer.classList.remove('hidden');
+  };
+
+  const originalHideTooltip = hideTooltip;
+  hideTooltip = function() {
+    originalHideTooltip();
+    imageContainer.classList.add('hidden');
+  };
+
+  console.log('Image tooltip enabled for column:', imagesColumn, 'size:', imgSize);
+} else {
+  console.log('Image binary template loaded but no images column specified');
+}
+{% endblock %}

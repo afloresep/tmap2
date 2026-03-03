@@ -52,9 +52,12 @@
 
 {% block extra_runtime %}
 // SMILES rendering extension (binary mode)
+// Note: SMILES column is a string column, decoded in Phase 2 (background).
+// We set up the drawer and event listeners now; they guard against missing data
+// until Phase 2 completes.
 const smilesColumn = metadata.smilesColumn;
 
-if (smilesColumn && columns[smilesColumn]) {
+if (smilesColumn) {
   // Create structure container in tooltip
   const structureContainer = document.createElement('div');
   structureContainer.className = 'structure-container hidden';

@@ -1,0 +1,80 @@
+{#
+  Image Tooltip Template - Extends base template to show image thumbnails on hover
+
+  This template adds:
+  - Image preview in tooltips via base64 data URIs
+  - Configurable thumbnail size (payload.imagesTooltipSize)
+
+  Usage:
+    viz.add_images(data_uri_list, tooltip_size=128)
+    viz.render(template_name="images.html.j2")
+#}
+{% extends "base.html.j2" %}
+
+{% block extra_styles %}
+    #tooltip .image-container {
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #tooltip .image-container.hidden {
+      display: none;
+    }
+    #tooltip .image-container img {
+      image-rendering: pixelated;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.3);
+    }
+{% endblock %}
+
+{% block extra_runtime %}
+// Image tooltip extension
+const imagesColumn = payload.imagesColumn;
+const imgSize = payload.imagesTooltipSize || 128;
+
+if (imagesColumn && columns[imagesColumn]) {
+  // Create image container in tooltip
+  const imageContainer = document.createElement('div');
+  imageContainer.className = 'image-container hidden';
+  imageContainer.id = 'image-container';
+  tooltip.appendChild(imageContainer);
+
+  const imgEl = document.createElement('img');
+  imgEl.style.width = imgSize + 'px';
+  imgEl.style.height = imgSize + 'px';
+  imageContainer.appendChild(imgEl);
+
+  // Override showTooltip to add image preview
+  const originalShowTooltip = showTooltip;
+  showTooltip = function(idx) {
+    originalShowTooltip(idx);
+
+    const imgCol = columns[imagesColumn];
+    if (!imgCol) {
+      imageContainer.classList.add('hidden');
+      return;
+    }
+
+    const dataUri = imgCol.values[idx];
+    if (!dataUri || typeof dataUri !== 'string' || !dataUri.startsWith('data:')) {
+      imageContainer.classList.add('hidden');
+      return;
+    }
+
+    imgEl.src = dataUri;
+    imageContainer.classList.remove('hidden');
+  };
+
+  // Override hideTooltip to clean up
+  const originalHideTooltip = hideTooltip;
+  hideTooltip = function() {
+    originalHideTooltip();
+    imageContainer.classList.add('hidden');
+  };
+
+  console.log('Image tooltip enabled for column:', imagesColumn, 'size:', imgSize);
+} else {
+  console.log('Image template loaded but no images column specified');
+}
+{% endblock %}

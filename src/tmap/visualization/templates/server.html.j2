@@ -519,6 +519,14 @@ function decodeGzipBuffer(buffer, dtype) {
   }
 }
 
+// Decode gzip-compressed JSON string data
+function decodeGzipBufferString(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const decompressed = fflate.gunzipSync(bytes);
+  const text = new TextDecoder().decode(decompressed);
+  return JSON.parse(text);
+}
+
 function dequantizeCoords(quantized, bits = 16) {
   const n = quantized.length / 2;
   const maxVal = bits === 16 ? 65535 : 4294967295;
@@ -567,32 +575,27 @@ const columns = {};
 const columnNames = Object.keys(columnMeta);
 const initialColor = layoutOptions[0] || '';
 
-// Load string columns from metadata (they're embedded)
-for (const name of columnNames) {
-  const meta = columnMeta[name];
-  if (meta.dtype === 'string' && Array.isArray(meta.values)) {
-    columns[name] = {
-      values: meta.values,
-      dtype: 'string',
-      role: meta.role,
-      colormap: meta.colormap,
-    };
-  }
-}
-
 // Fetch a binary column from the server
 async function fetchColumn(name) {
   if (columns[name]) return columns[name];
   const meta = columnMeta[name];
   if (!meta) return null;
-  if (meta.dtype === 'string') return columns[name] || null;
 
   const resp = await fetch('/col_' + encodeURIComponent(name) + '.bin');
   if (!resp.ok) return null;
   const buffer = await resp.arrayBuffer();
-  const decoded = decodeGzipBuffer(buffer, meta.dtype);
 
-  if (meta.dictionary) {
+  if (meta.dtype === 'string') {
+    // Gzip-compressed JSON string array
+    const values = decodeGzipBufferString(buffer);
+    columns[name] = {
+      values,
+      dtype: 'string',
+      role: meta.role,
+      colormap: meta.colormap,
+    };
+  } else if (meta.dictionary) {
+    const decoded = decodeGzipBuffer(buffer, meta.dtype);
     columns[name] = {
       values: Array.from(decoded).map(i => meta.dictionary[i]),
       dtype: 'categorical',
@@ -600,6 +603,7 @@ async function fetchColumn(name) {
       colormap: meta.colormap,
     };
   } else {
+    const decoded = decodeGzipBuffer(buffer, meta.dtype);
     columns[name] = {
       values: decoded,
       dtype: meta.dtype === 'float32' ? 'continuous' : meta.dtype,
@@ -692,6 +696,15 @@ const edgeColor = parseEdgeColor(edgeStrokeStyle);
 const edgeToggle = document.getElementById('edge-toggle');
 edgeToggle.checked = edgesVisible;
 
+function resizeEdgeCanvas() {
+  if (!edgeCanvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  edgeCanvas.width = window.innerWidth * dpr;
+  edgeCanvas.height = window.innerHeight * dpr;
+  if (edgeRegl) edgeRegl.poll();
+  edgeNeedsRedraw = true;
+}
+
 if (hasEdges) {
   canvas.style.position = 'fixed';
   canvas.style.top = '0';
@@ -701,14 +714,6 @@ if (hasEdges) {
   edgeCanvas = document.createElement('canvas');
   edgeCanvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:1;';
   canvas.parentNode.insertBefore(edgeCanvas, canvas);
-
-  function resizeEdgeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
-    edgeCanvas.width = window.innerWidth * dpr;
-    edgeCanvas.height = window.innerHeight * dpr;
-    if (edgeRegl) edgeRegl.poll();
-    edgeNeedsRedraw = true;
-  }
   resizeEdgeCanvas();
 }
 

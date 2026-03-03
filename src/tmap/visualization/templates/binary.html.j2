@@ -563,6 +563,18 @@ function decodeGzipBase64(base64, dtype) {
   }
 }
 
+// Decode gzip-compressed base64 string data (JSON-encoded string arrays)
+function decodeGzipBase64String(base64) {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  const decompressed = fflate.gunzipSync(bytes);
+  const text = new TextDecoder().decode(decompressed);
+  return JSON.parse(text);
+}
+
 // Dequantize coords
 function dequantizeCoords(quantized, bits = 16) {
   const n = quantized.length / 2;
@@ -621,30 +633,26 @@ const N = n;
 
 updateProgress(40, 'Decoding columns...');
 
-// Decode columns
+// Decode columns in two phases:
+// Phase 1 (blocking): numeric + categorical columns needed for color layouts
+// Phase 2 (background): string columns decoded after render
 const columns = {};
 const columnNames = Object.keys(columnMeta);
+const stringColumnNames = [];
 let colIdx = 0;
+const numericCount = columnNames.filter(n => columnMeta[n].dtype !== 'string').length;
 
 for (const name of columnNames) {
   const meta = columnMeta[name];
   const el = document.getElementById('tmap-col-' + name);
 
-  // String columns (labels / SMILES) are embedded in metadata, not separate script tags
-  if (!el) {
-    if (meta && meta.dtype === 'string' && Array.isArray(meta.values)) {
-      columns[name] = {
-        values: meta.values,
-        dtype: 'string',
-        role: meta.role,
-        colormap: meta.colormap,
-      };
-      colIdx++;
-      const pct = 40 + (colIdx / columnNames.length) * 40;
-      updateProgress(pct, 'Decoding ' + name + '...');
-    }
+  // Defer string columns to Phase 2
+  if (meta.dtype === 'string') {
+    stringColumnNames.push(name);
     continue;
   }
+
+  if (!el) continue;
 
   const b64 = el.textContent;
   const decoded = decodeGzipBase64(b64, meta.dtype);
@@ -667,11 +675,11 @@ for (const name of columnNames) {
   }
 
   colIdx++;
-  const pct = 40 + (colIdx / columnNames.length) * 40;
+  const pct = 40 + (colIdx / Math.max(1, numericCount)) * 40;
   updateProgress(pct, 'Decoding ' + name + '...');
 }
 
-updateProgress(85, 'Initializing visualization...');
+updateProgress(85, 'Rendering...');
 
 // ============================================
 // Visualization Setup
@@ -737,12 +745,13 @@ const scatterplot = createScatterplot({
 
 const zeroArray = new Float32Array(n);
 
-// === WebGL Edge Rendering ===
+// === WebGL Edge Rendering (lazy init) ===
 let edgeNeedsRedraw = false;
 let edgesVisible = hasEdges && N <= 1_000_000;
 let edgeRegl = null;
 let drawEdgesCmd = null;
 let edgeCanvas = null;
+let edgeGpuReady = false;
 
 function parseEdgeColor(str) {
   const m = str.match(/rgba?\\(\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*(?:,\\s*([\\d.]+))?\\s*\\)/);
@@ -754,6 +763,16 @@ const edgeColor = parseEdgeColor(edgeStrokeStyle);
 const edgeToggle = document.getElementById('edge-toggle');
 edgeToggle.checked = edgesVisible;
 
+function resizeEdgeCanvas() {
+  if (!edgeCanvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  edgeCanvas.width = window.innerWidth * dpr;
+  edgeCanvas.height = window.innerHeight * dpr;
+  if (edgeRegl) edgeRegl.poll();
+  edgeNeedsRedraw = true;
+}
+
+// Create edge canvas overlay (lightweight — no GPU buffers yet)
 if (hasEdges) {
   canvas.style.position = 'fixed';
   canvas.style.top = '0';
@@ -763,17 +782,14 @@ if (hasEdges) {
   edgeCanvas = document.createElement('canvas');
   edgeCanvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:1;';
   canvas.parentNode.insertBefore(edgeCanvas, canvas);
-
-  function resizeEdgeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
-    edgeCanvas.width = window.innerWidth * dpr;
-    edgeCanvas.height = window.innerHeight * dpr;
-    if (edgeRegl) edgeRegl.poll();
-    edgeNeedsRedraw = true;
-  }
   resizeEdgeCanvas();
+}
 
-  // Build WebGL buffers from already-decoded edge data
+// Build heavy GPU buffers on demand (deferred until edges are actually shown)
+function initEdgeGpu() {
+  if (edgeGpuReady || !hasEdges) return;
+  edgeGpuReady = true;
+
   const positions = new Float32Array(n * 2);
   for (let i = 0; i < n; i++) {
     positions[i * 2] = x[i];
@@ -816,8 +832,13 @@ if (hasEdges) {
   edgeNeedsRedraw = true;
 }
 
+// Init GPU immediately only when edges are visible on load (N <= 1M)
+if (edgesVisible) {
+  initEdgeGpu();
+}
+
 function renderEdges() {
-  if (!drawEdgesCmd || !edgesVisible || !edgeRegl) return;
+  if (!edgesVisible || !edgeGpuReady || !drawEdgesCmd || !edgeRegl) return;
   edgeRegl.poll();
   edgeRegl.clear({ color: [0, 0, 0, 0] });
 
@@ -850,6 +871,7 @@ if (hasEdges) {
   edgeToggle.addEventListener('change', (e) => {
     edgesVisible = e.target.checked;
     if (edgesVisible) {
+      initEdgeGpu();  // lazy init on first toggle
       edgeNeedsRedraw = true;
       renderEdges();
     } else if (edgeRegl) {
@@ -1090,13 +1112,33 @@ updateProgress(95, 'Rendering...');
 applyColor(initialColor || '');
 redrawEdges();
 
-// Hide loading
+// Hide loading — user sees the scatterplot immediately
 updateProgress(100, 'Complete!');
 setTimeout(() => {
   loading.classList.add('hidden');
 }, 200);
 
 console.log('Loaded ' + n.toLocaleString() + ' points');
+
+// Hook called after Phase 2 string decode completes (overridden by extension templates)
+let onStringColumnsReady = function() {};
+
+// Phase 2: decode string columns in background (after render)
+if (stringColumnNames.length > 0) {
+  setTimeout(() => {
+    for (const name of stringColumnNames) {
+      const el = document.getElementById('tmap-col-' + name);
+      if (!el) continue;
+      const values = decodeGzipBase64String(el.textContent);
+      columns[name] = { values, dtype: 'string', role: columnMeta[name].role, colormap: null };
+    }
+    // Rebuild search dropdown and export columns now that strings are available
+    buildSearchColumnOptions();
+    buildExportColumns();
+    onStringColumnsReady();
+    console.log('Decoded ' + stringColumnNames.length + ' string column(s) in background');
+  }, 0);
+}
 
 // ============================================
 // Card Stack System (single-click pinned cards)
