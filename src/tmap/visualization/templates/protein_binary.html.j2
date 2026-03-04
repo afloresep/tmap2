@@ -1,0 +1,314 @@
+{#
+  Binary Protein Template - Extends binary template to add 3D structure viewing
+
+  Usage:
+    viz.add_protein_ids(uniprot_ids)
+    viz.render_binary(template_name="protein_binary.html.j2")
+    or let TmapViz auto-pick when a protein column exists.
+#}
+{% extends "binary.html.j2" %}
+
+{% block extra_styles %}
+    /* Wider card to fit Mol* viewer */
+    .card {
+      width: 344px;
+    }
+    .card .card-structure-container {
+      display: flex;
+      width: 320px;
+      height: 300px;
+      background: #1a1a2e;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .card .card-structure-container.hidden {
+      display: none;
+    }
+    .card .card-structure-container .molstar-container {
+      width: 100%;
+      height: 100%;
+    }
+    .card .card-structure-container .structure-loading {
+      color: #666;
+      font-size: 11px;
+    }
+    .card .card-structure-container .structure-error {
+      color: #888;
+      font-size: 11px;
+      text-align: center;
+      padding: 8px;
+    }
+    .uniprot-link {
+      color: #4a9eff;
+      text-decoration: none;
+    }
+    .uniprot-link:hover {
+      text-decoration: underline;
+    }
+    .protein-meta-row {
+      display: flex;
+      gap: 4px;
+      font-size: 11px;
+      color: #ccc;
+      padding: 2px 0;
+    }
+    .protein-meta-row .meta-key {
+      color: #888;
+      min-width: 60px;
+    }
+    .protein-meta-row .meta-val {
+      color: #e0e0e0;
+      word-break: break-word;
+    }
+    #tooltip .uniprot-link {
+      color: #4a9eff;
+      text-decoration: none;
+    }
+    #tooltip .uniprot-link:hover {
+      text-decoration: underline;
+    }
+{% endblock %}
+
+{% block extra_elements %}
+{% endblock %}
+
+{% block extra_runtime %}
+// Protein visualization extension (binary mode)
+// Note: Protein column is a string column, decoded in Phase 2 (background).
+// Event listeners guard against missing data until Phase 2 completes.
+const proteinColumn = metadata.proteinColumn;
+
+if (proteinColumn) {
+  const structureCache = new Map();
+  const metadataCache = new Map();
+
+  // ---- Tooltip override: show UniProt ID as clickable link ----
+  const originalShowTooltip = showTooltip;
+  showTooltip = function(idx) {
+    originalShowTooltip(idx);
+
+    const proteinCol = columns[proteinColumn];
+    if (!proteinCol) return;
+    const uniprotId = proteinCol.values[idx];
+    if (!uniprotId || typeof uniprotId !== 'string') return;
+
+    const rows = tooltip.querySelectorAll('.tooltip-row');
+    for (const row of rows) {
+      const label = row.querySelector('.tooltip-label');
+      const val = row.querySelector('.tooltip-value');
+      if (label && val && label.textContent.trim() === proteinColumn) {
+        val.innerHTML = '<a class="uniprot-link" href="https://www.uniprot.org/uniprot/' +
+          uniprotId + '" target="_blank" rel="noopener">' + uniprotId + '</a>';
+        break;
+      }
+    }
+  };
+
+  // ---- Mol* lazy loading ----
+  let molstarLoadPromise = null;
+
+  function loadMolstar() {
+    if (molstarLoadPromise) return molstarLoadPromise;
+    molstarLoadPromise = new Promise((resolve, reject) => {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = 'https://cdn.jsdelivr.net/npm/molstar@latest/build/viewer/molstar.css';
+      document.head.appendChild(link);
+
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/molstar@latest/build/viewer/molstar.js';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load Mol*'));
+      document.head.appendChild(script);
+    });
+    return molstarLoadPromise;
+  }
+
+  const cifUrlCache = new Map();
+
+  async function resolveAlphaFoldUrl(uniprotId) {
+    if (cifUrlCache.has(uniprotId)) return cifUrlCache.get(uniprotId);
+    try {
+      const resp = await fetch('https://alphafold.ebi.ac.uk/api/prediction/' + uniprotId);
+      if (!resp.ok) { cifUrlCache.set(uniprotId, null); return null; }
+      const entries = await resp.json();
+      const entry = Array.isArray(entries) ? entries[0] : entries;
+      const url = entry && entry.cifUrl ? entry.cifUrl : null;
+      cifUrlCache.set(uniprotId, url);
+      return url;
+    } catch (e) {
+      cifUrlCache.set(uniprotId, null);
+      return null;
+    }
+  }
+
+  async function loadStructure(uniprotId, container) {
+    const status = structureCache.get(uniprotId);
+    if (status === 'error') {
+      container.innerHTML = '<span class="structure-error">No AlphaFold structure<br>available for ' + uniprotId + '</span>';
+      return;
+    }
+
+    container.innerHTML = '<span class="structure-loading">Loading 3D structure...</span>';
+    structureCache.set(uniprotId, 'loading');
+
+    const structureUrl = await resolveAlphaFoldUrl(uniprotId);
+    if (!structureUrl) {
+      container.innerHTML = '<span class="structure-error">No AlphaFold structure<br>available for ' + uniprotId + '</span>';
+      structureCache.set(uniprotId, 'error');
+      return;
+    }
+
+    try {
+      await loadMolstar();
+    } catch (e) {
+      container.innerHTML = '<span class="structure-error">Failed to load 3D viewer</span>';
+      structureCache.set(uniprotId, 'error');
+      return;
+    }
+
+    container.innerHTML = '';
+    const viewerDiv = document.createElement('div');
+    viewerDiv.className = 'molstar-container';
+    viewerDiv.id = 'molstar-viewer-' + uniprotId;
+    container.appendChild(viewerDiv);
+
+    try {
+      const viewer = await molstar.Viewer.create(viewerDiv, {
+        layoutIsExpanded: false,
+        layoutShowControls: false,
+        layoutShowRemoteState: false,
+        layoutShowSequence: false,
+        layoutShowLog: false,
+        layoutShowLeftPanel: false,
+        viewportShowExpand: false,
+        viewportShowSelectionMode: false,
+        viewportShowAnimation: false,
+        collapseLeftPanel: true,
+        collapseRightPanel: true,
+      });
+
+      await viewer.loadStructureFromUrl(structureUrl, 'mmcif');
+      structureCache.set(uniprotId, 'loaded');
+    } catch (err) {
+      console.warn('Failed to load structure for', uniprotId, err);
+      container.innerHTML = '<span class="structure-error">No AlphaFold structure<br>available for ' + uniprotId + '</span>';
+      structureCache.set(uniprotId, 'error');
+    }
+  }
+
+  async function fetchUniprotMetadata(uniprotId, cardBody) {
+    if (metadataCache.has(uniprotId)) {
+      const cached = metadataCache.get(uniprotId);
+      if (cached) renderMetadata(uniprotId, cached, cardBody);
+      return;
+    }
+
+    try {
+      const resp = await fetch('https://rest.uniprot.org/uniprotkb/' + uniprotId + '.json');
+      if (!resp.ok) {
+        metadataCache.set(uniprotId, null);
+        renderMetadata(uniprotId, null, cardBody);
+        return;
+      }
+      const data = await resp.json();
+      const meta = {
+        name: (data.proteinDescription && data.proteinDescription.recommendedName &&
+               data.proteinDescription.recommendedName.fullName &&
+               data.proteinDescription.recommendedName.fullName.value) ||
+              (data.proteinDescription && data.proteinDescription.submissionNames &&
+               data.proteinDescription.submissionNames[0] &&
+               data.proteinDescription.submissionNames[0].fullName &&
+               data.proteinDescription.submissionNames[0].fullName.value) ||
+              '',
+        organism: (data.organism && data.organism.scientificName) || '',
+        gene: (data.genes && data.genes[0] && data.genes[0].geneName &&
+               data.genes[0].geneName.value) || '',
+        length: (data.sequence && data.sequence.length) || '',
+      };
+      metadataCache.set(uniprotId, meta);
+      renderMetadata(uniprotId, meta, cardBody);
+    } catch (err) {
+      console.warn('Failed to fetch UniProt metadata for', uniprotId, err);
+      metadataCache.set(uniprotId, null);
+      renderMetadata(uniprotId, null, cardBody);
+    }
+  }
+
+  function renderMetadata(uniprotId, meta, cardBody) {
+    const existing = cardBody.querySelector('.protein-metadata');
+    if (existing) existing.remove();
+
+    const metaDiv = document.createElement('div');
+    metaDiv.className = 'protein-metadata';
+    metaDiv.style.marginTop = '6px';
+    metaDiv.style.borderTop = '1px solid #333';
+    metaDiv.style.paddingTop = '6px';
+
+    if (meta) {
+      const fields = [
+        { key: 'Protein', val: meta.name },
+        { key: 'Organism', val: meta.organism },
+        { key: 'Gene', val: meta.gene },
+        { key: 'Length', val: meta.length ? meta.length + ' aa' : '' },
+      ];
+
+      for (const f of fields) {
+        if (!f.val) continue;
+        const row = document.createElement('div');
+        row.className = 'protein-meta-row';
+        row.innerHTML = '<span class="meta-key">' + f.key + '</span>' +
+                        '<span class="meta-val">' + String(f.val).replace(/</g, '&lt;') + '</span>';
+        metaDiv.appendChild(row);
+      }
+    }
+
+    const linksRow = document.createElement('div');
+    linksRow.className = 'protein-meta-row';
+    linksRow.style.marginTop = '4px';
+    linksRow.innerHTML =
+      '<a class="uniprot-link" href="https://www.uniprot.org/uniprot/' + uniprotId + '" target="_blank" rel="noopener" style="font-size:11px;margin-right:8px">UniProt</a>' +
+      '<a class="uniprot-link" href="https://alphafold.ebi.ac.uk/entry/' + uniprotId + '" target="_blank" rel="noopener" style="font-size:11px">AlphaFold</a>';
+    metaDiv.appendChild(linksRow);
+
+    cardBody.appendChild(metaDiv);
+  }
+
+  // Listen for card pin events
+  cardStack.addEventListener('cardrendered', async (e) => {
+    const { idx } = e.detail;
+    const proteinCol = columns[proteinColumn];
+    if (!proteinCol) return;
+    const uniprotId = proteinCol.values[idx];
+    if (!uniprotId || typeof uniprotId !== 'string') return;
+
+    const cards = cardStack.querySelectorAll('.card');
+    const latestCard = cards[cards.length - 1];
+    if (!latestCard) return;
+
+    const cardLabel = latestCard.querySelector('.card-label');
+    if (cardLabel) {
+      cardLabel.innerHTML = '<a class="uniprot-link" href="https://www.uniprot.org/uniprot/' +
+        uniprotId + '" target="_blank" rel="noopener">' + uniprotId + '</a>';
+    }
+
+    const structureContainer = latestCard.querySelector('.card-structure-container');
+    if (structureContainer) {
+      structureContainer.classList.remove('hidden');
+      structureContainer.style.display = 'flex';
+      loadStructure(uniprotId, structureContainer);
+    }
+
+    const cardBody = latestCard.querySelector('.card-body') || latestCard;
+    fetchUniprotMetadata(uniprotId, cardBody);
+  });
+
+  console.log('Protein visualization enabled for column:', proteinColumn);
+} else {
+  console.log('Protein binary template loaded but no protein column specified');
+}
+{% endblock %}
