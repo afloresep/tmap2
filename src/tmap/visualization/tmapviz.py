@@ -25,8 +25,6 @@ COLORMAPS = list(colormaps)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 VENDOR_DIR = Path(__file__).parent / "vendor"
 
-# Default threshold for switching to binary mode (number of points)
-BINARY_THRESHOLD = 500_000
 
 
 def _project_root() -> Path:
@@ -103,6 +101,16 @@ def _get_jinja_env() -> Environment:
         trim_blocks=True,
         lstrip_blocks=True,
     )
+
+
+def _sanitize_filename(name: str) -> str:
+    """Sanitize a column name for use as a filename (URL-safe)."""
+    import re
+    # Replace spaces, parens, and other non-alphanumeric chars with underscores
+    safe = re.sub(r"[^a-zA-Z0-9_\-.]", "_", name)
+    # Collapse multiple underscores
+    safe = re.sub(r"_+", "_", safe).strip("_")
+    return safe
 
 
 def _normalize_coords(x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -292,8 +300,8 @@ class TmapViz:
     """Interactive scatter-plot visualization backed by regl-scatterplot.
 
     Supports continuous and categorical color layouts, label tooltips,
-    and optional SMILES molecule rendering. Supports both HTML export
-    (``to_html()``, ``write_html()``) and notebook widgets (``to_widget()``, ``show()``).
+    and optional SMILES molecule rendering. Export via ``to_html()`` /
+    ``write_html()`` or notebook widgets via ``to_widget()`` / ``show()``.
 
     Attributes:
         title: Page title and default filename stem.
@@ -325,7 +333,16 @@ class TmapViz:
         self._smiles_column: str | None = None
         self._images_column: str | None = None
         self._images_tooltip_size: int = 128
+        self._protein_column: str | None = None
+        self._structures_column: str | None = None
+        self._structures_format: str = "pdb"
         self._columns: dict[str, Column] = {}
+
+        # UI configuration (new declarative API)
+        self._filterable: list[str] = []
+        self._searchable: list[str] = []
+        self._card_config: dict[str, Any] | None = None
+        self._column_ui: dict[str, dict[str, Any]] = {}
 
     def add_color_layout(
         self,
@@ -498,6 +515,154 @@ class TmapViz:
         # Don't add to _labels_keys we don't want the raw data URI shown as
         # text in the tooltip rows; the template renders it visually instead.
         self._columns[name] = Column(name, values, "images", "images")
+
+    def add_protein_ids(
+        self,
+        values: list[str],
+        name: str = "UniProt ID",
+    ) -> None:
+        """Add a protein ID column for structure visualization.
+
+        When using the protein template (protein.html.j2), pinned cards will
+        show a Mol* 3D structure viewer (lazy-loaded from AlphaFold DB) and
+        on-demand UniProt metadata.  IDs also appear as clickable links.
+
+        Args:
+            values: List of UniProt accessions (e.g. ``"E4ZVF8"``), one per point.
+            name: Column name (displayed in tooltip).
+        """
+        if isinstance(values, np.ndarray):
+            values = values.tolist()
+        else:
+            values = list(values)
+
+        if self._protein_column is not None:
+            raise ValueError(
+                f"Only one protein column is supported. "
+                f"Already have '{self._protein_column}', cannot add '{name}'."
+            )
+
+        self._protein_column = name
+        if name not in self._labels_keys:
+            self._labels_keys.append(name)
+        self._columns[name] = Column(name, values, "label", "label")
+
+    def add_structures(
+        self,
+        values: list[str],
+        name: str = "structure",
+        fmt: str = "pdb",
+    ) -> None:
+        """Add inline 3D structure data for rendering in pinned cards.
+
+        Each value should be the full text content of a PDB or mmCIF file.
+        Structures are rendered using 3Dmol.js (loaded from CDN on demand).
+
+        Args:
+            values: List of structure file contents (PDB/mmCIF text), one per point.
+                Use ``""`` or ``None`` for points without structures.
+            name: Column name.
+            fmt: Structure format — ``"pdb"`` (default) or ``"mmcif"``/``"cif"``.
+        """
+        if isinstance(values, np.ndarray):
+            values = values.tolist()
+        else:
+            values = list(values)
+
+        fmt = fmt.lower()
+        if fmt in ("cif", "mmcif"):
+            fmt = "cif"
+        elif fmt != "pdb":
+            raise ValueError(f"Unsupported structure format '{fmt}'. Use 'pdb' or 'cif'.")
+
+        if self._structures_column is not None:
+            raise ValueError(
+                f"Only one structures column is supported. "
+                f"Already have '{self._structures_column}', cannot add '{name}'."
+            )
+
+        self._structures_column = name
+        self._structures_format = fmt
+        self._columns[name] = Column(name, values, "label", "label")
+
+    @property
+    def filterable(self) -> list[str]:
+        """Column names shown in the filter panel."""
+        return list(self._filterable)
+
+    @filterable.setter
+    def filterable(self, names: list[str]) -> None:
+        if not isinstance(names, (list, tuple)):
+            raise TypeError("filterable must be a list of column names")
+        self._filterable = list(names)
+
+    @property
+    def searchable(self) -> list[str]:
+        """Column names available for text search."""
+        return list(self._searchable)
+
+    @searchable.setter
+    def searchable(self, names: list[str]) -> None:
+        if not isinstance(names, (list, tuple)):
+            raise TypeError("searchable must be a list of column names")
+        self._searchable = list(names)
+
+    def configure_card(
+        self,
+        *,
+        title: str | None = None,
+        subtitle: str | None = None,
+        fields: list[str] | None = None,
+        links: list[dict[str, str]] | None = None,
+    ) -> None:
+        """Configure the pinned-card layout for the HTML visualization.
+
+        Args:
+            title: Column name used as the card heading.
+            subtitle: Column name shown as italic subheading.
+            fields: Column names displayed as key-value rows in the card.
+            links: URL templates with ``{column_name}`` placeholders, e.g.
+                ``[{"label": "UniProt", "url": "https://uniprot.org/{UniProt ID}"}]``.
+        """
+        config: dict[str, Any] = {}
+        if title is not None:
+            config["titleColumn"] = title
+        if subtitle is not None:
+            config["subtitleColumn"] = subtitle
+        if fields is not None:
+            config["fields"] = list(fields)
+        if links is not None:
+            config["links"] = [dict(lnk) for lnk in links]
+        self._card_config = config
+
+    def configure_column(
+        self,
+        name: str,
+        *,
+        display_name: str | None = None,
+        link_template: str | None = None,
+        copyable: bool | None = None,
+        format: str | None = None,
+    ) -> None:
+        """Set per-column UI hints for the HTML visualization.
+
+        Args:
+            name: Column name (must match a previously added column).
+            display_name: Override the label shown in cards/tooltips.
+            link_template: URL template with ``{column_name}`` placeholders.
+            copyable: If True, add a copy button for this value.
+            format: Display format hint (e.g. ``"stars:5"``).
+        """
+        ui: dict[str, Any] = {}
+        if display_name is not None:
+            ui["displayName"] = display_name
+        if link_template is not None:
+            ui["linkTemplate"] = link_template
+        if copyable is not None:
+            ui["copyable"] = copyable
+        if format is not None:
+            ui["format"] = format
+        self._column_ui[name] = ui
 
     @property
     def n_points(self) -> int:
@@ -888,180 +1053,21 @@ class TmapViz:
         _display_scatter(scatter, controls=controls)
         return scatter
 
-    def to_html(
-        self,
-        *,
-        mode: Literal["auto", "json", "binary"] = "auto",
-        binary_threshold: int = BINARY_THRESHOLD,
-    ) -> str:
-        """Return HTML string for the current visualization state.
+    def to_html(self, template_name: str = "base.html.j2") -> str:
+        """Return a self-contained HTML document as a string.
+
+        Uses the same template as ``write_static`` (toolbar, side panels,
+        theme toggle, etc.) but with all data inlined as base64 so the
+        resulting HTML file works without a server.
 
         Args:
-            mode: HTML encoding mode:
-                - ``"auto"``: choose based on ``binary_threshold``.
-                - ``"json"``: force JSON mode.
-                - ``"binary"``: force binary mode.
-            binary_threshold: Point count above which binary mode is used
-                when ``mode="auto"``.
+            template_name: Jinja2 template to use.
 
         Returns:
-            Full HTML document as a string.
-        """
-        if mode not in {"auto", "json", "binary"}:
-            raise ValueError("mode must be one of {'auto', 'json', 'binary'}.")
-
-        if mode == "json":
-            return self.render()
-        if mode == "binary":
-            return self.render_binary()
-
-        n_points = len(self._points_array) if self._points_array is not None else 0
-        use_binary = n_points > binary_threshold
-        if use_binary:
-            return self.render_binary()
-        return self.render()
-
-    def render(self, template_name: str = "base.html.j2") -> str:
-        """Return the full HTML string in JSON mode.
-
-        This method is intended for advanced use cases where a specific template
-        is required.
-
-        Args:
-            template_name: Name of the Jinja2 template to use.
-                           Default is "base.html.j2". Other options include
-                           future templates like "smiles.html.j2".
-
-        Returns:
-            HTML string ready to be written to a file or served.
+            Full HTML document string.
         """
         if self._points_array is None:
             raise ValueError("Call set_points() before rendering.")
-
-        # Auto-switch template when a special column is present
-        # and the caller didn't request a custom template.
-        if template_name == "base.html.j2":
-            if self._smiles_column:
-                template_name = "smiles.html.j2"
-            elif self._images_column:
-                template_name = "images.html.j2"
-
-        n_points = len(self._points_array)
-        for col in self._columns.values():
-            if len(col.values) != n_points:
-                raise ValueError(
-                    f"Column '{col.name}' has {len(col.values)} values but there are "
-                    f"{n_points} points"
-                )
-
-        columns_payload: dict[str, dict[str, Any]] = {}
-        colormaps_payload: dict[str, list[str]] = {}
-
-        for name, col in self._columns.items():
-            colormap_name = col.color if col.role in ("layout", "layout+label") else None
-
-            columns_payload[name] = {
-                "values": col.values,
-                "dtype": col.dtype,
-                "role": col.role,
-                "colormap": colormap_name,
-            }
-
-            if colormap_name and colormap_name not in colormaps_payload:
-                colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
-
-        _cycle_colormaps(colormaps_payload, self._columns)
-
-        layout_options = list(self._layout_keys)
-        label_options = [name for name in self._labels_keys if name in self._columns]
-        initial_color = layout_options[0] if layout_options else None
-
-        edges_payload: dict[str, Any] = {}
-        if self._edges_s is not None and self._edges_t is not None:
-            edges_payload = {
-                "s": self._edges_s.tolist(),
-                "t": self._edges_t.tolist(),
-            }
-
-        # Auto-scale point size for large datasets (only override default)
-        effective_point_size = self.point_size
-        if self.point_size == 4.0:
-            if n_points > 2_000_000:
-                effective_point_size = 0.5
-            elif n_points > 500_000:
-                effective_point_size = 1.0
-            elif n_points > 100_000:
-                effective_point_size = 2.0
-
-        payload = {
-            "title": self.title,
-            "points": self._points_array,
-            "pointColor": self.point_color,
-            "pointSize": effective_point_size,
-            "opacity": self.opacity,
-            "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
-            "edgeWidth": self.edge_width,
-            "backgroundColor": _hex_to_rgba(self.background_color),
-            "columns": columns_payload,
-            "layoutOptions": layout_options,
-            "labelOptions": label_options,
-            "initialColor": initial_color,
-            "colormaps": colormaps_payload,
-            "smilesColumn": self._smiles_column,
-            "imagesColumn": self._images_column,
-            "imagesTooltipSize": self._images_tooltip_size,
-            "edges": edges_payload,
-        }
-
-        runtime = _runtime_base64()
-        payload_json = json.dumps(
-            _to_json_safe(payload),
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-
-        # Render using Jinja2 template
-        env = _get_jinja_env()
-        template = env.get_template(template_name)
-
-        return template.render(
-            title=self.title,
-            background_color=self.background_color,
-            payload_json=payload_json,
-            n_points=n_points,
-            runtime_regl=runtime["regl"],
-            runtime_pubsub=runtime["pubsub"],
-            runtime_scatterplot=runtime["scatterplot"],
-        )
-
-    def render_binary(self, template_name: str = "binary.html.j2") -> str:
-        """Return HTML string using binary encoding for large datasets.
-
-        This method is for advanced use cases where a specific template
-        is required.
-
-        This method uses:
-        - Uint16 quantized coordinates (4x smaller than JSON)
-        - Gzip-compressed typed arrays
-        - WebWorker decoding (non-blocking)
-
-        Recommended for datasets with >500K points.
-
-        Args:
-            template_name: Name of the Jinja2 template to use.
-
-        Returns:
-            HTML string with binary-encoded data.
-        """
-        if self._points_array is None:
-            raise ValueError("Call set_points() before rendering.")
-
-        # Auto-switch to special binary template when needed.
-        if template_name == "binary.html.j2":
-            if self._smiles_column:
-                template_name = "smiles_binary.html.j2"
-            elif self._images_column:
-                template_name = "images_binary.html.j2"
 
         n_points = len(self._points_array)
         for col in self._columns.values():
@@ -1093,7 +1099,10 @@ class TmapViz:
                     "dictionary": dictionary,
                 }
             elif col.dtype == "continuous":
-                arr = np.array(col.values, dtype=np.float32)
+                arr = np.array(
+                    [float(v) if v != "" and v is not None else float("nan") for v in col.values],
+                    dtype=np.float32,
+                )
                 compressed = _pack_numeric_binary(arr, "float32")
                 columns_b64[name] = base64.b64encode(compressed).decode("ascii")
                 columns_meta[name] = {
@@ -1126,11 +1135,10 @@ class TmapViz:
             edges_compressed = gzip.compress(edges_combined.tobytes(), compresslevel=6)
             edges_b64 = base64.b64encode(edges_compressed).decode("ascii")
 
-        # Build header/metadata
+        # Build metadata (same flat structure as write_static)
         layout_options = list(self._layout_keys)
         label_options = [name for name in self._labels_keys if name in self._columns]
 
-        # Auto-scale point size for large datasets (only override default)
         effective_point_size = self.point_size
         if self.point_size == 4.0:
             if n_points > 2_000_000:
@@ -1140,74 +1148,71 @@ class TmapViz:
             elif n_points > 100_000:
                 effective_point_size = 2.0
 
-        header = {
-            "version": 1,
+        for col_name, ui in self._column_ui.items():
+            if col_name in columns_meta:
+                columns_meta[col_name]["ui"] = ui
+
+        inline_metadata = {
+            "title": self.title,
             "nPoints": n_points,
             "coordDtype": "uint16",
+            "pointColor": self.point_color,
+            "pointSize": effective_point_size,
+            "opacity": self.opacity,
+            "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
+            "edgeWidth": self.edge_width,
+            "backgroundColor": _hex_to_rgba(self.background_color),
+            "layoutOptions": layout_options,
+            "labelOptions": label_options,
+            "colormaps": colormaps_payload,
+            "smilesColumn": self._smiles_column,
+            "imagesColumn": self._images_column,
+            "imagesTooltipSize": self._images_tooltip_size,
+            "proteinColumn": self._protein_column,
+            "structuresColumn": self._structures_column,
+            "structuresFormat": self._structures_format,
+            "nEdges": n_edges,
             "columns": columns_meta,
-            "metadata": {
-                "title": self.title,
-                "pointColor": self.point_color,
-                "pointSize": effective_point_size,
-                "opacity": self.opacity,
-                "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
-                "edgeWidth": self.edge_width,
-                "backgroundColor": _hex_to_rgba(self.background_color),
-                "layoutOptions": layout_options,
-                "labelOptions": label_options,
-                "colormaps": colormaps_payload,
-                "smilesColumn": self._smiles_column,
-                "imagesColumn": self._images_column,
-                "imagesTooltipSize": self._images_tooltip_size,
-                "nEdges": n_edges,
-            },
+            "card": self._card_config,
+            "filters": self._filterable if self._filterable else (layout_options or None),
+            "search": self._searchable if self._searchable else (label_options or None),
         }
 
-        runtime = _runtime_base64()
-        header_json = json.dumps(
-            _to_json_safe(header),
+        metadata_json_str = json.dumps(
+            _to_json_safe(inline_metadata),
             separators=(",", ":"),
             allow_nan=False,
         )
 
+        runtime = _runtime_base64()
         env = _get_jinja_env()
         template = env.get_template(template_name)
 
         return template.render(
             title=self.title,
             background_color=self.background_color,
-            header_json=header_json,
-            coords_b64=coords_b64,
-            columns_b64=columns_b64,
-            edges_b64=edges_b64,
             n_points=n_points,
             runtime_regl=runtime["regl"],
             runtime_pubsub=runtime["pubsub"],
             runtime_scatterplot=runtime["scatterplot"],
+            # Inline data flags
+            inline_data=True,
+            inline_metadata=metadata_json_str,
+            inline_coords=coords_b64,
+            inline_columns=columns_b64,
+            inline_edges=edges_b64,
         )
 
     def write_html(
         self,
         path: str | Path,
-        *,
-        mode: Literal["auto", "json", "binary"] = "auto",
-        binary_threshold: int = BINARY_THRESHOLD,
     ) -> Path:
         """Write HTML to disk and return the path.
-
-        This is the primary method for exporting visualizations. It automatically
-        selects binary mode for large datasets (>500k points by default).
 
         Args:
             path: Either a full file path (ending in .html) or a directory path.
                   - If a file path: saves to that exact location
                   - If a directory: uses self.title as the filename
-            mode: HTML encoding mode:
-                - ``"auto"``: choose based on ``binary_threshold``.
-                - ``"json"``: force JSON mode.
-                - ``"binary"``: force binary mode.
-            binary_threshold: Point count above which binary mode is used.
-                              Only used when ``mode="auto"``.
 
         Returns:
             Path to the saved file
@@ -1237,29 +1242,34 @@ class TmapViz:
         # Create parent directory if needed
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        html = self.to_html(mode=mode, binary_threshold=binary_threshold)
+        html = self.to_html()
 
         output_path.write_text(html, encoding="utf-8")
         return output_path
 
-    def serve(self, port: int = 8050, open_browser: bool = True) -> None:
-        """Serve the visualization on a local HTTP server.
+    def write_static(
+        self,
+        output_dir: str | Path,
+        template_name: str = "base.html.j2",
+    ) -> Path:
+        """Write all visualization files to a directory for static hosting.
 
-        For datasets beyond what a single HTML file handles well (>1M points),
-        this avoids embedding all data as base64 in one file.  Binary data
-        files are served separately and color columns are loaded lazily.
+        Writes binary data files (coords, edges, columns), metadata JSON,
+        and a rendered HTML shell. The output directory can be served by
+        any HTTP server (nginx, python -m http.server, S3, etc.).
 
         Args:
-            port: TCP port for the local HTTP server.
-            open_browser: If True, open the default browser automatically.
-        """
-        import http.server
-        import tempfile
-        import threading
-        import webbrowser
+            output_dir: Directory to write files into (created if needed).
+            template_name: Jinja2 template to render as index.html.
 
+        Returns:
+            Path to the output directory.
+        """
         if self._points_array is None:
-            raise ValueError("Call set_points() before serving.")
+            raise ValueError("Call set_points() before write_static().")
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         n_points = len(self._points_array)
         for col in self._columns.values():
@@ -1269,12 +1279,10 @@ class TmapViz:
                     f"{n_points} points"
                 )
 
-        tmpdir = Path(tempfile.mkdtemp(prefix="tmap_serve_"))
-
         # --- Write binary data files ---
         # Coordinates
         coords_compressed = _pack_coords_binary(self._points_array, bits=16)
-        (tmpdir / "coords.bin").write_bytes(coords_compressed)
+        (output_dir / "coords.bin").write_bytes(coords_compressed)
 
         # Edges
         n_edges = 0
@@ -1282,7 +1290,7 @@ class TmapViz:
             n_edges = len(self._edges_s)
             edges_combined = np.concatenate([self._edges_s, self._edges_t]).astype(np.uint32)
             edges_compressed = gzip.compress(edges_combined.tobytes(), compresslevel=6)
-            (tmpdir / "edges.bin").write_bytes(edges_compressed)
+            (output_dir / "edges.bin").write_bytes(edges_compressed)
 
         # Columns
         columns_meta: dict[str, dict[str, Any]] = {}
@@ -1290,40 +1298,52 @@ class TmapViz:
 
         for name, col in self._columns.items():
             colormap_name = col.color if col.role in ("layout", "layout+label") else None
+            safe_name = _sanitize_filename(name)
 
             if col.dtype == "categorical":
                 compressed, dictionary = _pack_categorical_binary(col.values)
-                (tmpdir / f"col_{name}.bin").write_bytes(compressed)
+                (output_dir / f"col_{safe_name}.bin").write_bytes(compressed)
                 columns_meta[name] = {
                     "dtype": "uint32",
                     "role": col.role,
                     "colormap": colormap_name,
                     "dictionary": dictionary,
+                    "file": safe_name,
                 }
             elif col.dtype == "continuous":
-                arr = np.array(col.values, dtype=np.float32)
+                arr = np.array(
+                    [float(v) if v != "" and v is not None else float("nan") for v in col.values],
+                    dtype=np.float32,
+                )
                 compressed = _pack_numeric_binary(arr, "float32")
-                (tmpdir / f"col_{name}.bin").write_bytes(compressed)
+                (output_dir / f"col_{safe_name}.bin").write_bytes(compressed)
                 columns_meta[name] = {
                     "dtype": "float32",
                     "role": col.role,
                     "colormap": colormap_name,
+                    "file": safe_name,
                 }
             else:
                 # String columns (labels, SMILES, images) — gzip-compress as JSON
                 json_bytes = json.dumps(col.values, separators=(",", ":")).encode("utf-8")
                 compressed = gzip.compress(json_bytes, compresslevel=6)
-                (tmpdir / f"col_{name}.bin").write_bytes(compressed)
+                (output_dir / f"col_{safe_name}.bin").write_bytes(compressed)
                 columns_meta[name] = {
                     "dtype": "string",
                     "role": col.role,
                     "colormap": None,
+                    "file": safe_name,
                 }
 
             if colormap_name and colormap_name not in colormaps_payload:
                 colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
 
         _cycle_colormaps(colormaps_payload, self._columns)
+
+        # Attach per-column UI hints
+        for col_name, ui in self._column_ui.items():
+            if col_name in columns_meta:
+                columns_meta[col_name]["ui"] = ui
 
         # Auto-scale point size
         effective_point_size = self.point_size
@@ -1354,8 +1374,14 @@ class TmapViz:
             "smilesColumn": self._smiles_column,
             "imagesColumn": self._images_column,
             "imagesTooltipSize": self._images_tooltip_size,
+            "proteinColumn": self._protein_column,
+            "structuresColumn": self._structures_column,
+            "structuresFormat": self._structures_format,
             "nEdges": n_edges,
             "columns": columns_meta,
+            "card": self._card_config,
+            "filters": self._filterable if self._filterable else (layout_options or None),
+            "search": self._searchable if self._searchable else (label_options or None),
         }
 
         metadata_json = json.dumps(
@@ -1363,12 +1389,13 @@ class TmapViz:
             separators=(",", ":"),
             allow_nan=False,
         )
-        (tmpdir / "metadata.json").write_text(metadata_json, encoding="utf-8")
+        (output_dir / "metadata.json").write_text(metadata_json, encoding="utf-8")
 
-        # --- Render the HTML shell ---
+        # --- Render the HTML shell in fetch mode ---
+        # Data is served from files written above (metadata.json, coords.bin, etc.).
         runtime = _runtime_base64()
         env = _get_jinja_env()
-        template = env.get_template("server.html.j2")
+        template = env.get_template(template_name)
         html = template.render(
             title=self.title,
             background_color=self.background_color,
@@ -1376,8 +1403,38 @@ class TmapViz:
             runtime_regl=runtime["regl"],
             runtime_pubsub=runtime["pubsub"],
             runtime_scatterplot=runtime["scatterplot"],
+            inline_data=False,
+            inline_metadata="{}",
+            inline_coords="",
+            inline_columns={},
+            inline_edges="",
         )
-        (tmpdir / "index.html").write_text(html, encoding="utf-8")
+        (output_dir / "index.html").write_text(html, encoding="utf-8")
+
+        return output_dir
+
+    def serve(self, port: int = 8050, open_browser: bool = True) -> None:
+        """Serve the visualization on a local HTTP server.
+
+        For datasets beyond what a single HTML file handles well (>1M points),
+        this avoids embedding all data as base64 in one file.  Binary data
+        files are served separately and color columns are loaded lazily.
+
+        Args:
+            port: TCP port for the local HTTP server.
+            open_browser: If True, open the default browser automatically.
+        """
+        import http.server
+        import tempfile
+        import threading
+        import webbrowser
+
+        tmpdir = self.write_static(
+            Path(tempfile.mkdtemp(prefix="tmap_serve_")),
+        )
+
+        n_points = len(self._points_array)  # type: ignore[arg-type]
+        n_edges = len(self._edges_s) if self._edges_s is not None else 0
 
         # --- Start HTTP server ---
         class Handler(http.server.SimpleHTTPRequestHandler):

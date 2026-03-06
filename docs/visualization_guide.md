@@ -12,7 +12,10 @@ The visualization module renders TMAP layouts as self-contained, interactive HTM
 - **Self-contained** - no server required, just open the HTML file
 - **Interactive** - pan, zoom, lasso selection, tooltips
 - **Color mapping** - continuous (heatmaps) and categorical (distinct groups)
-- **Large dataset support** - binary mode for 500K+ points
+- **Binary encoding** - gzip-compressed typed arrays for fast loading
+- **Large dataset support** - server mode for 1M+ points
+- **Filtering and search** - declarative column-level filtering and text search
+- **Domain extensions** - SMILES rendering, image thumbnails, protein 3D viewer
 
 ---
 
@@ -35,7 +38,7 @@ viz.add_color_layout("activity", activity_values, categorical=False, color="viri
 viz.add_label("name", compound_names)
 
 # Save to HTML
-viz.save("./output")  # Creates "My TMAP.html"
+viz.write_html("./output")  # Creates "My TMAP.html"
 ```
 
 ---
@@ -177,7 +180,7 @@ This automatically uses the `smiles.html.j2` template which includes a SMILES re
 
 ```python
 # Save to directory (uses viz.title as filename)
-output_path = viz.save("./output")
+output_path = viz.write_html("./output")
 print(f"Saved to: {output_path}")
 ```
 
@@ -185,31 +188,28 @@ print(f"Saved to: {output_path}")
 
 ```python
 # Get HTML string (for custom handling)
-html = viz.render()
+html = viz.to_html()
 
 # Write manually
 with open("custom_name.html", "w") as f:
     f.write(html)
 ```
 
-### Binary Mode for Large Datasets
+### Large Datasets
 
-For datasets with 500K+ points, use binary mode for better performance:
+All output uses binary encoding by default (gzip-compressed typed arrays,
+uint16 quantized coordinates). For very large datasets (1M+ points), use
+the server-based approach which loads columns lazily via HTTP fetch:
 
 ```python
-from tmap.visualization import BINARY_THRESHOLD
+# Local dev server (lazy column loading)
+viz.serve(port=8050)
 
-# Automatic (default threshold is 500,000)
-viz.save("./output", binary_threshold=500_000)
-
-# Force binary mode
-viz.save("./output", force_binary=True)
-
-# Manual binary rendering
-html = viz.render_binary()
+# Write static files for hosting (nginx, S3, etc.)
+viz.write_static("dist/my_tmap/")
 ```
 
-**Binary mode benefits:**
+**Binary encoding benefits (built-in for all outputs):**
 
 - 4x smaller file size (quantized coordinates)
 - Faster loading (gzip compression)
@@ -286,7 +286,7 @@ viz.add_color_layout("Cluster", clusters, categorical=True, color="Set1")
 viz.add_label("Name", names)
 
 # Save
-viz.save("./")
+viz.write_html("./")
 ```
 
 ---
@@ -332,13 +332,25 @@ viz.save("./")
 | `width` | float | None | Edge width override (must be > 0) |
 | `opacity` | float | None | Edge opacity override in [0, 1] |
 
-### save Parameters
+### write_html Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `path` | str/Path | required | Output directory |
-| `binary_threshold` | int | 500,000 | Auto-switch to binary above this |
-| `force_binary` | bool | False | Always use binary mode |
+| `path` | str/Path | required | File path (.html) or directory |
+
+### write_static Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `output_dir` | str/Path | required | Directory for data files + HTML shell |
+| `template_name` | str | `"base.html.j2"` | Template for the HTML shell |
+
+### serve Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `port` | int | 8050 | TCP port for local HTTP server |
+| `open_browser` | bool | True | Auto-open browser |
 
 ---
 
@@ -351,11 +363,14 @@ viz.point_size = 2.0       # Smaller points
 viz.opacity = 0.6          # More transparent
 ```
 
-### For Very Large Datasets (500K+ points)
+### For Very Large Datasets (1M+ points)
 
 ```python
-# Use binary mode
-viz.save("./output", force_binary=True)
+# Serve locally (lazy column loading via HTTP fetch)
+viz.serve(port=8050)
+
+# Or write static files for hosting
+viz.write_static("dist/my_tmap/")
 ```
 
 ### For Publication Quality
@@ -413,19 +428,24 @@ Categorical colormaps have limited colors. Either:
 
 ## Templates
 
-Four HTML templates are available:
+All templates use binary encoding by default (gzip-compressed typed arrays).
+The base template is selected automatically; specialized templates extend it
+for domain-specific features.
 
 | Template | Use Case |
 |----------|----------|
-| `base.html.j2` | Standard visualization (default) |
-| `binary.html.j2` | Large datasets (auto-selected > threshold) |
+| `base.html.j2` | Default visualization (binary encoded) |
 | `smiles.html.j2` | Molecular structures (auto-selected with SMILES) |
-| `smiles_binary.html.j2` | Large molecular datasets |
+| `images.html.j2` | Image thumbnails in tooltips (auto-selected with images) |
+| `protein.html.j2` | Protein 3D viewer + UniProt metadata (auto-selected with protein IDs) |
+| `server.html.j2` | Backward-compatible alias to `base.html.j2` |
+| `afdb.html.j2` | AlphaFold DB cluster explorer (extends base template) |
 
-Templates are selected automatically based on data, but can be specified manually:
+Templates are auto-selected based on registered columns (SMILES, images,
+protein IDs). You can override manually:
 
 ```python
-html = viz.render(template_name="base.html.j2")
+html = viz.to_html(template_name="smiles.html.j2")
 ```
 
 ---

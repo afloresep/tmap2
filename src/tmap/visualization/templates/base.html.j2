@@ -1,3 +1,12 @@
+{#
+  Base Template - Unified visualization shell (inline + fetch modes)
+
+  Supports:
+  - Inline mode for self-contained HTML output (to_html / write_html)
+  - Fetch mode for static/server output (write_static / serve)
+
+  Color columns are loaded lazily on demand.
+#}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -25,93 +34,20 @@
       left: 12px;
       padding: 6px 10px;
       border-radius: 6px;
-      background: rgba(0, 0, 0, 0.4);
+      background: rgba(14, 14, 18, 0.7);
+      border: 1px solid rgba(255,255,255,0.06);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
       font-size: 14px;
       letter-spacing: 0.4px;
       z-index: 120;
     }
-    #controls {
-      position: fixed;
-      top: 12px;
-      right: 12px;
-      padding: 8px 10px;
-      background: #000;
-      border-radius: 6px;
-      font-size: 13px;
-      color: #fff;
-      min-width: 160px;
-      z-index: 120;
-    }
-    #controls label {
-      font-size: 12px;
-      color: #fff;
-      display: block;
-      margin-bottom: 4px;
-    }
-    #controls select {
-      width: 100%;
-      padding: 6px 8px;
-      border-radius: 4px;
-      border: 1px solid #fff;
-      background: #000;
-      color: #fff;
-    }
-    #controls select option {
-      background: #000;
-      color: #fff;
-    }
-    #legend {
-      position: fixed;
-      bottom: 12px;
-      right: 12px;
-      padding: 10px 12px;
-      background: #000;
-      border: 1px solid #333;
-      border-radius: 6px;
-      font-size: 12px;
-      color: #fff;
-      min-width: 160px;
-      max-width: 240px;
-      max-height: 240px;
-      overflow: auto;
-      z-index: 120;
-    }
-    #legend.hidden { display: none; }
-    #legend-title {
-      font-weight: 600;
-      margin-bottom: 6px;
-      font-size: 12px;
-    }
-    .legend-gradient {
-      height: 10px;
-      border-radius: 4px;
-      border: 1px solid #fff;
-    }
-    .legend-range {
-      display: flex;
-      justify-content: space-between;
-      font-size: 11px;
-      margin-top: 4px;
-    }
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 2px 0;
-    }
-    .legend-swatch {
-      width: 12px;
-      height: 12px;
-      border-radius: 3px;
-      border: 1px solid #fff;
-      flex: 0 0 auto;
-    }
-    .legend-label {
-      color: #fff;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+    /* Legend (rendered inside color panel) */
+    #legend-title { font-weight: 600; margin-bottom: 6px; }
+    .legend-gradient { height: 10px; border-radius: 4px; border: 1px solid #fff; }
+    .legend-range { display: flex; justify-content: space-between; font-size: 11px; margin-top: 4px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
+    .legend-swatch { width: 12px; height: 12px; border-radius: 3px; border: 1px solid #fff; }
     #tooltip {
       position: fixed;
       pointer-events: none;
@@ -127,39 +63,81 @@
       z-index: 130;
     }
     #tooltip.visible { display: block; }
-    #tooltip .label {
-      font-weight: 700;
-      margin-bottom: 6px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    #tooltip .row {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      margin: 2px 0;
-    }
+    #tooltip .label { font-weight: 700; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tooltip .row { display: flex; justify-content: space-between; gap: 12px; margin: 2px 0; }
     #tooltip .key { color: #9ca3af; flex-shrink: 0; }
     #tooltip .value { color: #e5e7eb; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    #loading {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: {{ background_color }};
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    #loading.hidden { display: none; }
+    #loading-text { font-size: 18px; margin-bottom: 20px; }
+    #progress-bar { width: 300px; height: 8px; background: rgba(255,255,255,0.2); border-radius: 4px; overflow: hidden; }
+    #progress-fill { height: 100%; background: #4a9eff; width: 0%; transition: width 0.2s; }
+    #progress-text { margin-top: 10px; font-size: 14px; color: #9ca3af; }
 
     /* Card stack - pinned cards from single clicks */
     #card-stack {
       position: fixed;
-      bottom: 12px;
+      top: 52px;
       left: 12px;
       z-index: 100;
+      --card-width: 320px;
+      --card-body-max-height: 420px;
     }
     #card-stack.hidden { display: none; }
     .card {
-      width: 240px;
-      background: rgba(0, 0, 0, 0.9);
-      border: 1px solid #444;
+      width: var(--card-width);
+      background: rgba(14, 14, 18, 0.86);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255,255,255,0.08);
       border-radius: 8px;
       padding: 12px;
       color: #e0e0e0;
       font-size: 12px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+      position: relative;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+    }
+    .card-resize-handle {
+      position: absolute;
+      right: -2px;
+      bottom: -2px;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      z-index: 2;
+      touch-action: none;
+    }
+    .card-resize-handle::before {
+      content: "";
+      position: absolute;
+      right: 3px;
+      bottom: 3px;
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      border-right: 2px solid rgba(255, 255, 255, 0.28);
+      border-bottom: 2px solid rgba(255, 255, 255, 0.28);
+    }
+    .card-resize-handle:hover::before {
+      border-right-color: rgba(74, 158, 255, 0.95);
+      border-bottom-color: rgba(74, 158, 255, 0.95);
+    }
+    body.card-resizing {
+      cursor: nwse-resize;
+      user-select: none;
     }
     .card-header {
       display: flex;
@@ -215,7 +193,11 @@
     .card.minimized .card-body { display: none; }
     .card.minimized { padding: 8px 12px; }
     .card.minimized .card-header { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
-    .card-body { }
+    .card-body {
+      overflow-y: auto;
+      max-height: var(--card-body-max-height);
+      padding-right: 2px;
+    }
     .card-label {
       font-weight: 700;
       margin-bottom: 8px;
@@ -273,72 +255,93 @@
     }
     .card-copy-btn:hover { background: #3a8eef; }
     .card-copy-btn.copied { background: #22c55e; }
-    .card-structure-container { display: none; }
-
-    /* Search panel - top left below title */
-    #search-panel {
-      position: fixed;
-      top: 52px;
-      left: 12px;
-      padding: 8px 10px;
-      background: #000;
-      border-radius: 6px;
-      font-size: 12px;
-      color: #fff;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      min-width: 200px;
-      z-index: 90;
-    }
-    #search-panel label { font-size: 11px; color: #9ca3af; }
-    #search-panel select, #search-panel input[type="text"] {
-      width: 100%;
-      padding: 5px 8px;
+    /* Structure rendering for SMILES tooltips and cards */
+    #tooltip .structure-container {
+      width: 240px;
+      height: 200px;
+      background: #fff;
       border-radius: 4px;
-      border: 1px solid #555;
-      background: #1a1a1a;
-      color: #fff;
-      font-size: 12px;
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #tooltip .structure-container.hidden { display: none; }
+    #tooltip #structure-svg { width: 240px; height: 200px; }
+    .card .card-structure-container {
+      display: flex;
+      width: 100%;
+      height: 200px;
+      background: #fff;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      align-items: center;
+      justify-content: center;
       box-sizing: border-box;
     }
-    #search-panel .search-row {
+    .card .card-structure-container.hidden { display: none; }
+    .card #card-structure-svg { width: 100%; height: 200px; }
+    /* Image rendering for tooltips and cards */
+    #tooltip .image-container {
+      margin-top: 8px;
       display: flex;
-      gap: 6px;
       align-items: center;
+      justify-content: center;
     }
-    #search-panel .search-btn {
-      background: #4a9eff;
-      border: none;
-      color: #fff;
-      padding: 5px 12px;
+    #tooltip .image-container.hidden { display: none; }
+    #tooltip .image-container img {
+      image-rendering: pixelated;
       border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-      white-space: nowrap;
+      border: 1px solid rgba(255,255,255,0.3);
     }
-    #search-panel .search-btn:hover { background: #3a8eef; }
-    #search-panel .search-btn.clear { background: #333; border: 1px solid #555; }
-    #search-panel .search-btn.clear:hover { background: #444; }
-    #search-panel .partial-match {
+    .card .card-image-container {
       display: flex;
       align-items: center;
-      gap: 4px;
-      font-size: 11px;
-      cursor: pointer;
+      justify-content: center;
+      margin-bottom: 8px;
     }
-    #search-results {
-      font-size: 11px;
-      color: #9ca3af;
-      min-height: 16px;
+    .card .card-image-container.hidden { display: none; }
+    .card .card-image-container img {
+      image-rendering: pixelated;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.3);
     }
 
-    /* Export panel - for multi-select */
+    /* Protein / 3D structure viewer in cards */
+    .card .card-structure-container .structure-loading {
+      color: #666;
+      font-size: 11px;
+    }
+    .card .card-structure-container .structure-error {
+      color: #888;
+      font-size: 11px;
+      text-align: center;
+      padding: 8px;
+    }
+    .card .card-structure-container .viewer-3d {
+      width: 100%;
+      height: 100%;
+    }
+    .uniprot-link {
+      color: #4a9eff;
+      text-decoration: none;
+    }
+    .uniprot-link:hover { text-decoration: underline; }
+    .protein-meta-row {
+      display: flex;
+      gap: 4px;
+      font-size: 11px;
+      color: #ccc;
+      padding: 2px 0;
+    }
+    .protein-meta-row .meta-key { color: #888; min-width: 60px; }
+    .protein-meta-row .meta-val { color: #e0e0e0; word-break: break-word; }
+
+    /* Export panel - bottom-left */
     #export-panel {
       position: fixed;
-      bottom: 12px;
-      left: 50%;
-      transform: translateX(-50%);
+      bottom: 68px;
+      left: 12px;
       background: rgba(0, 0, 0, 0.9);
       border: 1px solid #444;
       border-radius: 8px;
@@ -404,25 +407,390 @@
       border: 1px solid #555;
     }
     .export-btn.secondary:hover { background: #444; }
+    /* ── Filter Sidebar (Embedding Atlas-style) ── */
+    .fs-header {
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .fs-title { font-weight: 600; font-size: 13px; color: #e0e0e0; }
+    #fs-count { flex: 1; text-align: right; font-size: 11px; color: #888; }
+    #fs-clear-all {
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: #888;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    #fs-clear-all:hover { background: rgba(255,255,255,0.08); color: #aaa; }
+    #fs-clear-all.hidden { display: none; }
+    #fs-close {
+      width: 24px; height: 24px;
+      border: none; background: transparent;
+      color: #666; font-size: 14px; cursor: pointer;
+      border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #fs-close:hover { color: #fff; background: rgba(255,255,255,0.08); }
+    .fs-section { border-bottom: 1px solid rgba(255,255,255,0.04); }
+    .fs-section-head {
+      padding: 10px 16px;
+      font-size: 11px; font-weight: 600; color: #aaa;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: space-between;
+      user-select: none;
+    }
+    .fs-section-head:hover { background: rgba(255,255,255,0.02); }
+    .fs-chevron { font-size: 8px; color: #666; transition: transform 0.2s; }
+    .fs-section.collapsed .fs-section-body { display: none; }
+    .fs-section.collapsed .fs-chevron { transform: rotate(-90deg); }
+    .fs-section-body { padding: 0 16px 12px; }
+    /* Categorical bars */
+    .fs-bar-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 3px 0; cursor: pointer; font-size: 11px; border-radius: 3px;
+    }
+    .fs-bar-row:hover { background: rgba(255,255,255,0.03); }
+    .fs-bar-row.deselected { opacity: 0.3; }
+    .fs-bar-label {
+      width: 100px; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; color: #ccc; flex-shrink: 0;
+    }
+    .fs-bar-track {
+      flex: 1; height: 14px;
+      background: rgba(255,255,255,0.04); border-radius: 2px;
+      position: relative; overflow: hidden;
+    }
+    .fs-bar-total {
+      position: absolute; top: 0; left: 0; height: 100%;
+      background: rgba(255,255,255,0.08); border-radius: 2px;
+    }
+    .fs-bar-selected {
+      position: absolute; top: 0; left: 0; height: 100%;
+      background: #4a9eff; border-radius: 2px; transition: width 0.15s;
+    }
+    .fs-bar-count {
+      font-size: 10px; color: #666;
+      min-width: 70px; text-align: right; white-space: nowrap;
+    }
+    .fs-show-more {
+      font-size: 10px; color: #4a9eff; cursor: pointer;
+      padding: 4px 0; user-select: none;
+    }
+    .fs-show-more:hover { text-decoration: underline; }
+    /* Histogram */
+    .fs-histogram {
+      position: relative; height: 80px;
+      display: flex; align-items: flex-end; gap: 1px; margin-bottom: 4px;
+    }
+    .fs-hist-bar {
+      flex: 1; background: rgba(255,255,255,0.12);
+      border-radius: 1px 1px 0 0; min-width: 2px; transition: background 0.1s;
+    }
+    .fs-hist-bar.in-brush { background: #4a9eff; }
+    .fs-hist-brush {
+      position: absolute; top: 0; height: 100%;
+      background: rgba(74, 158, 255, 0.15);
+      border-left: 2px solid rgba(74, 158, 255, 0.5);
+      border-right: 2px solid rgba(74, 158, 255, 0.5);
+      pointer-events: none; display: none;
+    }
+    .fs-hist-overlay {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      cursor: crosshair;
+    }
+    .fs-hist-axis {
+      display: flex; justify-content: space-between;
+      font-size: 9px; color: #666; padding: 0 2px;
+    }
+    .fs-hist-range {
+      text-align: center; font-size: 10px; color: #8ac4ff;
+      margin-top: 2px; min-height: 14px;
+    }
+    /* Card links section */
+    .card-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #333;
+    }
+    .card-link {
+      display: inline-block;
+      background: #4a9eff;
+      color: #fff;
+      text-decoration: none;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 500;
+    }
+    .card-link:hover { background: #3a8eef; }
+    .card-subtitle {
+      font-style: italic;
+      color: #9ca3af;
+      font-size: 11px;
+      margin-bottom: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* ── Toolbar ── */
+    #toolbar {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 10px;
+      background: rgba(14, 14, 18, 0.82);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 14px;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+      z-index: 200;
+      user-select: none;
+    }
+    .tb-group { display: flex; align-items: center; gap: 6px; padding: 0 8px; }
+    #tb-count { font-size: 13px; color: #999; white-space: nowrap; }
+    .tb-sep { width: 1px; height: 28px; background: rgba(255,255,255,0.08); margin: 0 4px; }
+    .tb-icon {
+      width: 40px; height: 36px;
+      border: none; background: transparent; border-radius: 8px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      color: #999; transition: background 0.12s, color 0.12s; padding: 0;
+    }
+    .tb-icon:hover { background: rgba(255,255,255,0.06); color: #e0e0e0; }
+    .tb-icon.active { background: rgba(74,158,255,0.15); color: #4a9eff; }
+    .tb-icon.on { color: #4a9eff; }
+    .tb-icon svg { width: 20px; height: 20px; }
+    #tb-clear {
+      width: 24px; height: 24px; border: none; background: transparent;
+      border-radius: 4px; cursor: pointer; color: #666; font-size: 16px;
+      display: none; align-items: center; justify-content: center; padding: 0;
+    }
+    #tb-clear:hover { color: #fff; }
+    #tb-clear.visible { display: flex; }
+
+    /* ── Side Panels ── */
+    .side-panel {
+      position: fixed; top: 0; right: 0;
+      width: 320px; height: 100vh;
+      background: rgba(14, 14, 18, 0.82);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border-left: 1px solid rgba(255,255,255,0.06);
+      box-shadow: -10px 0 32px rgba(0,0,0,0.45);
+      z-index: 150;
+      overflow-y: auto; overflow-x: hidden;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.1) transparent;
+      transform: translateX(100%);
+      transition: transform 0.25s cubic-bezier(.4,0,.2,1);
+      display: flex; flex-direction: column;
+    }
+    .side-panel::-webkit-scrollbar { width: 4px; }
+    .side-panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+    .side-panel.open { transform: translateX(0); }
+    .panel-head {
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex; align-items: center; justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .panel-title { font-weight: 600; font-size: 13px; color: #e0e0e0; }
+    .panel-close {
+      width: 24px; height: 24px; border: none; background: transparent;
+      color: #666; font-size: 14px; cursor: pointer; border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .panel-close:hover { color: #fff; background: rgba(255,255,255,0.08); }
+    .panel-body { padding: 12px 16px; flex: 1; }
+    .panel-body label { font-size: 11px; color: #999; display: block; margin-bottom: 4px; }
+    .panel-body select, .panel-body input[type="text"] {
+      width: 100%; padding: 6px 8px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.04); color: #e0e0e0;
+      font-size: 12px; box-sizing: border-box;
+    }
+    /* Color panel legend */
+    .panel-body select { margin-bottom: 12px; }
+    .panel-body .search-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+    .panel-body .search-btn {
+      background: #4a9eff; border: none; color: #fff;
+      padding: 6px 12px; border-radius: 6px; cursor: pointer;
+      font-size: 12px; white-space: nowrap;
+    }
+    .panel-body .search-btn:hover { opacity: 0.9; }
+    .panel-body .search-btn.clear {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.1); color: #888;
+    }
+    .panel-body .partial-match {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 11px; cursor: pointer; color: #888;
+    }
+    #panel-explore .panel-body {
+      padding: 0;
+      overflow-y: auto;
+    }
+    .explore-section {
+      padding: 12px 16px;
+    }
+    .explore-section + .explore-section {
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .explore-section-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      color: #9ca3af;
+      margin-bottom: 6px;
+    }
+    #panel-explore #fs-sections {
+      padding-bottom: 6px;
+    }
+    #panel-explore .fs-header {
+      padding: 0 0 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      margin-bottom: 6px;
+    }
+
+    /* ── Light theme ── */
+    [data-theme="light"] { background: #f5f5f7 !important; color: #1d1d1f; }
+    [data-theme="light"] #toolbar {
+      background: rgba(245, 245, 248, 0.88);
+      border-color: rgba(0,0,0,0.08);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+    }
+    [data-theme="light"] #toolbar .tb-icon { color: #6e6e73; }
+    [data-theme="light"] #toolbar .tb-icon:hover { background: rgba(0,0,0,0.05); color: #1d1d1f; }
+    [data-theme="light"] #toolbar .tb-icon.active { background: rgba(0,122,255,0.1); color: #007aff; }
+    [data-theme="light"] #toolbar .tb-icon.on { color: #007aff; }
+    [data-theme="light"] #toolbar #tb-count { color: #6e6e73; }
+    [data-theme="light"] #toolbar .tb-sep { background: rgba(0,0,0,0.08); }
+    [data-theme="light"] .side-panel {
+      background: rgba(255,255,255,0.94); border-left-color: rgba(0,0,0,0.08);
+    }
+    [data-theme="light"] .panel-title { color: #1d1d1f; }
+    [data-theme="light"] .panel-close { color: #aeaeb2; }
+    [data-theme="light"] .panel-close:hover { color: #1d1d1f; background: rgba(0,0,0,0.05); }
+    [data-theme="light"] .panel-body label { color: #6e6e73; }
+    [data-theme="light"] .panel-body select, [data-theme="light"] .panel-body input[type="text"] {
+      border-color: rgba(0,0,0,0.12); background: rgba(0,0,0,0.03); color: #1d1d1f;
+    }
+    [data-theme="light"] .explore-section + .explore-section {
+      border-top-color: rgba(0,0,0,0.08);
+    }
+    [data-theme="light"] .explore-section-title {
+      color: #6e6e73;
+    }
+    [data-theme="light"] #panel-explore .fs-header {
+      border-bottom-color: rgba(0,0,0,0.06);
+    }
+    [data-theme="light"] #legend-title { color: #1d1d1f; }
+    [data-theme="light"] .legend-range { color: #6e6e73; }
+    [data-theme="light"] .legend-item { color: #1d1d1f; }
+    [data-theme="light"] .legend-gradient { border-color: rgba(0,0,0,0.12); }
+    [data-theme="light"] .legend-swatch { border-color: rgba(0,0,0,0.12); }
+    [data-theme="light"] #title { background: rgba(255,255,255,0.7); color: #1d1d1f; }
+    [data-theme="light"] #tooltip { background: rgba(255,255,255,0.92); border-color: rgba(0,0,0,0.08); color: #1d1d1f; }
+    [data-theme="light"] #tooltip .key { color: #6e6e73; }
+    [data-theme="light"] #tooltip .value { color: #1d1d1f; }
+    [data-theme="light"] .card { background: rgba(255,255,255,0.95); border-color: rgba(0,0,0,0.08); color: #1d1d1f; }
+    [data-theme="light"] .card-header { border-bottom-color: rgba(0,0,0,0.06); }
+    [data-theme="light"] .card-row .key { color: #6e6e73; }
+    [data-theme="light"] .card-row .value { color: #1d1d1f; }
+    [data-theme="light"] .fs-section-head { color: #6e6e73; }
+    [data-theme="light"] .fs-bar-label { color: #1d1d1f; }
+    [data-theme="light"] .fs-bar-track { background: rgba(0,0,0,0.04); }
+    [data-theme="light"] .fs-bar-total { background: rgba(0,0,0,0.08); }
+    [data-theme="light"] .fs-bar-count { color: #aeaeb2; }
+    [data-theme="light"] .fs-hist-bar { background: rgba(0,0,0,0.1); }
+    [data-theme="light"] .fs-hist-axis { color: #aeaeb2; }
+    [data-theme="light"] .fs-header { border-bottom-color: rgba(0,0,0,0.06); }
+    [data-theme="light"] .fs-title { color: #1d1d1f; }
+    [data-theme="light"] #fs-count { color: #6e6e73; }
+    [data-theme="light"] .card-resize-handle::before {
+      border-right-color: rgba(0, 0, 0, 0.26);
+      border-bottom-color: rgba(0, 0, 0, 0.26);
+    }
 {% block extra_styles %}{% endblock %}
   </style>
 </head>
 <body>
+  <div id="loading">
+    <div id="loading-text">Loading visualization...</div>
+    <div id="progress-bar"><div id="progress-fill"></div></div>
+    <div id="progress-text">Initializing...</div>
+  </div>
+
   <div id="title">{{ title }}</div>
-  <div id="controls">
-    <label for="color-select">Color By Layout</label>
+  <!-- Old controls/legend kept hidden; contents moved into panels by JS -->
+  <div id="controls" style="display:none">
     <select id="color-select"></select>
-    <label style="margin-top:6px;cursor:pointer;"><input type="checkbox" id="edge-toggle" checked style="cursor:pointer;"> Show edges </label>
+    <input type="checkbox" id="edge-toggle" checked>
   </div>
   <canvas id="canvas"></canvas>
   <div id="tooltip">
     <div class="label" id="tooltip-label"></div>
     <div id="tooltip-content"></div>
+    <div class="structure-container hidden" id="tooltip-structure"></div>
+    <div class="image-container hidden" id="tooltip-image"></div>
   </div>
-  <div id="legend" class="hidden">
-    <div id="legend-title"></div>
-    <div id="legend-content"></div>
+
+  <!-- Explore panel (Color + Filters) -->
+  <div id="panel-explore" class="side-panel" style="width:360px">
+    <div class="panel-head"><span class="panel-title">Explore</span><button class="panel-close" data-panel="explore">&times;</button></div>
+    <div class="panel-body" id="explore-body">
+      <div class="explore-section" id="explore-color-section">
+        <div class="explore-section-title">Color</div>
+        <label for="color-select-panel">Color by</label>
+        <select id="color-select-panel"></select>
+        <div id="legend-title"></div>
+        <div id="legend-content"></div>
+      </div>
+      <div class="explore-section" id="explore-filters-section">
+        <div class="fs-header">
+          <span class="fs-title">Filters</span>
+          <span id="fs-count"></span>
+          <button id="fs-clear-all" class="hidden">Clear all</button>
+        </div>
+        <div id="fs-sections"></div>
+      </div>
+    </div>
   </div>
+
+  <!-- Search panel -->
+  <div id="panel-search" class="side-panel">
+    <div class="panel-head"><span class="panel-title">Search</span><button class="panel-close" data-panel="search">&times;</button></div>
+    <div class="panel-body">
+      <label for="search-column">Search in column</label>
+      <select id="search-column"></select>
+      <label for="search-input">Search query</label>
+      <div class="search-row">
+        <input type="text" id="search-input" placeholder="Enter search term...">
+        <button class="search-btn" id="search-btn">Search</button>
+      </div>
+      <div class="search-row">
+        <label class="partial-match">
+          <input type="checkbox" id="partial-match"> Partial match
+        </label>
+        <button class="search-btn clear" id="clear-search">Clear</button>
+      </div>
+      <div id="search-results"></div>
+    </div>
+  </div>
+
   <div id="card-stack" class="hidden"></div>
   <div id="export-panel" class="hidden">
     <div class="export-header">
@@ -436,25 +804,35 @@
       <button class="export-btn secondary" id="export-clear">Clear</button>
     </div>
   </div>
-  <div id="search-panel">
-    <label for="search-column">Search in column</label>
-    <select id="search-column"></select>
-    <label for="search-input">Search query</label>
-    <div class="search-row">
-      <input type="text" id="search-input" placeholder="Enter search term...">
-      <button class="search-btn" id="search-btn">Search</button>
+
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <div class="tb-group">
+      <span id="tb-count"></span>
+      <button id="tb-clear" title="Clear filters">&times;</button>
     </div>
-    <div class="search-row">
-      <label class="partial-match">
-        <input type="checkbox" id="partial-match"> Partial match
-      </label>
-      <button class="search-btn clear" id="clear-search">Clear</button>
-    </div>
-    <div id="search-results"></div>
+    <span class="tb-sep"></span>
+    <button class="tb-icon" id="tb-filter" data-panel="explore" title="Explore">
+      <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2.5" width="14" height="2" rx="1"/><rect x="3" y="7" width="10" height="2" rx="1"/><rect x="5" y="11.5" width="6" height="2" rx="1"/></svg>
+    </button>
+    <button class="tb-icon" id="tb-search" data-panel="search" title="Search">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4"/><line x1="9.5" y1="9.5" x2="14" y2="14" stroke-linecap="round"/></svg>
+    </button>
+    <span class="tb-sep"></span>
+    <button class="tb-icon" id="tb-edges" title="Toggle edges">
+      <svg viewBox="0 0 16 16" fill="currentColor"><circle cx="4" cy="8" r="2"/><circle cx="12" cy="8" r="2"/><rect x="6" y="7.25" width="4" height="1.5" rx="0.5"/></svg>
+    </button>
+    <button class="tb-icon" id="tb-theme" title="Toggle theme">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M6 1.5a6.5 6.5 0 1 0 7.4 9.7A5.5 5.5 0 0 1 6 1.5z"/></svg>
+    </button>
   </div>
 
 {% block extra_elements %}{% endblock %}
-  <script id="payload" type="application/json">{{ payload_json }}</script>
+  <!-- fflate for decompression -->
+  <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.min.js"></script>
+  <!-- SmilesDrawer for molecule rendering -->
+  <script src="https://unpkg.com/smiles-drawer@2.1.7/dist/smiles-drawer.min.js"></script>
+
   <script type="module">
     const decode = (b64) => atob(b64);
     const mkModule = (code) =>
@@ -464,7 +842,6 @@
     const pubSubSource = decode("{{ runtime_pubsub }}");
     const scatterSourceRaw = decode("{{ runtime_scatterplot }}");
 
-    // Wrap regl's UMD build into an ES module
     const reglModuleSource = `
 const module = { exports: {} };
 const exports = module.exports;
@@ -473,7 +850,6 @@ ${reglSource}
 export default module.exports || globalThisRef.createREGL || createREGL;
 `;
     const reglUrl = mkModule(reglModuleSource);
-
     const pubSubUrl = mkModule(pubSubSource);
     const scatterSource = scatterSourceRaw
       .replace(/from "regl"/g, 'from "' + reglUrl + '"')
@@ -482,93 +858,217 @@ export default module.exports || globalThisRef.createREGL || createREGL;
       .replace(/from 'pub-sub-es'/g, 'from "' + pubSubUrl + '"');
     const scatterUrl = mkModule(scatterSource);
 
-{% block runtime_script %}
     const runtime = `
 import createScatterplot from '${scatterUrl}';
+import createREGL from '${reglUrl}';
 
-const payloadEl = document.getElementById('payload');
-const payload = JSON.parse(payloadEl.textContent || '{}');
+const loading = document.getElementById('loading');
+const progressFill = document.getElementById('progress-fill');
+const progressText = document.getElementById('progress-text');
 
-const coords = payload.points || [];
-const columns = payload.columns || {};
-const colormaps = payload.colormaps || {};
-const layoutOptions = payload.layoutOptions || [];
-const labelOptions = payload.labelOptions || [];
-const initialColor = layoutOptions.includes(payload.initialColor)
-  ? payload.initialColor
-  : (layoutOptions[0] || '');
-const hasLayouts = layoutOptions.length > 0;
-const fallbackPointColor = hasLayouts ? (payload.pointColor || '#4a9eff') : '#000000';
+function updateProgress(percent, text) {
+  progressFill.style.width = percent + '%';
+  progressText.textContent = text;
+}
 
-// Edge data
-const edgesS = (payload.edges && payload.edges.s) || [];
-const edgesT = (payload.edges && payload.edges.t) || [];
-const hasEdges = edgesS.length > 0 && payload.showEdges !== false;
-const parsedEdgeWidth = Number(payload.edgeWidth);
+// Decode gzip-compressed binary data using fflate
+function decodeGzipBuffer(buffer, dtype) {
+  const bytes = new Uint8Array(buffer);
+  const decompressed = fflate.gunzipSync(bytes);
+  // fflate may return a view with non-zero byteOffset; copy to aligned buffer
+  const aligned = decompressed.slice().buffer;
+  switch (dtype) {
+    case 'uint16': return new Uint16Array(aligned);
+    case 'uint32': return new Uint32Array(aligned);
+    case 'float32': return new Float32Array(aligned);
+    case 'int32': return new Int32Array(aligned);
+    default: throw new Error('Unknown dtype: ' + dtype);
+  }
+}
+
+// Decode gzip-compressed JSON string data
+function decodeGzipBufferString(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const decompressed = fflate.gunzipSync(bytes);
+  const text = new TextDecoder().decode(decompressed);
+  return JSON.parse(text);
+}
+
+function dequantizeCoords(quantized, bits = 16) {
+  const n = quantized.length / 2;
+  const maxVal = bits === 16 ? 65535 : 4294967295;
+  const scale = 2.0 / maxVal;
+  const x = new Float32Array(n);
+  const y = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    x[i] = quantized[i * 2] * scale - 1.0;
+    y[i] = quantized[i * 2 + 1] * scale - 1.0;
+  }
+  return { x, y };
+}
+
+// ============================================
+// Load Data (inline or fetch)
+// ============================================
+
+{% if inline_data %}
+// --- Inline mode: data embedded as base64 ---
+updateProgress(5, 'Decoding inline data...');
+const metadata = {{ inline_metadata | safe }};
+{% else %}
+// --- Server mode: data fetched via HTTP ---
+updateProgress(5, 'Fetching metadata...');
+const metadata = await fetch('./metadata.json').then(r => r.json());
+{% endif %}
+
+const colormaps = metadata.colormaps || {};
+const layoutOptions = metadata.layoutOptions || [];
+const labelOptions = metadata.labelOptions || [];
+const columnMeta = metadata.columns || {};
+const nEdges = metadata.nEdges || 0;
+
+{% if inline_data %}
+updateProgress(10, 'Decoding coordinates...');
+const coordsRaw = Uint8Array.from(atob("{{ inline_coords }}"), c => c.charCodeAt(0));
+{% else %}
+updateProgress(10, 'Fetching coordinates...');
+const coordsRaw = new Uint8Array(await fetch('./coords.bin').then(r => r.arrayBuffer()));
+{% endif %}
+const coordDtype = metadata.coordDtype || 'uint16';
+const coordBits = coordDtype === 'uint16' ? 16 : 32;
+const quantizedCoords = decodeGzipBuffer(coordsRaw.buffer, coordDtype);
+const { x, y } = dequantizeCoords(quantizedCoords, coordBits);
+const n = x.length;
+const N = n;
+
+updateProgress(30, 'Preparing visualization...');
+const hasEdges = nEdges > 0;
+const parsedEdgeWidth = Number(metadata.edgeWidth);
 const edgeWidth = Number.isFinite(parsedEdgeWidth) && parsedEdgeWidth > 0 ? parsedEdgeWidth : 2;
-const edgeStrokeStyle = payload.edgeStrokeStyle || 'rgba(0, 0, 0, 0.5)';
-const edgeLineCap = ['butt', 'round', 'square'].includes(payload.edgeLineCap)
-  ? payload.edgeLineCap
-  : 'round';
+const edgeStrokeStyle = metadata.edgeStrokeStyle || 'rgba(0, 0, 0, 0.5)';
 
-const labelOnlyOptions = labelOptions.filter((name) => {
-  const col = columns[name];
-  return col && col.role === 'label';
-});
-const labelFallbackOptions = labelOptions.filter((name) => {
-  const col = columns[name];
-  return col && col.role !== 'label';
-});
-const tooltipFields = [...labelOptions];
+updateProgress(40, 'Loading columns...');
+
+// Load initial color layout column eagerly, others lazily
+const columns = {};
+const columnNames = Object.keys(columnMeta);
+const initialColor = layoutOptions[0] || '';
+
+{% if inline_data %}
+// Inline column blobs keyed by column name
+const _inlineBlobs = {
+  {% for name, b64 in inline_columns.items() %}
+  "{{ name }}": "{{ b64 }}",
+  {% endfor %}
+};
+{% endif %}
+
+// Decode a column from binary data (buffer)
+function decodeColumnBuffer(name, buffer) {
+  const meta = columnMeta[name];
+  if (!meta) return null;
+  if (meta.dtype === 'string') {
+    const values = decodeGzipBufferString(buffer);
+    columns[name] = { values, dtype: 'string', role: meta.role, colormap: meta.colormap };
+  } else if (meta.dictionary) {
+    const decoded = decodeGzipBuffer(buffer, meta.dtype);
+    columns[name] = {
+      values: Array.from(decoded).map(i => meta.dictionary[i]),
+      dtype: 'categorical', role: meta.role, colormap: meta.colormap,
+    };
+  } else {
+    const decoded = decodeGzipBuffer(buffer, meta.dtype);
+    columns[name] = {
+      values: decoded,
+      dtype: meta.dtype === 'float32' ? 'continuous' : meta.dtype,
+      role: meta.role, colormap: meta.colormap,
+    };
+  }
+  return columns[name];
+}
+
+// Fetch/decode a column by name
+async function fetchColumn(name) {
+  if (columns[name]) return columns[name];
+  const meta = columnMeta[name];
+  if (!meta) return null;
+
+{% if inline_data %}
+  const b64 = _inlineBlobs[name];
+  if (!b64) return null;
+  const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  return decodeColumnBuffer(name, raw.buffer);
+{% else %}
+  const fileKey = meta.file || name;
+  const resp = await fetch('./col_' + encodeURIComponent(fileKey) + '.bin');
+  if (!resp.ok) return null;
+  const buffer = await resp.arrayBuffer();
+  return decodeColumnBuffer(name, buffer);
+{% endif %}
+}
+
+// Pre-fetch the initial color column, label columns, and special columns
+const fetchPromises = [];
+if (initialColor) fetchPromises.push(fetchColumn(initialColor));
+for (const name of labelOptions) {
+  fetchPromises.push(fetchColumn(name));
+}
+// Pre-fetch SMILES and images columns (not in labelOptions but needed for tooltips)
+if (metadata.smilesColumn && columnMeta[metadata.smilesColumn]) {
+  fetchPromises.push(fetchColumn(metadata.smilesColumn));
+}
+if (metadata.imagesColumn && columnMeta[metadata.imagesColumn]) {
+  fetchPromises.push(fetchColumn(metadata.imagesColumn));
+}
+if (metadata.proteinColumn && columnMeta[metadata.proteinColumn]) {
+  fetchPromises.push(fetchColumn(metadata.proteinColumn));
+}
+if (metadata.structuresColumn && columnMeta[metadata.structuresColumn]) {
+  fetchPromises.push(fetchColumn(metadata.structuresColumn));
+}
+await Promise.all(fetchPromises);
+
+updateProgress(80, 'Initializing visualization...');
+
+// ============================================
+// Visualization Setup
+// ============================================
 
 const canvas = document.getElementById('canvas');
-const colorSelect = document.getElementById('color-select');
+const colorSelect = document.getElementById('color-select-panel');
 const tooltip = document.getElementById('tooltip');
 const tooltipLabel = document.getElementById('tooltip-label');
 const tooltipContent = document.getElementById('tooltip-content');
-const legend = document.getElementById('legend');
 const legendTitle = document.getElementById('legend-title');
 const legendContent = document.getElementById('legend-content');
 
 function createLinearScale(initialDomain, initialRange) {
-  let d0 = initialDomain[0];
-  let d1 = initialDomain[1];
-  let r0 = initialRange[0];
-  let r1 = initialRange[1];
+  let d0 = initialDomain[0], d1 = initialDomain[1];
+  let r0 = initialRange[0], r1 = initialRange[1];
   const scale = (value) => {
     const denom = d1 - d0;
     if (denom === 0) return r0;
     return r0 + ((value - d0) / denom) * (r1 - r0);
   };
-  scale.domain = (nextDomain) => {
-    if (nextDomain === undefined) return [d0, d1];
-    d0 = nextDomain[0];
-    d1 = nextDomain[1];
-    return scale;
-  };
-  scale.range = (nextRange) => {
-    if (nextRange === undefined) return [r0, r1];
-    r0 = nextRange[0];
-    r1 = nextRange[1];
-    return scale;
-  };
+  scale.domain = (nd) => { if (nd === undefined) return [d0,d1]; d0=nd[0]; d1=nd[1]; return scale; };
+  scale.range = (nr) => { if (nr === undefined) return [r0,r1]; r0=nr[0]; r1=nr[1]; return scale; };
   return scale;
 }
 
 const edgeXScale = createLinearScale([-1, 1], [0, canvas.clientWidth || window.innerWidth]);
 const edgeYScale = createLinearScale([-1, 1], [canvas.clientHeight || window.innerHeight, 0]);
 
-const N = coords.length;
+const fallbackPointColor = metadata.pointColor || '#4a9eff';
 
 const scatterplot = createScatterplot({
   canvas,
   width: canvas.clientWidth || window.innerWidth,
   height: canvas.clientHeight || window.innerHeight,
-  pointSize: payload.pointSize || 4,
-  pointSizeSelected: 8,  // 2x size when selected
-  opacity: payload.opacity ?? 0.85,
-  opacityInactiveScale: 0.5,  // Dim non-selected points when selection active
-  backgroundColor: payload.backgroundColor || [0, 0, 0, 1],
+  pointSize: metadata.pointSize || 4,
+  pointSizeSelected: 8,
+  opacity: metadata.opacity ?? 0.85,
+  opacityInactiveScale: 0.5,
+  backgroundColor: metadata.backgroundColor || [0, 0, 0, 1],
   pointColor: fallbackPointColor,
   pointOutlineWidth: 2,
   colorBy: null,
@@ -578,18 +1078,38 @@ const scatterplot = createScatterplot({
   performanceMode: N > 500000,
 });
 
-const x = coords.map((p) => p[0]);
-const y = coords.map((p) => p[1]);
-const zeroArray = new Array(x.length).fill(0);
+const zeroArray = new Float32Array(n);
 const NAN_FALLBACK_COLOR = '#000000';
 
-// === Edge Canvas Overlay ===
-const E = edgesS.length;
-let redrawEdges = function() {};
-let edgeNeedsRedraw = hasEdges;
-let edgesVisible = true;
+// === WebGL Edge Rendering ===
+// Edges rendered via regl on a separate WebGL canvas (GPU-accelerated).
+// For N > 1M, edges default to OFF and load lazily on first toggle.
+let edgeNeedsRedraw = false;
+let edgesVisible = hasEdges && N <= 1_000_000;
+let edgesLoaded = false;
+let edgeRegl = null;
+let drawEdgesCmd = null;
+let edgeCanvas = null;
+
+function parseEdgeColor(str) {
+  const m = str.match(/rgba?\\(\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*(?:,\\s*([\\d.]+))?\\s*\\)/);
+  if (m) return [+m[1]/255, +m[2]/255, +m[3]/255, m[4] !== undefined ? +m[4] : 1];
+  return [0, 0, 0, 0.5];
+}
+const edgeColor = parseEdgeColor(edgeStrokeStyle);
 
 const edgeToggle = document.getElementById('edge-toggle');
+const tbEdges = document.getElementById('tb-edges');
+if (tbEdges && edgesVisible) tbEdges.classList.add('on');
+
+function resizeEdgeCanvas() {
+  if (!edgeCanvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  edgeCanvas.width = window.innerWidth * dpr;
+  edgeCanvas.height = window.innerHeight * dpr;
+  if (edgeRegl) edgeRegl.poll();
+  edgeNeedsRedraw = true;
+}
 
 if (hasEdges) {
   canvas.style.position = 'fixed';
@@ -597,90 +1117,130 @@ if (hasEdges) {
   canvas.style.left = '0';
   canvas.style.zIndex = '2';
 
-  const edgeCanvas = document.createElement('canvas');
+  edgeCanvas = document.createElement('canvas');
   edgeCanvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:1;';
   canvas.parentNode.insertBefore(edgeCanvas, canvas);
-  let edgeCtx = edgeCanvas.getContext('2d');
-
-  function resizeEdgeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
-    edgeCanvas.width = window.innerWidth * dpr;
-    edgeCanvas.height = window.innerHeight * dpr;
-    edgeCtx = edgeCanvas.getContext('2d');
-    edgeCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
   resizeEdgeCanvas();
+}
 
-  redrawEdges = function() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    edgeCtx.clearRect(0, 0, w, h);
+async function loadEdges() {
+  if (edgesLoaded || !hasEdges) return;
 
-    if (!edgesVisible) {
-      edgeNeedsRedraw = false;
-      return;
-    }
+{% if inline_data %}
+  const edgeRaw = Uint8Array.from(atob("{{ inline_edges }}"), c => c.charCodeAt(0));
+  const buf = edgeRaw.buffer;
+{% else %}
+  const buf = await fetch('./edges.bin').then(r => r.arrayBuffer());
+{% endif %}
+  const raw = decodeGzipBuffer(buf, 'uint32');
+  const eS = raw.subarray(0, nEdges);
+  const eT = raw.subarray(nEdges, 2 * nEdges);
 
-    const canvasRect = canvas.getBoundingClientRect();
-    const left = canvasRect.left;
-    const top = canvasRect.top;
-    const margin = 50;
-    const minX = 0 - margin;
-    const maxX = w + margin;
-    const minY = 0 - margin;
-    const maxY = h + margin;
+  // Interleaved position buffer from point coordinates
+  const positions = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    positions[i * 2] = x[i];
+    positions[i * 2 + 1] = y[i];
+  }
 
-    edgeCtx.beginPath();
-    edgeCtx.strokeStyle = edgeStrokeStyle;
-    edgeCtx.lineWidth = edgeWidth;
-    edgeCtx.lineCap = edgeLineCap;
-    edgeCtx.lineJoin = 'round';
+  // Element index buffer: pairs of vertex indices per edge
+  const elements = new Uint32Array(nEdges * 2);
+  for (let i = 0; i < nEdges; i++) {
+    elements[i * 2] = eS[i];
+    elements[i * 2 + 1] = eT[i];
+  }
 
-    for (let i = 0; i < E; i++) {
-      const sx = left + edgeXScale(x[edgesS[i]]);
-      const sy = top + edgeYScale(y[edgesS[i]]);
-      const tx = left + edgeXScale(x[edgesT[i]]);
-      const ty = top + edgeYScale(y[edgesT[i]]);
-      // Skip edges entirely outside viewport
-      if ((sx < minX && tx < minX) || (sx > maxX && tx > maxX) ||
-          (sy < minY && ty < minY) || (sy > maxY && ty > maxY)) continue;
-      edgeCtx.moveTo(sx, sy);
-      edgeCtx.lineTo(tx, ty);
-    }
+  edgeRegl = createREGL({
+    canvas: edgeCanvas,
+    extensions: ['OES_element_index_uint'],
+    attributes: { alpha: true, premultipliedAlpha: false, antialias: true },
+  });
 
-    edgeCtx.stroke();
-    edgeNeedsRedraw = false;
-  };
+  const vertSrc = 'precision highp float; attribute vec2 position; uniform vec2 u_scale; uniform vec2 u_offset; void main() { gl_Position = vec4(position * u_scale + u_offset, 0.0, 1.0); }';
+  const fragSrc = 'precision mediump float; uniform vec4 u_color; void main() { gl_FragColor = u_color; }';
 
+  drawEdgesCmd = edgeRegl({
+    vert: vertSrc,
+    frag: fragSrc,
+    attributes: {
+      position: { buffer: edgeRegl.buffer(positions), size: 2 },
+    },
+    elements: edgeRegl.elements({ data: elements, primitive: 'lines', type: 'uint32' }),
+    uniforms: {
+      u_scale: edgeRegl.prop('scale'),
+      u_offset: edgeRegl.prop('offset'),
+      u_color: edgeRegl.prop('color'),
+    },
+    blend: {
+      enable: true,
+      func: { srcRGB: 'src alpha', srcAlpha: 1, dstRGB: 'one minus src alpha', dstAlpha: 1 },
+    },
+    depth: { enable: false },
+  });
+
+  edgesLoaded = true;
+  edgeNeedsRedraw = true;
+}
+
+function renderEdges() {
+  if (!edgesLoaded || !edgesVisible || !edgeRegl) return;
+  edgeRegl.poll();
+  edgeRegl.clear({ color: [0, 0, 0, 0] });
+
+  // Derive data-to-clip-space transform from scatterplot's live scales
+  const xd = edgeXScale.domain();
+  const yd = edgeYScale.domain();
+  const xRange = xd[1] - xd[0] || 1;
+  const yRange = yd[1] - yd[0] || 1;
+
+  drawEdgesCmd({
+    scale: [2 / xRange, 2 / yRange],
+    offset: [-(xd[1] + xd[0]) / xRange, -(yd[1] + yd[0]) / yRange],
+    color: edgeColor,
+  });
+  edgeNeedsRedraw = false;
+}
+
+const redrawEdges = renderEdges;
+
+if (hasEdges) {
   scatterplot.subscribe('drawing', (event) => {
-    if (!edgeNeedsRedraw && !(event && event.isViewChanged)) {
-      return;
-    }
-    redrawEdges();
+    if (!edgesVisible || !edgesLoaded) return;
+    if (edgeNeedsRedraw || (event && event.isViewChanged)) renderEdges();
   });
 
   window.addEventListener('resize', () => {
     resizeEdgeCanvas();
-    edgeNeedsRedraw = true;
-    redrawEdges();
+    renderEdges();
   });
 
-  edgeToggle.addEventListener('change', (e) => {
-    edgesVisible = e.target.checked;
-    edgeNeedsRedraw = true;
-    redrawEdges();
-  });
+  async function toggleEdges() {
+    edgesVisible = !edgesVisible;
+    if (tbEdges) tbEdges.classList.toggle('on', edgesVisible);
+    if (edgesVisible && !edgesLoaded) {
+      try { await loadEdges(); } catch (err) {
+        console.error('Failed to load edges:', err);
+        edgesVisible = false;
+        if (tbEdges) tbEdges.classList.remove('on');
+        return;
+      }
+    }
+    if (edgesVisible) { edgeNeedsRedraw = true; renderEdges(); }
+    else if (edgeRegl) { edgeRegl.poll(); edgeRegl.clear({ color: [0, 0, 0, 0] }); }
+  }
+  if (tbEdges) tbEdges.addEventListener('click', toggleEdges);
+
+  // For small datasets (<=1M), load edges eagerly during startup
+  if (edgesVisible) await loadEdges();
 } else {
-  // Hide edge toggle when no edges
-  edgeToggle.parentElement.style.display = 'none';
+  if (tbEdges) tbEdges.style.display = 'none';
 }
 
+// Color mapping
 function buildContinuousMapping(rawValues, baseCmap) {
-  const nums = new Array(rawValues.length);
+  const nums = new Float64Array(rawValues.length);
   const missing = new Array(rawValues.length);
-  let min = Infinity;
-  let max = -Infinity;
-  let hasNaN = false;
+  let min = Infinity, max = -Infinity, hasNaN = false;
 
   for (let i = 0; i < rawValues.length; i++) {
     const raw = rawValues[i];
@@ -688,58 +1248,36 @@ function buildContinuousMapping(rawValues, baseCmap) {
     nums[i] = v;
     const isMissing = raw === null || raw === undefined || !Number.isFinite(v);
     missing[i] = isMissing;
-    if (isMissing) {
-      hasNaN = true;
-      continue;
-    }
-
+    if (isMissing) { hasNaN = true; continue; }
     if (v < min) min = v;
     if (v > max) max = v;
   }
 
-  if (min === Infinity) {
-    min = 0;
-    max = 0;
-  }
-
+  if (min === Infinity) { min = 0; max = 0; }
   const range = max === min ? 1 : max - min;
+  const w = new Float32Array(rawValues.length);
 
   if (!hasNaN) {
-    return {
-      cmap: baseCmap,
-      w: nums.map((v) => ((v - min) / range)),
-      min,
-      max,
-      hasNaN: false,
-    };
+    for (let i = 0; i < rawValues.length; i++) w[i] = (nums[i] - min) / range;
+    return { cmap: baseCmap, w, min, max, hasNaN: false };
   }
 
   const baseCount = Math.max(1, baseCmap.length);
   const offset = 1 / baseCount;
   const scale = baseCount > 1 ? (baseCount - 1) / baseCount : 0;
-  const w = nums.map((v, i) => {
-    if (missing[i]) return 0;
-    return ((v - min) / range) * scale + offset;
-  });
-
-  return {
-    cmap: [NAN_FALLBACK_COLOR, ...baseCmap],
-    w,
-    min,
-    max,
-    hasNaN: true,
-  };
+  for (let i = 0; i < rawValues.length; i++) {
+    w[i] = missing[i] ? 0 : ((nums[i] - min) / range) * scale + offset;
+  }
+  return { cmap: [NAN_FALLBACK_COLOR, ...baseCmap], w, min, max, hasNaN: true };
 }
 
-function applyColor(columnName) {
-  const col = columns[columnName];
+async function applyColor(columnName) {
+  const col = await fetchColumn(columnName);
   if (!col) {
     scatterplot.set({ colorBy: null, pointColor: fallbackPointColor });
     edgeNeedsRedraw = true;
-    scatterplot.draw({ x, y }).then(() => {
-      redrawEdges();
-    });
-    updateLegend('');
+    scatterplot.draw({ x, y }).then(() => { redrawEdges(); });
+    updateLegend('', null);
     return;
   }
 
@@ -747,26 +1285,23 @@ function applyColor(columnName) {
 
   if (col.dtype === 'categorical') {
     const mapping = new Map();
-    const z = new Array(x.length);
-    for (let i = 0; i < x.length; i++) {
-      const v = col.values[i];
+    const z = new Float32Array(n);
+    const values = col.values;
+    for (let i = 0; i < n; i++) {
+      const v = values[i];
       if (!mapping.has(v)) mapping.set(v, mapping.size);
       z[i] = mapping.get(v);
     }
     edgeNeedsRedraw = true;
     scatterplot.set({ colorBy: 'valueA', pointColor: cmap });
-    scatterplot.draw({ x, y, z, w: zeroArray }).then(() => {
-      redrawEdges();
-    });
+    scatterplot.draw({ x, y, z, w: zeroArray }).then(() => { redrawEdges(); });
   } else {
     const mapping = buildContinuousMapping(col.values, cmap);
     edgeNeedsRedraw = true;
     scatterplot.set({ colorBy: 'valueB', pointColor: mapping.cmap });
-    scatterplot.draw({ x, y, z: zeroArray, w: mapping.w }).then(() => {
-      redrawEdges();
-    });
+    scatterplot.draw({ x, y, z: zeroArray, w: mapping.w }).then(() => { redrawEdges(); });
   }
-  updateLegend(columnName);
+  updateLegend(columnName, col);
 }
 
 function formatValue(val) {
@@ -786,16 +1321,13 @@ function buildGradient(colors) {
   for (let i = 0; i < steps; i++) {
     const t = i / (steps - 1);
     const idx = Math.round((colors.length - 1) * t);
-    const pct = Math.round(t * 100);
-    stops.push(colors[idx] + ' ' + pct + '%');
+    stops.push(colors[idx] + ' ' + Math.round(t * 100) + '%');
   }
   return 'linear-gradient(90deg, ' + stops.join(', ') + ')';
 }
 
-function updateLegend(columnName) {
-  const col = columns[columnName];
+function updateLegend(columnName, col) {
   if (!col || col.role === 'label') {
-    legend.classList.add('hidden');
     legendTitle.textContent = '';
     legendContent.innerHTML = '';
     return;
@@ -809,67 +1341,43 @@ function updateLegend(columnName) {
     const items = [];
     for (let i = 0; i < col.values.length; i++) {
       const v = col.values[i];
-      if (!mapping.has(v)) {
-        mapping.set(v, mapping.size);
-        items.push(v);
-      }
-    }
-    if (mapping.size > cmap.length) {
-      throw new Error(
-        'Categorical layout "' + columnName + '" has ' + mapping.size +
-        ' unique values but colormap "' + col.colormap + '" only provides ' +
-        cmap.length + ' colors.'
-      );
+      if (!mapping.has(v)) { mapping.set(v, mapping.size); items.push(v); }
     }
     let html = '';
     for (let i = 0; i < items.length; i++) {
-      const color = cmap[i];
-      html += '<div class="legend-item"><span class="legend-swatch" style="background: ' +
-        color + ';"></span><span class="legend-label">' + items[i] + '</span></div>';
+      html += '<div class="legend-item"><span class="legend-swatch" style="background:' +
+        cmap[i % cmap.length] + '"></span><span>' + items[i] + '</span></div>';
     }
     legendContent.innerHTML = html;
   } else {
     const mapping = buildContinuousMapping(col.values, cmap);
-    const gradient = buildGradient(cmap);
     let legendHtml =
-      '<div class="legend-gradient" style="background: ' + gradient + ';"></div>' +
+      '<div class="legend-gradient" style="background:' + buildGradient(cmap) + '"></div>' +
       '<div class="legend-range"><span>' + formatValue(mapping.min) + '</span><span>' +
       formatValue(mapping.max) + '</span></div>';
     if (mapping.hasNaN) {
       legendHtml +=
-        '<div class="legend-item"><span class="legend-swatch" style="background: ' +
-        NAN_FALLBACK_COLOR + ';"></span><span class="legend-label">NaN</span></div>';
+        '<div class="legend-item"><span class="legend-swatch" style="background:' +
+        NAN_FALLBACK_COLOR + '"></span><span>NaN</span></div>';
     }
     legendContent.innerHTML = legendHtml;
   }
-
-  legend.classList.remove('hidden');
 }
 
-function getLabel(idx) {
-  for (const name of labelOnlyOptions) {
-    const col = columns[name];
-    if (col && col.values[idx] !== undefined) {
-      return col.values[idx];
-    }
-  }
-  for (const name of labelFallbackOptions) {
-    const col = columns[name];
-    if (col && col.values[idx] !== undefined) {
-      return col.values[idx];
-    }
-  }
-  return 'Point ' + idx;
-}
-
+// Tooltip
 let mouseX = 0, mouseY = 0;
 canvas.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
 
 function showTooltip(idx) {
-  tooltipLabel.textContent = getLabel(idx);
+  let label = 'Point ' + idx;
+  for (const name of labelOptions) {
+    const col = columns[name];
+    if (col && col.values[idx] !== undefined) { label = col.values[idx]; break; }
+  }
+  tooltipLabel.textContent = label;
 
   let html = '';
-  for (const name of tooltipFields) {
+  for (const name of labelOptions) {
     const col = columns[name];
     if (!col) continue;
     const val = col.values[idx];
@@ -878,54 +1386,186 @@ function showTooltip(idx) {
   tooltipContent.innerHTML = html;
 
   tooltip.classList.add('visible');
-  const { width, height } = tooltip.getBoundingClientRect();
+  const rect = tooltip.getBoundingClientRect();
   let left = mouseX + 12;
   let top = mouseY + 12;
-  if (left + width > window.innerWidth - 8) left = mouseX - width - 12;
-  if (top + height > window.innerHeight - 8) top = mouseY - height - 12;
+  if (left + rect.width > window.innerWidth - 8) left = mouseX - rect.width - 12;
+  if (top + rect.height > window.innerHeight - 8) top = mouseY - rect.height - 12;
   tooltip.style.left = left + 'px';
   tooltip.style.top = top + 'px';
 }
 
-function hideTooltip() {
-  tooltip.classList.remove('visible');
-}
+function hideTooltip() { tooltip.classList.remove('visible'); }
 
 scatterplot.subscribe('pointover', (idx) => showTooltip(idx));
 scatterplot.subscribe('pointout', hideTooltip);
 
-const resize = () => {
+// Resize
+window.addEventListener('resize', () => {
   const { width, height } = canvas.getBoundingClientRect();
   scatterplot.set({ width, height });
-};
-window.addEventListener('resize', resize);
+  cardBodyMaxHeight = clampCardBodyHeight(cardBodyMaxHeight);
+  applyCardSize();
+});
 
+// Color selector
 for (const name of layoutOptions) {
-  const col = columns[name];
-  if (!col) continue;
+  const meta = columnMeta[name];
+  if (!meta) continue;
   const opt = document.createElement('option');
   opt.value = name;
-  opt.textContent = name + ' (' + col.dtype + ')';
+  const dtype = meta.dictionary ? 'categorical' : (meta.dtype === 'float32' ? 'continuous' : meta.dtype);
+  opt.textContent = name + ' (' + dtype + ')';
   colorSelect.appendChild(opt);
 }
-if (initialColor) {
-  colorSelect.value = initialColor;
-}
+if (initialColor) colorSelect.value = initialColor;
 colorSelect.addEventListener('change', (e) => applyColor(e.target.value));
 
-applyColor(initialColor || '');
+// Initial render
+updateProgress(95, 'Rendering...');
+await applyColor(initialColor || '');
 redrawEdges();
+
+updateProgress(100, 'Complete!');
+setTimeout(() => { loading.classList.add('hidden'); }, 200);
+
+console.log('Loaded ' + n.toLocaleString() + ' points (server mode)');
 
 // ============================================
 // Card Stack System (single-click pinned cards)
 // ============================================
 
 const cardStack = document.getElementById('card-stack');
+const CARD_WIDTH_STORAGE_KEY = 'tmap.card.width';
+const CARD_BODY_HEIGHT_STORAGE_KEY = 'tmap.card.bodyMaxHeight';
+const CARD_WIDTH_DEFAULT = 320;
+const CARD_WIDTH_MIN = 280;
+const CARD_WIDTH_MAX = 520;
+const CARD_BODY_HEIGHT_DEFAULT = 420;
+const CARD_BODY_HEIGHT_MIN = 220;
 const pinnedCards = []; // Array of point indices
 let currentCardIndex = 0;
 
-// >>> CARD_STACK_LIMIT: Change this value to adjust maximum pinned cards <<<
 const MAX_CARDS = 50;
+
+function clampCardWidth(width) {
+  const w = Number(width);
+  if (!Number.isFinite(w)) return CARD_WIDTH_DEFAULT;
+  return Math.max(CARD_WIDTH_MIN, Math.min(CARD_WIDTH_MAX, Math.round(w)));
+}
+
+function cardBodyHeightUpperBound() {
+  return Math.max(CARD_BODY_HEIGHT_MIN, window.innerHeight - 120);
+}
+
+function clampCardBodyHeight(height) {
+  const h = Number(height);
+  if (!Number.isFinite(h)) return CARD_BODY_HEIGHT_DEFAULT;
+  return Math.max(CARD_BODY_HEIGHT_MIN, Math.min(cardBodyHeightUpperBound(), Math.round(h)));
+}
+
+function loadStoredCardDimension(key, clampFn) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null || raw === '') return null;
+    return clampFn(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+const storedCardWidth = loadStoredCardDimension(CARD_WIDTH_STORAGE_KEY, clampCardWidth);
+const storedCardBodyHeight = loadStoredCardDimension(
+  CARD_BODY_HEIGHT_STORAGE_KEY,
+  clampCardBodyHeight,
+);
+let cardWidth = storedCardWidth === null ? CARD_WIDTH_DEFAULT : storedCardWidth;
+let cardBodyMaxHeight = (
+  storedCardBodyHeight === null ? CARD_BODY_HEIGHT_DEFAULT : storedCardBodyHeight
+);
+let hasCardSizeOverride = storedCardWidth !== null || storedCardBodyHeight !== null;
+
+function applyCardSize() {
+  cardBodyMaxHeight = clampCardBodyHeight(cardBodyMaxHeight);
+  cardStack.style.setProperty('--card-width', cardWidth + 'px');
+  cardStack.style.setProperty('--card-body-max-height', cardBodyMaxHeight + 'px');
+  const card = cardStack.querySelector('.card');
+  const cardBody = cardStack.querySelector('.card-body');
+  if (!card || !cardBody) return;
+  if (hasCardSizeOverride) {
+    card.style.setProperty('width', cardWidth + 'px', 'important');
+    cardBody.style.setProperty('max-height', cardBodyMaxHeight + 'px', 'important');
+  } else {
+    card.style.removeProperty('width');
+    cardBody.style.removeProperty('max-height');
+  }
+}
+
+function setCardSize(width, bodyHeight, persist = true) {
+  cardWidth = clampCardWidth(width);
+  cardBodyMaxHeight = clampCardBodyHeight(bodyHeight);
+  hasCardSizeOverride = true;
+  applyCardSize();
+  if (!persist) return;
+  try {
+    window.localStorage.setItem(CARD_WIDTH_STORAGE_KEY, String(cardWidth));
+    window.localStorage.setItem(CARD_BODY_HEIGHT_STORAGE_KEY, String(cardBodyMaxHeight));
+  } catch (e) {
+    // no-op: storage may be unavailable
+  }
+}
+
+applyCardSize();
+
+function startCardResize(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const handle = e.currentTarget;
+  const pointerId = e.pointerId;
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const startWidth = cardWidth;
+  const startBodyHeight = cardBodyMaxHeight;
+  document.body.classList.add('card-resizing');
+
+  if (handle && handle.setPointerCapture) {
+    try { handle.setPointerCapture(pointerId); } catch (err) {}
+  }
+
+  function onMove(ev) {
+    if (pointerId !== undefined && ev.pointerId !== pointerId) return;
+    const deltaX = ev.clientX - startX;
+    const deltaY = ev.clientY - startY;
+    setCardSize(startWidth + deltaX, startBodyHeight + deltaY, false);
+  }
+
+  function onUp(ev) {
+    if (pointerId !== undefined && ev.pointerId !== pointerId) return;
+    handle?.removeEventListener('pointermove', onMove);
+    handle?.removeEventListener('pointerup', onUp);
+    handle?.removeEventListener('pointercancel', onUp);
+    if (handle && handle.releasePointerCapture) {
+      try { handle.releasePointerCapture(pointerId); } catch (err) {}
+    }
+    document.body.classList.remove('card-resizing');
+    setCardSize(cardWidth, cardBodyMaxHeight, true);
+  }
+
+  handle?.addEventListener('pointermove', onMove);
+  handle?.addEventListener('pointerup', onUp);
+  handle?.addEventListener('pointercancel', onUp);
+}
+
+function getLabel(idx) {
+  for (const name of labelOptions) {
+    const col = columns[name];
+    if (col && col.values[idx] !== undefined) {
+      return col.values[idx];
+    }
+  }
+  return 'Point ' + idx;
+}
 
 let hoveredPointIndex = -1;
 let cardMinimized = false;
@@ -934,7 +1574,7 @@ scatterplot.subscribe('pointout', () => { hoveredPointIndex = -1; });
 
 // Drag detection - only select on click, not drag
 let mouseDownPos = null;
-const DRAG_THRESHOLD = 5; // pixels
+const DRAG_THRESHOLD = 5;
 
 canvas.addEventListener('mousedown', (e) => {
   mouseDownPos = { x: e.clientX, y: e.clientY };
@@ -943,15 +1583,12 @@ canvas.addEventListener('mousedown', (e) => {
 canvas.addEventListener('mouseup', (e) => {
   if (!mouseDownPos) return;
 
-  // Check if this was a drag (moved more than threshold)
   const dx = e.clientX - mouseDownPos.x;
   const dy = e.clientY - mouseDownPos.y;
   const distance = Math.sqrt(dx * dx + dy * dy);
   mouseDownPos = null;
 
-  if (distance > DRAG_THRESHOLD) return; // Was a drag, not a click
-
-  // Ignore if shift/ctrl held (multi-select mode)
+  if (distance > DRAG_THRESHOLD) return;
   if (e.shiftKey || e.ctrlKey || e.metaKey) return;
   if (hoveredPointIndex < 0) return;
 
@@ -959,10 +1596,8 @@ canvas.addEventListener('mouseup', (e) => {
   const existingIndex = pinnedCards.indexOf(idx);
 
   if (existingIndex >= 0) {
-    // Jump to existing card
     currentCardIndex = existingIndex;
   } else {
-    // Add new card (remove oldest if at limit)
     if (pinnedCards.length >= MAX_CARDS) {
       pinnedCards.shift();
     }
@@ -986,10 +1621,19 @@ function renderCardStack() {
 
   cardStack.classList.remove('hidden');
   const idx = pinnedCards[currentCardIndex];
-  const label = getLabel(idx);
+  const cardConfig = metadata.card || null;
+
+  // Determine card title
+  let cardTitle;
+  if (cardConfig && cardConfig.titleColumn) {
+    const titleCol = columns[cardConfig.titleColumn];
+    cardTitle = titleCol ? String(titleCol.values[idx]) : getLabel(idx);
+  } else {
+    cardTitle = getLabel(idx);
+  }
 
   // Find SMILES column (if any)
-  const smilesColName = payload.smilesColumn;
+  const smilesColName = metadata.smilesColumn;
   const smilesCol = smilesColName ? columns[smilesColName] : null;
   const smilesValue = smilesCol ? smilesCol.values[idx] : null;
 
@@ -1008,16 +1652,28 @@ function renderCardStack() {
   html += '</div>';
   html += '</div>';
 
-  // Card body (hidden when minimized)
+  // Card body
   html += '<div class="card-body">';
+  html += '<div class="card-label">' + truncateString(cardTitle, 40) + '</div>';
 
-  // Label
-  html += '<div class="card-label">' + truncateString(String(label), 40) + '</div>';
+  // Subtitle (from card config)
+  if (cardConfig && cardConfig.subtitleColumn) {
+    const subCol = columns[cardConfig.subtitleColumn];
+    if (subCol) {
+      html += '<div class="card-subtitle">' + truncateString(String(subCol.values[idx]), 50) + '</div>';
+    }
+  }
 
-  // Structure container placeholder (extended by SMILES templates)
-  html += '<div class="card-structure-container" id="card-structure"></div>';
+  // Structure container placeholder (only if SMILES or protein data exists)
+  if (metadata.smilesColumn || metadata.proteinColumn || metadata.structuresColumn) {
+    html += '<div class="card-structure-container hidden" id="card-structure"></div>';
+  }
+  // Image container placeholder (only if images data exists)
+  if (metadata.imagesColumn) {
+    html += '<div class="card-image-container hidden" id="card-image"></div>';
+  }
 
-  // SMILES row with copy button (if present)
+  // SMILES row with copy button
   if (smilesValue && typeof smilesValue === 'string') {
     html += '<div class="card-copy-row">';
     html += '<span class="key">SMILES</span>';
@@ -1026,32 +1682,57 @@ function renderCardStack() {
     html += '</div>';
   }
 
-  // Other label fields
-  for (const name of tooltipFields) {
-    if (name === smilesColName) continue; // Already shown above
+  // Determine which fields to show
+  const fieldList = (cardConfig && cardConfig.fields) ? cardConfig.fields : labelOptions;
+  const skipColumns = new Set();
+  if (smilesColName) skipColumns.add(smilesColName);
+  if (cardConfig && cardConfig.titleColumn) skipColumns.add(cardConfig.titleColumn);
+  if (cardConfig && cardConfig.subtitleColumn) skipColumns.add(cardConfig.subtitleColumn);
+
+  for (const name of fieldList) {
+    if (skipColumns.has(name)) continue;
     const col = columns[name];
     if (!col) continue;
     const val = col.values[idx];
+    const colUi = (columnMeta[name] && columnMeta[name].ui) || {};
+    const displayName = colUi.displayName || name;
     const displayVal = truncateString(formatValue(val), 30);
+    const isCopyable = colUi.copyable === true || (typeof val === 'string' && val.length > 0 && colUi.copyable !== false);
 
-    // Add copy button for string values
-    if (typeof val === 'string' && val.length > 0) {
+    if (isCopyable && typeof val === 'string' && val.length > 0) {
       html += '<div class="card-copy-row">';
-      html += '<span class="key">' + name + '</span>';
+      html += '<span class="key">' + displayName + '</span>';
       html += '<span class="value">' + displayVal + '</span>';
       html += '<button class="card-copy-btn" data-value="' + String(val).replace(/"/g, '&quot;') + '">Copy</button>';
       html += '</div>';
     } else {
       html += '<div class="card-row">';
-      html += '<span class="key">' + name + '</span>';
+      html += '<span class="key">' + displayName + '</span>';
       html += '<span class="value">' + displayVal + '</span>';
       html += '</div>';
     }
   }
 
+  // Links (from card config)
+  if (cardConfig && cardConfig.links && cardConfig.links.length > 0) {
+    html += '<div class="card-links">';
+    for (const link of cardConfig.links) {
+      let url = link.url;
+      // Replace {column_name} placeholders with values from this point
+      url = url.replace(/\{([^}]+)\}/g, (match, colName) => {
+        const c = columns[colName];
+        return c ? encodeURIComponent(String(c.values[idx])) : match;
+      });
+      html += '<a class="card-link" href="' + url + '" target="_blank" rel="noopener">' + link.label + '</a>';
+    }
+    html += '</div>';
+  }
+
   html += '</div>'; // close card-body
   html += '</div>'; // close card
+  html += '<div class="card-resize-handle" id="card-resize-handle" title="Resize panel"></div>';
   cardStack.innerHTML = html;
+  applyCardSize();
 
   // Attach event listeners
   document.getElementById('card-prev')?.addEventListener('click', () => {
@@ -1069,6 +1750,7 @@ function renderCardStack() {
     if (currentCardIndex >= pinnedCards.length) currentCardIndex = Math.max(0, pinnedCards.length - 1);
     renderCardStack();
   });
+  document.getElementById('card-resize-handle')?.addEventListener('pointerdown', startCardResize);
 
   // Copy buttons
   cardStack.querySelectorAll('.card-copy-btn').forEach((btn) => {
@@ -1105,11 +1787,11 @@ const exportCloseBtn = document.getElementById('export-close');
 
 let selectedIndices = [];
 
-// Build column checkboxes
-function buildExportColumns() {
+// Build column checkboxes (fetch all label columns first)
+async function buildExportColumns() {
   let html = '';
   for (const name of labelOptions) {
-    const col = columns[name];
+    const col = await fetchColumn(name);
     if (!col) continue;
     html += '<label><input type="checkbox" value="' + name + '" checked> ' + name + '</label>';
   }
@@ -1128,7 +1810,6 @@ function hideExportPanel() {
   exportPanel.classList.add('hidden');
 }
 
-// Listen for scatterplot selection events (only show export for multi-select, not single click)
 scatterplot.subscribe('select', (selection) => {
   const indices = selection.points || selection;
   if (Array.isArray(indices) && indices.length > 1) {
@@ -1146,21 +1827,23 @@ function getSelectedColumns() {
   return checked;
 }
 
-function exportData(separator, extension) {
+async function exportData(separator, extension) {
   const colNames = getSelectedColumns();
   if (colNames.length === 0 || selectedIndices.length === 0) return;
 
-  // Build header
+  // Ensure all selected columns are fetched
+  for (const name of colNames) {
+    await fetchColumn(name);
+  }
+
   const rows = [colNames.join(separator)];
 
-  // Build data rows
   for (const idx of selectedIndices) {
     const rowValues = colNames.map((name) => {
       const col = columns[name];
       if (!col) return '';
       const val = col.values[idx];
       let strVal = typeof val === 'number' ? formatValue(val) : String(val ?? '');
-      // Escape quotes and wrap in quotes if contains separator or quotes
       if (strVal.includes(separator) || strVal.includes('"') || strVal.includes('\\n')) {
         strVal = '"' + strVal.replace(/"/g, '""') + '"';
       }
@@ -1200,7 +1883,6 @@ document.addEventListener('keydown', (e) => {
       currentCardIndex = 0;
       renderCardStack();
     }
-    // Also clear search
     if (searchMatches.length > 0) {
       clearSearch();
     }
@@ -1220,48 +1902,61 @@ const searchResults = document.getElementById('search-results');
 
 let searchMatches = [];
 
-// Populate search column dropdown with string columns only
-function buildSearchColumnOptions() {
+// Populate search column dropdown with string columns
+async function buildSearchColumnOptions() {
   searchColumn.innerHTML = '';
-  for (const name of labelOptions) {
-    const col = columns[name];
-    if (!col) continue;
-    // Only include string columns (check first value)
-    const firstVal = col.values[0];
-    if (typeof firstVal !== 'string') continue;
+  const searchList = metadata.search || null;
 
-    const opt = document.createElement('option');
-    opt.value = name;
-    opt.textContent = name;
-    searchColumn.appendChild(opt);
-  }
-  // Add SMILES column if present and not already in labelOptions
-  const smilesCol = payload.smilesColumn;
-  if (smilesCol && !labelOptions.includes(smilesCol)) {
-    const col = columns[smilesCol];
-    if (col && typeof col.values[0] === 'string') {
+  if (searchList && searchList.length > 0) {
+    // Use explicit search column list from Python
+    for (const name of searchList) {
+      const col = await fetchColumn(name);
+      if (!col) continue;
       const opt = document.createElement('option');
-      opt.value = smilesCol;
-      opt.textContent = smilesCol + ' (SMILES)';
+      opt.value = name;
+      opt.textContent = name;
       searchColumn.appendChild(opt);
+    }
+  } else {
+    // Fall back to all string label columns
+    for (const name of labelOptions) {
+      const col = await fetchColumn(name);
+      if (!col) continue;
+      const firstVal = col.values[0];
+      if (typeof firstVal !== 'string') continue;
+
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      searchColumn.appendChild(opt);
+    }
+    // Add SMILES column if present and not already in labelOptions
+    const smilesCol = metadata.smilesColumn;
+    if (smilesCol && !labelOptions.includes(smilesCol)) {
+      const col = await fetchColumn(smilesCol);
+      if (col && typeof col.values[0] === 'string') {
+        const opt = document.createElement('option');
+        opt.value = smilesCol;
+        opt.textContent = smilesCol + ' (SMILES)';
+        searchColumn.appendChild(opt);
+      }
     }
   }
 }
 buildSearchColumnOptions();
 
-// Search function
-function performSearch() {
+async function performSearch() {
   const colName = searchColumn.value;
   const query = searchInput.value.trim();
   const partial = partialMatchCheckbox.checked;
 
   if (!query || !colName) {
     searchResults.textContent = '';
-    clearMarkers();
+    scatterplot.select([]);
     return;
   }
 
-  const col = columns[colName];
+  const col = await fetchColumn(colName);
   if (!col) {
     searchResults.textContent = 'Column not found';
     return;
@@ -1288,7 +1983,7 @@ function performSearch() {
     scatterplot.select([]);
   } else {
     searchResults.textContent = matches.length.toLocaleString() + ' match(es) found';
-    scatterplot.select(matches);  // Highlights points and triggers export panel for 2+ matches
+    scatterplot.select(matches);
   }
 }
 
@@ -1299,16 +1994,879 @@ function clearSearch() {
   scatterplot.select([]);
 }
 
-// Event handlers
 searchBtn.addEventListener('click', performSearch);
 searchInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') performSearch();
 });
 clearSearchBtn.addEventListener('click', clearSearch);
 
+// ============================================
+// Filter Sidebar (Embedding Atlas-style)
+// ============================================
+
+const fsSections = document.getElementById('fs-sections');
+const fsCount = document.getElementById('fs-count');
+const fsClearAll = document.getElementById('fs-clear-all');
+
+const filterColumnNames = metadata.filters || [];
+const filterState = {};
+let filteredIndices = null;
+
+function compactNum(v) {
+  if (v >= 1e6) return (v/1e6).toFixed(1).replace(/\\.0$/, '') + 'M';
+  if (v >= 1e3) return (v/1e3).toFixed(1).replace(/\\.0$/, '') + 'k';
+  return v.toLocaleString();
+}
+
+function updateFilterCount() {
+  const filtered = filteredIndices ? filteredIndices.length : n;
+  if (filteredIndices) {
+    fsCount.textContent = compactNum(filtered) + ' / ' + compactNum(n) + ' points';
+    fsClearAll.classList.remove('hidden');
+  } else {
+    fsCount.textContent = compactNum(n) + ' points';
+    fsClearAll.classList.add('hidden');
+  }
+}
+
+async function buildFilterSidebar() {
+  if (!filterColumnNames.length) return;
+
+  for (const name of filterColumnNames) {
+    const col = await fetchColumn(name);
+    if (!col) continue;
+    const colUi = (columnMeta[name] && columnMeta[name].ui) || {};
+    const displayName = colUi.displayName || name;
+
+    const section = document.createElement('div');
+    section.className = 'fs-section';
+
+    const head = document.createElement('div');
+    head.className = 'fs-section-head';
+    head.innerHTML = '<span>' + displayName + '</span><span class="fs-chevron">&#9660;</span>';
+    head.addEventListener('click', () => section.classList.toggle('collapsed'));
+    section.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'fs-section-body';
+
+    if (col.dtype === 'categorical' || typeof col.values[0] === 'string') {
+      buildCatSection(name, col, body);
+    } else {
+      buildNumSection(name, col, body);
+    }
+
+    section.appendChild(body);
+    fsSections.appendChild(section);
+  }
+
+  updateFilterCount();
+}
+
+function buildCatSection(colName, col, container) {
+  const counts = new Map();
+  for (let i = 0; i < col.values.length; i++) {
+    const v = String(col.values[i]);
+    counts.set(v, (counts.get(v) || 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const maxCount = sorted[0][1];
+  const showLimit = 15;
+  const shown = sorted.slice(0, showLimit);
+  const otherEntries = sorted.slice(showLimit);
+  const otherCount = otherEntries.reduce((s, [,c]) => s + c, 0);
+
+  function makeRow(value, count, isOther) {
+    const row = document.createElement('div');
+    row.className = 'fs-bar-row';
+    row.dataset.col = colName;
+    row.dataset.value = isOther ? '__other__' : value;
+    const pct = (count / maxCount * 100).toFixed(1);
+    row.innerHTML =
+      '<span class="fs-bar-label" title="' + (isOther ? 'other' : String(value).replace(/"/g, '&quot;')) + '">' +
+      (isOther ? '<i>(other)</i>' : String(value).replace(/</g, '&lt;')) + '</span>' +
+      '<div class="fs-bar-track"><div class="fs-bar-total" style="width:' + pct + '%"></div>' +
+      '<div class="fs-bar-selected" style="width:' + pct + '%"></div></div>' +
+      '<span class="fs-bar-count">' + compactNum(count) + ' / ' + compactNum(count) + '</span>';
+    row.addEventListener('click', () => toggleCatFilter(colName, row.dataset.value));
+    return row;
+  }
+
+  for (const [value, count] of shown) {
+    container.appendChild(makeRow(value, count, false));
+  }
+  if (otherCount > 0) {
+    container.appendChild(makeRow('', otherCount, true));
+  }
+
+  filterState[colName] = {
+    type: 'cat', selected: null,
+    allValues: sorted,
+    otherValues: new Set(otherEntries.map(([v]) => v)),
+    maxCount,
+  };
+}
+
+function buildNumSection(colName, col, container) {
+  const vals = [];
+  for (let i = 0; i < col.values.length; i++) {
+    const v = Number(col.values[i]);
+    if (Number.isFinite(v)) vals.push(v);
+  }
+  if (vals.length === 0) return;
+
+  vals.sort((a, b) => a - b);
+  const dataMin = vals[0];
+  const dataMax = vals[vals.length - 1];
+  if (dataMin === dataMax) return;
+
+  const numBins = 40;
+  const binWidth = (dataMax - dataMin) / numBins;
+  const bins = new Array(numBins).fill(0);
+  for (const v of vals) {
+    let idx = Math.floor((v - dataMin) / binWidth);
+    if (idx >= numBins) idx = numBins - 1;
+    bins[idx]++;
+  }
+  const maxBin = Math.max(...bins);
+
+  const countLabel = document.createElement('div');
+  countLabel.style.cssText = 'font-size:9px;color:#555;margin-bottom:2px;';
+  countLabel.textContent = '\\u2191 Count';
+  container.appendChild(countLabel);
+
+  const hist = document.createElement('div');
+  hist.className = 'fs-histogram';
+  hist.dataset.col = colName;
+
+  for (let i = 0; i < numBins; i++) {
+    const bar = document.createElement('div');
+    bar.className = 'fs-hist-bar';
+    bar.style.height = (maxBin > 0 ? (bins[i] / maxBin * 100) : 0) + '%';
+    bar.dataset.bin = String(i);
+    hist.appendChild(bar);
+  }
+
+  const brush = document.createElement('div');
+  brush.className = 'fs-hist-brush';
+  hist.appendChild(brush);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'fs-hist-overlay';
+  hist.appendChild(overlay);
+
+  container.appendChild(hist);
+
+  const axis = document.createElement('div');
+  axis.className = 'fs-hist-axis';
+  axis.innerHTML = '<span>' + formatValue(dataMin) + '</span><span>' + formatValue(dataMax) + '</span>';
+  container.appendChild(axis);
+
+  const rangeDisplay = document.createElement('div');
+  rangeDisplay.className = 'fs-hist-range';
+  container.appendChild(rangeDisplay);
+
+  filterState[colName] = { type: 'num', min: null, max: null, dataMin, dataMax, numBins, binWidth };
+
+  // Brush interaction
+  let brushing = false, brushStartX = 0;
+  overlay.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    brushing = true;
+    const rect = hist.getBoundingClientRect();
+    brushStartX = e.clientX - rect.left;
+    brush.style.display = 'block';
+    brush.style.left = brushStartX + 'px';
+    brush.style.width = '0px';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!brushing) return;
+    const rect = hist.getBoundingClientRect();
+    let currentX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    const left = Math.min(brushStartX, currentX);
+    const width = Math.abs(currentX - brushStartX);
+    brush.style.left = left + 'px';
+    brush.style.width = width + 'px';
+
+    const bars = hist.querySelectorAll('.fs-hist-bar');
+    const barW = rect.width / numBins;
+    bars.forEach((bar, i) => {
+      const bl = i * barW, br = bl + barW;
+      bar.classList.toggle('in-brush', br >= left && bl <= left + width);
+    });
+
+    const dLeft = dataMin + (left / rect.width) * (dataMax - dataMin);
+    const dRight = dataMin + ((left + width) / rect.width) * (dataMax - dataMin);
+    rangeDisplay.textContent = formatValue(dLeft) + ' \\u2013 ' + formatValue(dRight);
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!brushing) return;
+    brushing = false;
+    const bw = parseFloat(brush.style.width);
+    if (bw < 3) {
+      brush.style.display = 'none';
+      filterState[colName].min = null;
+      filterState[colName].max = null;
+      rangeDisplay.textContent = '';
+      hist.querySelectorAll('.fs-hist-bar').forEach(b => b.classList.remove('in-brush'));
+    } else {
+      const rect = hist.getBoundingClientRect();
+      const bl = parseFloat(brush.style.left);
+      filterState[colName].min = dataMin + (bl / rect.width) * (dataMax - dataMin);
+      filterState[colName].max = dataMin + ((bl + bw) / rect.width) * (dataMax - dataMin);
+    }
+    applyAllFilters();
+  });
+
+  overlay.addEventListener('dblclick', () => {
+    brush.style.display = 'none';
+    filterState[colName].min = null;
+    filterState[colName].max = null;
+    rangeDisplay.textContent = '';
+    hist.querySelectorAll('.fs-hist-bar').forEach(b => b.classList.remove('in-brush'));
+    applyAllFilters();
+  });
+}
+
+function toggleCatFilter(colName, value) {
+  const state = filterState[colName];
+  if (!state || state.type !== 'cat') return;
+
+  if (!state.selected) {
+    state.selected = new Set([value]);
+  } else if (state.selected.has(value)) {
+    state.selected.delete(value);
+    if (state.selected.size === 0) state.selected = null;
+  } else {
+    state.selected.add(value);
+  }
+
+  fsSections.querySelectorAll('.fs-bar-row[data-col="' + colName + '"]').forEach(row => {
+    row.classList.toggle('deselected', !!state.selected && !state.selected.has(row.dataset.value));
+  });
+
+  applyAllFilters();
+}
+
+async function applyAllFilters() {
+  let indices = null;
+
+  for (const [colName, state] of Object.entries(filterState)) {
+    if (state.type === 'cat' && state.selected) {
+      const col = columns[colName];
+      if (!col) continue;
+      const matching = new Set();
+      for (let i = 0; i < col.values.length; i++) {
+        const v = String(col.values[i]);
+        if (state.selected.has(v)) { matching.add(i); }
+        else if (state.selected.has('__other__') && state.otherValues.has(v)) { matching.add(i); }
+      }
+      indices = indices ? indices.filter(i => matching.has(i)) : [...matching];
+    } else if (state.type === 'num' && (state.min !== null || state.max !== null)) {
+      const col = columns[colName];
+      if (!col) continue;
+      const matching = new Set();
+      for (let i = 0; i < col.values.length; i++) {
+        const v = Number(col.values[i]);
+        if (!Number.isFinite(v)) continue;
+        if (state.min !== null && v < state.min) continue;
+        if (state.max !== null && v > state.max) continue;
+        matching.add(i);
+      }
+      indices = indices ? indices.filter(i => matching.has(i)) : [...matching];
+    }
+  }
+
+  filteredIndices = indices;
+  if (indices !== null) {
+    scatterplot.filter(indices);
+  } else {
+    scatterplot.unfilter();
+  }
+
+  updateFilterCount();
+  updateBarCounts();
+}
+
+function updateBarCounts() {
+  const matchSet = filteredIndices ? new Set(filteredIndices) : null;
+
+  for (const [colName, state] of Object.entries(filterState)) {
+    if (state.type !== 'cat') continue;
+    const col = columns[colName];
+    if (!col) continue;
+
+    const filteredCounts = new Map();
+    for (let i = 0; i < col.values.length; i++) {
+      if (matchSet && !matchSet.has(i)) continue;
+      filteredCounts.set(String(col.values[i]), (filteredCounts.get(String(col.values[i])) || 0) + 1);
+    }
+
+    fsSections.querySelectorAll('.fs-bar-row[data-col="' + colName + '"]').forEach(row => {
+      const value = row.dataset.value;
+      let filteredCount, totalCount;
+      if (value === '__other__') {
+        totalCount = [...state.otherValues].reduce((s, v) => {
+          const e = state.allValues.find(([val]) => val === v);
+          return s + (e ? e[1] : 0);
+        }, 0);
+        filteredCount = [...state.otherValues].reduce((s, v) => s + (filteredCounts.get(v) || 0), 0);
+      } else {
+        const e = state.allValues.find(([v]) => v === value);
+        totalCount = e ? e[1] : 0;
+        filteredCount = filteredCounts.get(value) || 0;
+      }
+      const bar = row.querySelector('.fs-bar-selected');
+      const countEl = row.querySelector('.fs-bar-count');
+      if (bar) bar.style.width = (state.maxCount > 0 ? (filteredCount / state.maxCount * 100).toFixed(1) : 0) + '%';
+      if (countEl) countEl.textContent = compactNum(filteredCount) + ' / ' + compactNum(totalCount);
+    });
+  }
+}
+
+function clearAllFilters() {
+  for (const state of Object.values(filterState)) {
+    if (state.type === 'cat') state.selected = null;
+    else if (state.type === 'num') { state.min = null; state.max = null; }
+  }
+  fsSections.querySelectorAll('.fs-bar-row').forEach(r => r.classList.remove('deselected'));
+  fsSections.querySelectorAll('.fs-hist-brush').forEach(b => { b.style.display = 'none'; });
+  fsSections.querySelectorAll('.fs-hist-bar').forEach(b => b.classList.remove('in-brush'));
+  fsSections.querySelectorAll('.fs-hist-range').forEach(r => { r.textContent = ''; });
+  scatterplot.unfilter();
+  filteredIndices = null;
+  updateFilterCount();
+  updateBarCounts();
+}
+
+fsClearAll.addEventListener('click', clearAllFilters);
+
+if (filterColumnNames.length > 0) {
+  buildFilterSidebar();
+}
+
+// ============================================
+// Toolbar Panel System
+// ============================================
+
+const panels = {
+  explore: document.getElementById('panel-explore'),
+  search: document.getElementById('panel-search'),
+};
+const explorePanel = panels.explore;
+const exploreBody = document.getElementById('explore-body');
+const exploreColorSection = document.getElementById('explore-color-section');
+const exploreFiltersSection = document.getElementById('explore-filters-section');
+
+function setActivePanelButtons(panelName) {
+  document.querySelectorAll('.tb-icon[data-panel]').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tb-icon[data-panel="' + panelName + '"]').forEach(b => b.classList.add('active'));
+}
+
+function focusExploreSection(focus) {
+  const scrollHost = exploreBody || explorePanel;
+  if (!scrollHost) return;
+  if (focus === 'filters' && exploreFiltersSection) {
+    scrollHost.scrollTo({ top: exploreFiltersSection.offsetTop - 8, behavior: 'smooth' });
+  } else if (focus === 'color') {
+    scrollHost.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+
+function togglePanel(name, opts = {}) {
+  const panel = panels[name];
+  const requestedFocus = opts.focus || '';
+  const wasOpen = panel && panel.classList.contains('open');
+
+  if (wasOpen && name === 'explore' && requestedFocus && panel.dataset.focus !== requestedFocus) {
+    panel.dataset.focus = requestedFocus;
+    setActivePanelButtons(name);
+    focusExploreSection(requestedFocus);
+    return;
+  }
+
+  Object.values(panels).forEach(p => { if (p) p.classList.remove('open'); });
+  document.querySelectorAll('.tb-icon[data-panel]').forEach(b => b.classList.remove('active'));
+  if (!wasOpen && panel) {
+    panel.classList.add('open');
+    if (requestedFocus) panel.dataset.focus = requestedFocus;
+    setActivePanelButtons(name);
+    if (name === 'explore') focusExploreSection(requestedFocus);
+  }
+}
+
+document.querySelectorAll('.tb-icon[data-panel]').forEach(btn => {
+  btn.addEventListener('click', () => togglePanel(btn.dataset.panel, { focus: btn.dataset.focus || '' }));
+});
+document.querySelectorAll('.panel-close[data-panel]').forEach(btn => {
+  btn.addEventListener('click', () => togglePanel(btn.dataset.panel, { focus: '' }));
+});
+
+// Escape closes any open panel
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    Object.values(panels).forEach(p => { if (p) p.classList.remove('open'); });
+    document.querySelectorAll('.tb-icon[data-panel]').forEach(b => b.classList.remove('active'));
+  }
+});
+
+// ── Point count ──
+const tbCount = document.getElementById('tb-count');
+const tbClear = document.getElementById('tb-clear');
+function updateToolbarCount() {
+  const filtered = filteredIndices ? filteredIndices.length : n;
+  tbCount.textContent = (filteredIndices ? compactNum(filtered) + ' / ' : '') + compactNum(n) + ' points';
+  tbClear.classList.toggle('visible', !!filteredIndices);
+}
+updateToolbarCount();
+// Hook into filter updates
+const _origApplyAll = applyAllFilters;
+applyAllFilters = async function() {
+  await _origApplyAll();
+  updateToolbarCount();
+};
+tbClear.addEventListener('click', () => { clearAllFilters(); updateToolbarCount(); });
+
+// ── Theme toggle ──
+const tbTheme = document.getElementById('tb-theme');
+const darkBg = [0.06, 0.06, 0.07, 1];
+const lightBg = [0.96, 0.96, 0.97, 1];
+let isDarkTheme = true;
+// Force dark background on load regardless of viz.background_color
+scatterplot.set({ backgroundColor: darkBg });
+tbTheme.addEventListener('click', () => {
+  isDarkTheme = !isDarkTheme;
+  document.documentElement.dataset.theme = isDarkTheme ? '' : 'light';
+  scatterplot.set({ backgroundColor: isDarkTheme ? darkBg : lightBg });
+  edgeNeedsRedraw = true;
+  if (typeof renderEdges === 'function') renderEdges();
+  tbTheme.innerHTML = isDarkTheme
+    ? '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M6 1.5a6.5 6.5 0 1 0 7.4 9.7A5.5 5.5 0 0 1 6 1.5z"/></svg>'
+    : '<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="3"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="8" y1="1.5" x2="8" y2="3.5"/><line x1="8" y1="12.5" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3.5" y2="8"/><line x1="12.5" y1="8" x2="14.5" y2="8"/></g></svg>';
+});
+
+// ============================================
+// SMILES Rendering via SmilesDrawer
+// ============================================
+
+const smilesColumn = metadata.smilesColumn;
+const tooltipStructure = document.getElementById('tooltip-structure');
+
+if (smilesColumn && columnMeta[smilesColumn]) {
+  // Create SVG element inside the tooltip structure container
+  const structureSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  structureSvg.id = 'structure-svg';
+  tooltipStructure.appendChild(structureSvg);
+
+  const g = typeof window !== 'undefined' ? window : globalThis;
+  const SmiDrawerCtor = g.SmiDrawer;
+  const SmilesDrawerLib = g.SmilesDrawer;
+
+  const drawerOptions = { width: 240, height: 200, bondThickness: 1.0, compactDrawing: false };
+
+  let drawer = null;
+  let drawSmiles = null;
+
+  if (SmiDrawerCtor) {
+    drawer = new SmiDrawerCtor(drawerOptions);
+    drawSmiles = (smiles) => drawer.draw(smiles, '#structure-svg', 'light');
+  } else if (SmilesDrawerLib && SmilesDrawerLib.Drawer && SmilesDrawerLib.parse) {
+    drawer = new SmilesDrawerLib.Drawer(drawerOptions);
+    drawSmiles = (smiles) =>
+      SmilesDrawerLib.parse(
+        smiles,
+        (tree) => drawer.draw(tree, 'structure-svg', 'light', false),
+        (err) => {
+          console.warn('Failed to parse SMILES:', smiles, err);
+          tooltipStructure.classList.add('hidden');
+        },
+      );
+  }
+
+  if (!drawSmiles) {
+    console.error('SmilesDrawer not loaded! Tried SmiDrawer and SmilesDrawer');
+  } else {
+    const originalShowTooltip = showTooltip;
+    showTooltip = function(idx) {
+      originalShowTooltip(idx);
+
+      const smilesCol = columns[smilesColumn];
+      if (!smilesCol) { tooltipStructure.classList.add('hidden'); return; }
+
+      const smiles = smilesCol.values[idx];
+      if (!smiles || typeof smiles !== 'string' || !smiles.trim()) {
+        tooltipStructure.classList.add('hidden');
+        return;
+      }
+
+      tooltipStructure.classList.remove('hidden');
+      structureSvg.innerHTML = '';
+
+      try {
+        drawSmiles(smiles);
+      } catch (err) {
+        console.warn('Failed to render SMILES:', smiles, err);
+        tooltipStructure.classList.add('hidden');
+      }
+    };
+
+    const originalHideTooltip = hideTooltip;
+    hideTooltip = function() {
+      originalHideTooltip();
+      tooltipStructure.classList.add('hidden');
+    };
+
+    console.log('SMILES rendering enabled for column:', smilesColumn);
+
+    // Card structure rendering
+    cardStack.addEventListener('cardrendered', (e) => {
+      const { idx, smilesValue } = e.detail;
+      const cardStructure = document.getElementById('card-structure');
+      if (!cardStructure) return;
+
+      if (!smilesValue || typeof smilesValue !== 'string' || !smilesValue.trim()) {
+        cardStructure.classList.add('hidden');
+        return;
+      }
+
+      let cardSvg = document.getElementById('card-structure-svg');
+      if (!cardSvg) {
+        cardSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        cardSvg.id = 'card-structure-svg';
+        cardStructure.appendChild(cardSvg);
+      }
+
+      cardStructure.classList.remove('hidden');
+      cardSvg.innerHTML = '';
+
+      const cardWidthPx = Math.max(120, Math.floor(cardStructure.clientWidth || 216));
+      const cardDrawerOptions = { width: cardWidthPx, height: 200, bondThickness: 1.0, compactDrawing: false };
+
+      try {
+        if (SmiDrawerCtor) {
+          const cardDrawer = new SmiDrawerCtor(cardDrawerOptions);
+          cardDrawer.draw(smilesValue, '#card-structure-svg', 'light');
+        } else if (SmilesDrawerLib && SmilesDrawerLib.Drawer && SmilesDrawerLib.parse) {
+          const cardDrawer = new SmilesDrawerLib.Drawer(cardDrawerOptions);
+          SmilesDrawerLib.parse(
+            smilesValue,
+            (tree) => cardDrawer.draw(tree, 'card-structure-svg', 'light', false),
+            (err) => {
+              console.warn('Failed to parse SMILES for card:', smilesValue, err);
+              cardStructure.classList.add('hidden');
+            },
+          );
+        }
+      } catch (err) {
+        console.warn('Failed to render SMILES in card:', smilesValue, err);
+        cardStructure.classList.add('hidden');
+      }
+    });
+  }
+} else if (smilesColumn) {
+  console.log('SMILES column specified but not found in columns');
+}
+
+// ============================================
+// Image Rendering
+// ============================================
+
+const imagesColumn = metadata.imagesColumn;
+const tooltipImage = document.getElementById('tooltip-image');
+
+if (imagesColumn && columnMeta[imagesColumn]) {
+  const imgSize = metadata.imagesTooltipSize || 128;
+
+  // Create img element inside the tooltip image container
+  const tooltipImg = document.createElement('img');
+  tooltipImg.style.width = imgSize + 'px';
+  tooltipImg.style.height = imgSize + 'px';
+  tooltipImage.appendChild(tooltipImg);
+
+  const originalShowTooltipImg = showTooltip;
+  showTooltip = function(idx) {
+    originalShowTooltipImg(idx);
+
+    const imgCol = columns[imagesColumn];
+    if (!imgCol) { tooltipImage.classList.add('hidden'); return; }
+
+    const dataUri = imgCol.values[idx];
+    if (!dataUri || typeof dataUri !== 'string' || !dataUri.startsWith('data:')) {
+      tooltipImage.classList.add('hidden');
+      return;
+    }
+
+    tooltipImg.src = dataUri;
+    tooltipImage.classList.remove('hidden');
+  };
+
+  const originalHideTooltipImg = hideTooltip;
+  hideTooltip = function() {
+    originalHideTooltipImg();
+    tooltipImage.classList.add('hidden');
+  };
+
+  // Card image rendering
+  cardStack.addEventListener('cardrendered', (e) => {
+    const { idx } = e.detail;
+    const cardImage = document.getElementById('card-image');
+    if (!cardImage) return;
+
+    const imgCol = columns[imagesColumn];
+    if (!imgCol) { cardImage.classList.add('hidden'); return; }
+
+    const dataUri = imgCol.values[idx];
+    if (!dataUri || typeof dataUri !== 'string' || !dataUri.startsWith('data:')) {
+      cardImage.classList.add('hidden');
+      return;
+    }
+
+    let cardImg = cardImage.querySelector('img');
+    if (!cardImg) {
+      cardImg = document.createElement('img');
+      cardImg.style.width = imgSize + 'px';
+      cardImg.style.height = imgSize + 'px';
+      cardImage.appendChild(cardImg);
+    }
+
+    cardImg.src = dataUri;
+    cardImage.classList.remove('hidden');
+  });
+
+  console.log('Image rendering enabled for column:', imagesColumn, 'size:', imgSize);
+} else if (imagesColumn) {
+  console.log('Images column specified but not found in columns');
+}
+
+// ============================================
+// 3Dmol.js loader (shared by proteins + local structures)
+// ============================================
+let _3dmolLoaded = false;
+let _3dmolPromise = null;
+
+function load3Dmol() {
+  if (_3dmolPromise) return _3dmolPromise;
+  _3dmolPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://3Dmol.org/build/3Dmol-min.js';
+    script.onload = () => { _3dmolLoaded = true; resolve(); };
+    script.onerror = () => reject(new Error('Failed to load 3Dmol.js'));
+    document.head.appendChild(script);
+  });
+  return _3dmolPromise;
+}
+
+function render3DStructure(container, structureData, fmt) {
+  container.innerHTML = '';
+  const viewerDiv = document.createElement('div');
+  viewerDiv.className = 'viewer-3d';
+  viewerDiv.style.position = 'relative';
+  container.appendChild(viewerDiv);
+
+  const viewer = $3Dmol.createViewer(viewerDiv, {
+    backgroundColor: 'rgb(26,26,46)',
+    antialias: true,
+  });
+  viewer.addModel(structureData, fmt);
+  viewer.setStyle({}, { cartoon: { color: 'spectrum' } });
+  viewer.zoomTo();
+  viewer.render();
+  return viewer;
+}
+
+// ============================================
+// Protein Rendering (UniProt IDs → AlphaFold)
+// ============================================
+
+const proteinColumn = metadata.proteinColumn;
+
+if (proteinColumn && columns[proteinColumn]) {
+  const structureCache = new Map();
+  const metadataCache = new Map();
+
+  // Tooltip: show UniProt ID as clickable link
+  const originalShowTooltipProt = showTooltip;
+  showTooltip = function(idx) {
+    originalShowTooltipProt(idx);
+    const protCol = columns[proteinColumn];
+    if (!protCol) return;
+    const uid = protCol.values[idx];
+    if (!uid || typeof uid !== 'string') return;
+    const rows = tooltipContent.querySelectorAll('.row');
+    for (const row of rows) {
+      const keyEl = row.querySelector('.key');
+      const valEl = row.querySelector('.value');
+      if (keyEl && valEl && keyEl.textContent.trim() === proteinColumn) {
+        valEl.innerHTML = '<a class="uniprot-link" href="https://www.uniprot.org/uniprot/' +
+          uid + '" target="_blank" rel="noopener">' + uid + '</a>';
+        break;
+      }
+    }
+  };
+
+  // Resolve AlphaFold CIF URL
+  const cifUrlCache = new Map();
+  async function resolveAlphaFoldUrl(uid) {
+    if (cifUrlCache.has(uid)) return cifUrlCache.get(uid);
+    try {
+      const resp = await fetch('https://alphafold.ebi.ac.uk/api/prediction/' + uid);
+      if (!resp.ok) { cifUrlCache.set(uid, null); return null; }
+      const entries = await resp.json();
+      const entry = Array.isArray(entries) ? entries[0] : entries;
+      const url = entry && entry.cifUrl ? entry.cifUrl : null;
+      cifUrlCache.set(uid, url);
+      return url;
+    } catch (e) { cifUrlCache.set(uid, null); return null; }
+  }
+
+  async function loadProteinStructure(uid, container) {
+    if (structureCache.get(uid) === 'error') {
+      container.innerHTML = '<span class="structure-error">No AlphaFold structure<br>for ' + uid + '</span>';
+      return;
+    }
+    container.innerHTML = '<span class="structure-loading">Loading 3D structure...</span>';
+    structureCache.set(uid, 'loading');
+
+    const cifUrl = await resolveAlphaFoldUrl(uid);
+    if (!cifUrl) {
+      container.innerHTML = '<span class="structure-error">No AlphaFold structure<br>for ' + uid + '</span>';
+      structureCache.set(uid, 'error');
+      return;
+    }
+
+    try {
+      await load3Dmol();
+      const resp = await fetch(cifUrl);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const cifData = await resp.text();
+      render3DStructure(container, cifData, 'cif');
+      structureCache.set(uid, 'loaded');
+    } catch (err) {
+      console.warn('Failed to load structure for', uid, err);
+      container.innerHTML = '<span class="structure-error">Failed to load structure<br>for ' + uid + '</span>';
+      structureCache.set(uid, 'error');
+    }
+  }
+
+  // Fetch UniProt metadata
+  async function fetchUniprotMeta(uid, cardBody) {
+    if (metadataCache.has(uid)) {
+      const cached = metadataCache.get(uid);
+      if (cached) renderProtMeta(uid, cached, cardBody);
+      return;
+    }
+    try {
+      const resp = await fetch('https://rest.uniprot.org/uniprotkb/' + uid + '.json');
+      if (!resp.ok) { metadataCache.set(uid, null); return; }
+      const data = await resp.json();
+      const meta = {
+        name: (data.proteinDescription?.recommendedName?.fullName?.value) ||
+              (data.proteinDescription?.submissionNames?.[0]?.fullName?.value) || '',
+        organism: data.organism?.scientificName || '',
+        gene: data.genes?.[0]?.geneName?.value || '',
+        length: data.sequence?.length || '',
+      };
+      metadataCache.set(uid, meta);
+      renderProtMeta(uid, meta, cardBody);
+    } catch (e) { metadataCache.set(uid, null); }
+  }
+
+  function renderProtMeta(uid, meta, cardBody) {
+    const existing = cardBody.querySelector('.protein-metadata');
+    if (existing) existing.remove();
+    const div = document.createElement('div');
+    div.className = 'protein-metadata';
+    div.style.cssText = 'margin-top:6px;border-top:1px solid #333;padding-top:6px';
+    if (meta) {
+      for (const [k, v] of [['Protein', meta.name], ['Organism', meta.organism], ['Gene', meta.gene], ['Length', meta.length ? meta.length + ' aa' : '']]) {
+        if (!v) continue;
+        const r = document.createElement('div');
+        r.className = 'protein-meta-row';
+        r.innerHTML = '<span class="meta-key">' + k + '</span><span class="meta-val">' + String(v).replace(/</g, '&lt;') + '</span>';
+        div.appendChild(r);
+      }
+    }
+    const links = document.createElement('div');
+    links.className = 'protein-meta-row';
+    links.style.marginTop = '4px';
+    links.innerHTML = '<a class="uniprot-link" href="https://www.uniprot.org/uniprot/' + uid + '" target="_blank" rel="noopener" style="font-size:11px;margin-right:8px">UniProt</a>' +
+      '<a class="uniprot-link" href="https://alphafold.ebi.ac.uk/entry/' + uid + '" target="_blank" rel="noopener" style="font-size:11px">AlphaFold</a>';
+    div.appendChild(links);
+    cardBody.appendChild(div);
+  }
+
+  // Card rendering
+  cardStack.addEventListener('cardrendered', async (e) => {
+    const { idx } = e.detail;
+    const protCol = columns[proteinColumn];
+    if (!protCol) return;
+    const uid = protCol.values[idx];
+    if (!uid || typeof uid !== 'string') return;
+
+    const cards = cardStack.querySelectorAll('.card');
+    const card = cards[cards.length - 1];
+    if (!card) return;
+
+    const sc = card.querySelector('.card-structure-container');
+    if (sc) {
+      sc.classList.remove('hidden');
+      sc.style.height = '250px';
+      sc.style.background = '#1a1a2e';
+      loadProteinStructure(uid, sc);
+    }
+    const body = card.querySelector('.card-body') || card;
+    fetchUniprotMeta(uid, body);
+  });
+
+  console.log('Protein rendering enabled for column:', proteinColumn);
+} else if (proteinColumn) {
+  console.log('Protein column specified but not found in columns');
+}
+
+// ============================================
+// Local 3D Structure Rendering (PDB/CIF data)
+// ============================================
+
+const structuresColumn = metadata.structuresColumn;
+const structuresFormat = metadata.structuresFormat || 'pdb';
+
+if (structuresColumn && columns[structuresColumn]) {
+  cardStack.addEventListener('cardrendered', async (e) => {
+    const { idx } = e.detail;
+    const strCol = columns[structuresColumn];
+    if (!strCol) return;
+    const structData = strCol.values[idx];
+    if (!structData || typeof structData !== 'string' || !structData.trim()) return;
+
+    const cards = cardStack.querySelectorAll('.card');
+    const card = cards[cards.length - 1];
+    if (!card) return;
+
+    const sc = card.querySelector('.card-structure-container');
+    if (!sc) return;
+
+    sc.classList.remove('hidden');
+    sc.style.height = '250px';
+    sc.style.background = '#1a1a2e';
+    sc.innerHTML = '<span class="structure-loading">Loading 3D viewer...</span>';
+
+    try {
+      await load3Dmol();
+      render3DStructure(sc, structData, structuresFormat);
+    } catch (err) {
+      console.warn('Failed to render structure:', err);
+      sc.innerHTML = '<span class="structure-error">Failed to render structure</span>';
+    }
+  });
+
+  console.log('Local structure rendering enabled for column:', structuresColumn, 'format:', structuresFormat);
+} else if (structuresColumn) {
+  console.log('Structures column specified but not found in columns');
+}
 {% block extra_runtime %}{% endblock %}
 `;
-{% endblock %}
 
     const runtimeUrl = mkModule(runtime);
     import(runtimeUrl);
