@@ -15,12 +15,34 @@ from numpy.typing import NDArray
 # default params
 _FP_RADIUS: int = 2
 _FP_NBITS: int = 1024
+_PROP_NAMES: list[str] = []
+
+AVAILABLE_PROPERTIES: list[str] = [
+    "mw",
+    "logp",
+    "n_rings",
+    "hba",
+    "hbd",
+    "tpsa",
+    "n_rotatable_bonds",
+    "n_heavy_atoms",
+    "fraction_csp3",
+    "n_aromatic_rings",
+    "n_heteroatoms",
+    "formal_charge",
+    "qed",
+]
 
 
 def _init_fp_worker(radius: int, n_bits: int) -> None:
     global _FP_RADIUS, _FP_NBITS
     _FP_RADIUS = radius
     _FP_NBITS = n_bits
+
+
+def _init_props_worker(prop_names: list[str]) -> None:
+    global _PROP_NAMES
+    _PROP_NAMES = prop_names
 
 
 def _morgan_fp_batch(smiles_batch: list[str]) -> tuple[NDArray[np.uint8], list[int]]:
@@ -62,17 +84,33 @@ def _mqn_fp_batch(smiles_batch: list[str]) -> tuple[NDArray[np.uint8], list[int]
 
 
 def _mol_props_batch(smiles_batch: list[str]) -> NDArray[np.float64]:
-    """Process a batch, return (len(batch), 3) array. Invalid rows are NaN."""
+    """Process a batch, return (len(batch), n_props) array. Invalid rows are NaN."""
     from rdkit import Chem
-    from rdkit.Chem import Descriptors
+    from rdkit.Chem import Descriptors, QED, rdMolDescriptors
 
-    out = np.full((len(smiles_batch), 3), np.nan, dtype=np.float64)
+    computers = {
+        "mw": lambda mol: Descriptors.ExactMolWt(mol),
+        "logp": lambda mol: Descriptors.MolLogP(mol),
+        "n_rings": lambda mol: rdMolDescriptors.CalcNumRings(mol),
+        "hba": lambda mol: rdMolDescriptors.CalcNumHBA(mol),
+        "hbd": lambda mol: rdMolDescriptors.CalcNumHBD(mol),
+        "tpsa": lambda mol: rdMolDescriptors.CalcTPSA(mol),
+        "n_rotatable_bonds": lambda mol: rdMolDescriptors.CalcNumRotatableBonds(mol),
+        "n_heavy_atoms": lambda mol: float(mol.GetNumHeavyAtoms()),
+        "fraction_csp3": lambda mol: rdMolDescriptors.CalcFractionCSP3(mol),
+        "n_aromatic_rings": lambda mol: rdMolDescriptors.CalcNumAromaticRings(mol),
+        "n_heteroatoms": lambda mol: float(rdMolDescriptors.CalcNumHeteroatoms(mol)),
+        "formal_charge": lambda mol: float(Chem.GetFormalCharge(mol)),
+        "qed": lambda mol: QED.qed(mol),
+    }
+
+    props = _PROP_NAMES
+    out = np.full((len(smiles_batch), len(props)), np.nan, dtype=np.float64)
     for i, smi in enumerate(smiles_batch):
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
-            out[i, 0] = Descriptors.ExactMolWt(mol)  # type:ignore
-            out[i, 1] = Descriptors.MolLogP(mol)  # type: ignore
-            out[i, 2] = Chem.rdMolDescriptors.CalcNumRings(mol)  # type:ignore
+            for j, name in enumerate(props):
+                out[i, j] = computers[name](mol)
     return out
 
 
@@ -172,15 +210,32 @@ def fingerprints_from_smiles(
     return fps, np.array(valid_idx2, dtype=np.int64)
 
 
-# TODO: Add more properties and select by passing a list
-def molecular_properties(
+def _scaffolds_batch(smiles_batch: list[str]) -> list[str]:
+    """Return Murcko scaffold SMILES for a batch. Invalid SMILES → empty string."""
+    from rdkit import Chem
+    from rdkit.Chem.Scaffolds import MurckoScaffold
+
+    out: list[str] = []
+    for smi in smiles_batch:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is not None:
+            try:
+                out.append(MurckoScaffold.MurckoScaffoldSmiles(mol=mol))
+            except Exception:
+                out.append("")
+        else:
+            out.append("")
+    return out
+
+
+def murcko_scaffolds(
     smiles: list[str],
     n_workers: int | None = None,
-) -> dict[str, NDArray[np.float64]]:
-    """Compute molecular properties in parallel.
+) -> NDArray[np.object_]:
+    """Compute Murcko scaffolds in parallel.
 
-    Computes molecular weight (MW), LogP, and number of rings for each
-    SMILES string. Invalid SMILES produce ``NaN``.
+    The Murcko scaffold is the core ring system plus linkers of a
+    molecule — useful for grouping/coloring by chemical series.
 
     Parameters
     ----------
@@ -191,16 +246,12 @@ def molecular_properties(
 
     Returns
     -------
-    dict with keys ``'mw'``, ``'logp'``, ``'n_rings'``
-        Each value is an ndarray of length ``len(smiles)``.
+    ndarray of shape ``(len(smiles),)``, dtype ``object``
+        Scaffold SMILES for each input. Invalid SMILES produce ``""``.
     """
     n = len(smiles)
     if n == 0:
-        return {
-            "mw": np.empty(0, dtype=np.float64),
-            "logp": np.empty(0, dtype=np.float64),
-            "n_rings": np.empty(0, dtype=np.float64),
-        }
+        return np.empty(0, dtype=object)
 
     if n_workers is None:
         n_workers = _default_n_workers()
@@ -210,14 +261,73 @@ def molecular_properties(
     chunks = _split_into_chunks(smiles, n_workers)
 
     with ctx.Pool(n_workers) as pool:
+        batch_results = pool.map(_scaffolds_batch, chunks)
+
+    flat: list[str] = []
+    for batch in batch_results:
+        flat.extend(batch)
+
+    result = np.empty(n, dtype=object)
+    result[:] = flat
+    n_valid = sum(1 for s in flat if s)
+    print(f"  [Scaffolds] {n_valid:,}/{n:,} valid")
+    return result
+
+
+def molecular_properties(
+    smiles: list[str],
+    properties: list[str] | None = None,
+    n_workers: int | None = None,
+) -> dict[str, NDArray[np.float64]]:
+    """Compute molecular properties in parallel.
+
+    Parameters
+    ----------
+    smiles : list[str]
+        Input SMILES strings.
+    properties : list[str] or None
+        Which properties to compute. Defaults to all in
+        ``AVAILABLE_PROPERTIES``. Options: ``'mw'``, ``'logp'``,
+        ``'n_rings'``, ``'hba'``, ``'hbd'``, ``'tpsa'``,
+        ``'n_rotatable_bonds'``, ``'n_heavy_atoms'``,
+        ``'fraction_csp3'``, ``'n_aromatic_rings'``,
+        ``'n_heteroatoms'``, ``'formal_charge'``.
+    n_workers : int or None
+        Number of parallel workers. Defaults to ``min(cpu_count, 12)``.
+
+    Returns
+    -------
+    dict[str, ndarray]
+        Each key is a property name, each value is an ndarray of
+        length ``len(smiles)``. Invalid SMILES produce ``NaN``.
+    """
+    if properties is None:
+        properties = list(AVAILABLE_PROPERTIES)
+    else:
+        bad = [p for p in properties if p not in AVAILABLE_PROPERTIES]
+        if bad:
+            raise ValueError(
+                f"Unknown properties: {bad}. "
+                f"Available: {AVAILABLE_PROPERTIES}"
+            )
+
+    n = len(smiles)
+    if n == 0:
+        return {p: np.empty(0, dtype=np.float64) for p in properties}
+
+    if n_workers is None:
+        n_workers = _default_n_workers()
+    n_workers = min(n_workers, n)
+
+    ctx = _get_mp_context()
+    chunks = _split_into_chunks(smiles, n_workers)
+
+    with ctx.Pool(
+        n_workers, initializer=_init_props_worker, initargs=(properties,)
+    ) as pool:
         batch_results = pool.map(_mol_props_batch, chunks)
 
-    # Concatenate all (chunk_size, 3) arrays
-    props = np.concatenate(batch_results)  # (n, 3)
+    props = np.concatenate(batch_results)  # (n, len(properties))
     print(f"  [Props] {n:,} done, {np.isnan(props[:, 0]).sum():,} invalid")
 
-    return {
-        "mw": props[:, 0],
-        "logp": props[:, 1],
-        "n_rings": props[:, 2],
-    }
+    return {name: props[:, j] for j, name in enumerate(properties)}

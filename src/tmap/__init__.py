@@ -21,7 +21,25 @@ if TYPE_CHECKING:
     from tmap.estimator import TMAP
     from tmap.index.encoders.minhash import MinHash, WeightedMinHash
     from tmap.index.lsh_forest import LSHForest
-    from tmap.utils.chemistry import fingerprints_from_smiles, molecular_properties
+    from tmap.utils.chemistry import (
+        AVAILABLE_PROPERTIES,
+        fingerprints_from_smiles,
+        molecular_properties,
+        murcko_scaffolds,
+    )
+    from tmap.utils.proteins import (
+        AVAILABLE_SEQUENCE_PROPERTIES,
+        fetch_alphafold,
+        fetch_uniprot,
+        parse_alignment,
+        read_fasta,
+        read_id_list,
+        read_pdb,
+        read_pdb_dir,
+        read_protein_csv,
+        sequence_properties,
+    )
+    from tmap.utils.singlecell import cell_metadata, from_anndata, marker_scores
 
 __version__ = "0.1.0"
 
@@ -31,8 +49,23 @@ __all__ = [
     "WeightedMinHash",
     "LSHForest",
     "TMAP",
+    "AVAILABLE_PROPERTIES",
+    "AVAILABLE_SEQUENCE_PROPERTIES",
+    "cell_metadata",
     "fingerprints_from_smiles",
+    "from_anndata",
+    "marker_scores",
     "molecular_properties",
+    "murcko_scaffolds",
+    "parse_alignment",
+    "sequence_properties",
+    "fetch_uniprot",
+    "fetch_alphafold",
+    "read_fasta",
+    "read_id_list",
+    "read_pdb",
+    "read_pdb_dir",
+    "read_protein_csv",
 ]
 
 _LAZY_IMPORTS: dict[str, str] = {
@@ -41,8 +74,23 @@ _LAZY_IMPORTS: dict[str, str] = {
     "MinHash": "tmap.index.encoders.minhash",
     "WeightedMinHash": "tmap.index.encoders.minhash",
     "FaissIndex": "tmap.index.faiss_index",
+    "AVAILABLE_PROPERTIES": "tmap.utils.chemistry",
+    "AVAILABLE_SEQUENCE_PROPERTIES": "tmap.utils.proteins",
     "fingerprints_from_smiles": "tmap.utils.chemistry",
+    "cell_metadata": "tmap.utils.singlecell",
+    "from_anndata": "tmap.utils.singlecell",
+    "marker_scores": "tmap.utils.singlecell",
     "molecular_properties": "tmap.utils.chemistry",
+    "murcko_scaffolds": "tmap.utils.chemistry",
+    "sequence_properties": "tmap.utils.proteins",
+    "fetch_uniprot": "tmap.utils.proteins",
+    "fetch_alphafold": "tmap.utils.proteins",
+    "parse_alignment": "tmap.utils.proteins",
+    "read_fasta": "tmap.utils.proteins",
+    "read_id_list": "tmap.utils.proteins",
+    "read_pdb": "tmap.utils.proteins",
+    "read_pdb_dir": "tmap.utils.proteins",
+    "read_protein_csv": "tmap.utils.proteins",
 }
 
 
