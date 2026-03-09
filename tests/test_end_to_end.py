@@ -301,7 +301,7 @@ class TestTmapViz:
         viz.add_label("id", labels)
         viz.add_color_layout("index", values.tolist(), categorical=False, color="viridis")
 
-        html = viz.render()
+        html = viz.to_html()
 
         # Validate HTML output
         assert isinstance(html, str)
@@ -331,7 +331,7 @@ class TestTmapViz:
         categories = ["A", "B", "C"] * 3 + ["A"]  # 10 items
         viz.add_color_layout("category", categories, categorical=True, color="tab10")
 
-        html = viz.render()
+        html = viz.to_html()
         assert "<html" in html
 
 
@@ -380,7 +380,7 @@ class TestFullPipeline:
         viz.add_label("index", [str(i) for i in range(100)])
         viz.add_color_layout("value", list(range(100)), categorical=False, color="plasma")
 
-        html = viz.render()
+        html = viz.to_html()
 
         # Final validation
         assert len(html) > 5000
@@ -420,7 +420,7 @@ class TestFullPipeline:
         # Stage 5: Visualize
         viz = TmapViz()
         viz.set_points(coords.x, coords.y)
-        html = viz.render()
+        html = viz.to_html()
         assert "<html" in html
 
     def test_pipeline_deterministic(self):
