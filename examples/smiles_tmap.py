@@ -167,7 +167,7 @@ def create_tmap_from_smiles(
     viz.set_points(x, y)
 
     # Add SMILES for structure rendering
-    viz.add_smiles("SMILES", valid_smiles)
+    viz.add_smiles(valid_smiles)
 
     # Add molecular properties as color layouts
     viz.add_color_layout("Molecular Weight", mw.tolist(), categorical=False, color="viridis")
@@ -177,8 +177,8 @@ def create_tmap_from_smiles(
     # Add index labels
     viz.add_label("Index", [str(i) for i in range(n)])
 
-    # Save visualization (auto-selects binary mode for large datasets)
-    saved_path = viz.save(output_path)
+    # Save visualization
+    saved_path = viz.write_html(output_path)
     print(f"\nSaved visualization to: {saved_path}")
     return x, y
 
