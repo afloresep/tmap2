@@ -515,23 +515,25 @@
     /* Card links section */
     .card-links {
       display: flex;
-      flex-wrap: wrap;
       gap: 6px;
       margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid #333;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.04);
     }
     .card-link {
-      display: inline-block;
-      background: #4a9eff;
-      color: #fff;
-      text-decoration: none;
-      padding: 3px 8px;
-      border-radius: 4px;
-      font-size: 10px;
+      flex: 1;
+      text-align: center;
+      padding: 6px 0;
+      border-radius: 6px;
+      font-size: 11px;
       font-weight: 500;
+      color: #7fb8f0;
+      text-decoration: none;
+      background: rgba(74,158,255,0.06);
+      border: 1px solid rgba(74,158,255,0.1);
+      transition: background 0.12s;
     }
-    .card-link:hover { background: #3a8eef; }
+    .card-link:hover { background: rgba(74,158,255,0.14); }
     .card-subtitle {
       font-style: italic;
       color: #9ca3af;
@@ -581,6 +583,43 @@
     }
     #tb-clear:hover { color: #fff; }
     #tb-clear.visible { display: flex; }
+
+    /* ── Point size slider ── */
+    .tb-slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 6px;
+    }
+    .tb-slider-wrap label {
+      font-size: 10px;
+      color: #888;
+      white-space: nowrap;
+    }
+    .tb-slider-wrap input[type="range"] {
+      width: 80px;
+      height: 3px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: rgba(255,255,255,0.15);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    .tb-slider-wrap input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: #7fb8f0;
+      border: none;
+      cursor: pointer;
+    }
+    .tb-slider-val {
+      font-size: 10px;
+      color: #aaa;
+      min-width: 20px;
+      text-align: right;
+    }
 
     /* ── Side Panels ── */
     .side-panel {
@@ -678,6 +717,10 @@
     [data-theme="light"] #toolbar .tb-icon.on { color: #007aff; }
     [data-theme="light"] #toolbar #tb-count { color: #6e6e73; }
     [data-theme="light"] #toolbar .tb-sep { background: rgba(0,0,0,0.08); }
+    [data-theme="light"] .tb-slider-wrap label { color: #6e6e73; }
+    [data-theme="light"] .tb-slider-wrap input[type="range"] { background: rgba(0,0,0,0.12); }
+    [data-theme="light"] .tb-slider-wrap input[type="range"]::-webkit-slider-thumb { background: #007aff; }
+    [data-theme="light"] .tb-slider-val { color: #6e6e73; }
     [data-theme="light"] .side-panel {
       background: rgba(255,255,255,0.94); border-left-color: rgba(0,0,0,0.08);
     }
@@ -825,6 +868,12 @@
     <button class="tb-icon" id="tb-theme" title="Toggle theme">
       <svg viewBox="0 0 16 16" fill="currentColor"><path d="M6 1.5a6.5 6.5 0 1 0 7.4 9.7A5.5 5.5 0 0 1 6 1.5z"/></svg>
     </button>
+    <span class="tb-sep"></span>
+    <div class="tb-slider-wrap">
+      <label>Size</label>
+      <input type="range" id="tb-point-size" min="0.5" max="8" step="0.5" value="3">
+      <span class="tb-slider-val" id="tb-ps-val">3</span>
+    </div>
   </div>
 
 {% block extra_elements %}{% endblock %}
@@ -1007,26 +1056,30 @@ async function fetchColumn(name) {
 {% endif %}
 }
 
-// Pre-fetch the initial color column, label columns, and special columns
-const fetchPromises = [];
-if (initialColor) fetchPromises.push(fetchColumn(initialColor));
-for (const name of labelOptions) {
-  fetchPromises.push(fetchColumn(name));
-}
-// Pre-fetch SMILES and images columns (not in labelOptions but needed for tooltips)
-if (metadata.smilesColumn && columnMeta[metadata.smilesColumn]) {
-  fetchPromises.push(fetchColumn(metadata.smilesColumn));
-}
-if (metadata.imagesColumn && columnMeta[metadata.imagesColumn]) {
-  fetchPromises.push(fetchColumn(metadata.imagesColumn));
-}
+// Critical path: only initial color + protein ID (for card title / tooltip label)
+const criticalFetches = [];
+if (initialColor) criticalFetches.push(fetchColumn(initialColor));
 if (metadata.proteinColumn && columnMeta[metadata.proteinColumn]) {
-  fetchPromises.push(fetchColumn(metadata.proteinColumn));
+  criticalFetches.push(fetchColumn(metadata.proteinColumn));
 }
-if (metadata.structuresColumn && columnMeta[metadata.structuresColumn]) {
-  fetchPromises.push(fetchColumn(metadata.structuresColumn));
+if (metadata.smilesColumn && columnMeta[metadata.smilesColumn]) {
+  criticalFetches.push(fetchColumn(metadata.smilesColumn));
 }
-await Promise.all(fetchPromises);
+await Promise.all(criticalFetches);
+
+// Deferred: load remaining columns in background after scatterplot renders.
+// Tooltips and cards degrade gracefully (skip unloaded columns).
+const _deferredNames = [];
+for (const name of labelOptions) { if (!columns[name]) _deferredNames.push(name); }
+for (const special of [metadata.imagesColumn, metadata.structuresColumn]) {
+  if (special && columnMeta[special] && !columns[special]) _deferredNames.push(special);
+}
+(async () => {
+  // Batch fetches (4 concurrent) to avoid saturating the connection
+  for (let i = 0; i < _deferredNames.length; i += 4) {
+    await Promise.all(_deferredNames.slice(i, i + 4).map(fetchColumn));
+  }
+})();
 
 updateProgress(80, 'Initializing visualization...');
 
@@ -2446,6 +2499,22 @@ tbTheme.addEventListener('click', () => {
     ? '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M6 1.5a6.5 6.5 0 1 0 7.4 9.7A5.5 5.5 0 0 1 6 1.5z"/></svg>'
     : '<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="3"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="8" y1="1.5" x2="8" y2="3.5"/><line x1="8" y1="12.5" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3.5" y2="8"/><line x1="12.5" y1="8" x2="14.5" y2="8"/></g></svg>';
 });
+
+// ── Point size slider ──
+{
+  const psSlider = document.getElementById('tb-point-size');
+  const psVal = document.getElementById('tb-ps-val');
+  if (psSlider) {
+    const initSize = metadata.pointSize || 3;
+    psSlider.value = initSize;
+    psVal.textContent = initSize;
+    psSlider.addEventListener('input', () => {
+      const v = parseFloat(psSlider.value);
+      psVal.textContent = v;
+      scatterplot.set({ pointSize: v });
+    });
+  }
+}
 
 // ============================================
 // SMILES Rendering via SmilesDrawer

@@ -228,76 +228,14 @@
     .afdb-dragging { cursor: grabbing !important; }
     .card-header { cursor: grab; }
 
-    /* Point size slider */
-    .afdb-slider-wrap {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 0 6px;
-    }
-    .afdb-slider-wrap label {
-      font-size: 10px;
-      color: #888;
-      white-space: nowrap;
-    }
-    .afdb-slider-wrap input[type="range"] {
-      width: 80px;
-      height: 3px;
-      -webkit-appearance: none;
-      appearance: none;
-      background: rgba(255,255,255,0.15);
-      border-radius: 2px;
-      outline: none;
-      cursor: pointer;
-    }
-    .afdb-slider-wrap input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 12px; height: 12px;
-      border-radius: 50%;
-      background: #7fb8f0;
-      border: none;
-      cursor: pointer;
-    }
-    .afdb-slider-wrap .afdb-slider-val {
-      font-size: 10px;
-      color: #aaa;
-      min-width: 20px;
-      text-align: right;
-    }
 {% endblock %}
 
-{% block extra_elements %}
-  <!-- Point size slider injected into toolbar -->
-{% endblock %}
+{% block extra_elements %}{% endblock %}
 
 {% block extra_runtime %}
 // ====================================================================
 // AFDB Extension — Redesigned card, Mol*, panel controls
 // ====================================================================
-
-// ── Point size slider ──
-{
-  const toolbar = document.getElementById('toolbar');
-  const sep = document.createElement('span');
-  sep.className = 'tb-sep';
-  toolbar.appendChild(sep);
-
-  const wrap = document.createElement('div');
-  wrap.className = 'afdb-slider-wrap';
-  wrap.innerHTML = '<label>Size</label>' +
-    '<input type="range" id="afdb-point-size" min="0.5" max="8" step="0.5" value="' +
-    (metadata.pointSize || 2) + '">' +
-    '<span class="afdb-slider-val" id="afdb-ps-val">' + (metadata.pointSize || 2) + '</span>';
-  toolbar.appendChild(wrap);
-
-  const slider = document.getElementById('afdb-point-size');
-  const valLabel = document.getElementById('afdb-ps-val');
-  slider.addEventListener('input', () => {
-    const v = parseFloat(slider.value);
-    valLabel.textContent = v;
-    scatterplot.set({ pointSize: v });
-  });
-}
 
 if (proteinColumn) {
   const structureCache = new Map();
