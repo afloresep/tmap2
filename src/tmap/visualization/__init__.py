@@ -16,10 +16,17 @@ TmapViz is the primary class for creating visualizations:
 
 Features:
 - WebGL rendering via regl-scatterplot (handles millions of points)
+- Binary-encoded data (gzip-compressed typed arrays) for fast loading
 - Self-contained HTML output (no server required)
 - Continuous and categorical color mapping
 - Interactive tooltips with metadata
 - Pan, zoom, and lasso selection
+- Filtering and search (via ``filterable`` / ``searchable`` properties)
+- Configurable pinned cards (``configure_card()``)
+- SMILES molecule rendering (``add_smiles()``)
+- Image thumbnails (``add_images()``)
+- Protein 3D structures via Mol* (``add_protein_ids()``)
+- Fetch-based serving for very large datasets (``serve()`` / ``write_static()``)
 
 Colormaps
 ---------
@@ -31,9 +38,9 @@ Available colormaps:
 
 from typing import Any
 
-from tmap.visualization.tmapviz import BINARY_THRESHOLD, TmapViz
+from tmap.visualization.tmapviz import TmapViz
 
-__all__ = ["TmapViz", "BINARY_THRESHOLD", "plot_static"]
+__all__ = ["TmapViz", "plot_static"]
 
 
 def __getattr__(name: str) -> Any:  # noqa: N807

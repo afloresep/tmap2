@@ -1,0 +1,631 @@
+{#
+  AFDB Template — Rich card UI for AlphaFold DB cluster explorer
+
+  Extends base.html.j2 (fetch-based loading for 2.7M points) with:
+  - Redesigned card panel with structured sections
+  - Single Mol* 3D structure viewer (no duplicate)
+  - On-demand UniProt annotation fetching
+  - Categorical + numeric range filters
+  - Collapsible search panel
+  - Draggable card
+
+  Usage:
+    viz.write_static("dist/afdb/", template_name="afdb.html.j2")
+#}
+{% extends "base.html.j2" %}
+
+{% block extra_styles %}
+    /* ── AFDB Panel Overrides ── */
+
+    /* ── Glass-morphism for panels ── */
+    .side-panel {
+      background: rgba(14, 14, 18, 0.82) !important;
+      box-shadow: -8px 0 32px rgba(0,0,0,0.5);
+    }
+    #toolbar {
+      background: rgba(14, 14, 18, 0.82) !important;
+      border: 1px solid rgba(255,255,255,0.06);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    }
+
+    /* ── Simplify hover tooltip ── */
+    #tooltip {
+      width: 200px !important;
+      max-width: 200px !important;
+    }
+    #tooltip .row:nth-child(n+3) { display: none !important; }
+    #tooltip .structure-container { display: none !important; }
+
+    /* ── Card panel: left side below title ── */
+    #card-stack {
+      position: fixed !important;
+      bottom: auto !important;
+      top: 52px !important;
+      left: 12px !important;
+      right: auto !important;
+      z-index: 100;
+    }
+    .card {
+      width: 380px !important;
+      background: rgba(14, 14, 18, 0.88) !important;
+      backdrop-filter: blur(20px) !important;
+      -webkit-backdrop-filter: blur(20px) !important;
+      border: 1px solid rgba(255,255,255,0.06) !important;
+      border-radius: 12px !important;
+      box-shadow: 0 12px 48px rgba(0,0,0,0.6) !important;
+      padding: 0 !important;
+      overflow: hidden;
+    }
+    .card-header {
+      padding: 10px 14px !important;
+      margin: 0 !important;
+      border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+      background: rgba(255,255,255,0.02);
+    }
+    .card-body {
+      padding: 0 !important;
+      max-height: 75vh;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.1) transparent;
+    }
+    .card-body::-webkit-scrollbar { width: 4px; }
+    .card-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+    .card-label { padding: 0 !important; margin: 0 !important; }
+
+    /* Hide ALL base template card content — AFDB builds its own */
+    .card-body > .card-row,
+    .card-body > .card-copy-row,
+    .card-body > .card-structure-container,
+    .card-body > .card-links,
+    .card-body > .card-subtitle,
+    .card-body > .protein-metadata { display: none !important; }
+
+    /* ── AFDB card sections ── */
+    .afdb-card-id {
+      padding: 14px 16px 4px;
+    }
+    .afdb-card-id a {
+      color: #7fb8f0;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+    .afdb-card-id a:hover { text-decoration: underline; }
+    .afdb-card-subtitle {
+      padding: 0 16px 10px;
+      font-size: 12px;
+      color: #888;
+      font-style: italic;
+      line-height: 1.35;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+
+    .afdb-section {
+      padding: 10px 16px;
+    }
+    .afdb-section + .afdb-section {
+      border-top: 1px solid rgba(255,255,255,0.04);
+    }
+    .afdb-section-head {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #555;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+    }
+    .afdb-section-head .toggle-icon {
+      font-size: 8px;
+      color: #555;
+      transition: transform 0.2s;
+    }
+    .afdb-section.collapsed .afdb-section-content { display: none; }
+    .afdb-section.collapsed .toggle-icon { transform: rotate(-90deg); }
+
+    .afdb-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 3px 12px;
+      font-size: 12px;
+    }
+    .afdb-grid .k {
+      color: #666;
+      white-space: nowrap;
+    }
+    .afdb-grid .v {
+      color: #ccc;
+      text-align: right;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .afdb-grid .v a {
+      color: #7fb8f0;
+      text-decoration: none;
+    }
+    .afdb-grid .v a:hover { text-decoration: underline; }
+
+    .afdb-stars {
+      color: #e8b829;
+      letter-spacing: 1px;
+      font-size: 12px;
+    }
+    .afdb-stars .dim { color: #333; }
+
+    /* Structure viewer */
+    .afdb-structure-wrap {
+      width: 100%;
+      height: 260px;
+      background: #0d0d14;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .afdb-structure-wrap .molstar-container {
+      width: 100%;
+      height: 100%;
+    }
+    .afdb-structure-msg {
+      color: #555;
+      font-size: 11px;
+      text-align: center;
+    }
+
+    /* Annotations */
+    .afdb-anno-row {
+      display: flex;
+      gap: 8px;
+      font-size: 11px;
+      padding: 2px 0;
+    }
+    .afdb-anno-row .ak { color: #555; min-width: 55px; flex-shrink: 0; }
+    .afdb-anno-row .av { color: #aaa; word-break: break-word; line-height: 1.4; }
+
+    /* Links bar */
+    .afdb-links {
+      display: flex;
+      gap: 6px;
+      padding: 10px 16px 14px;
+      border-top: 1px solid rgba(255,255,255,0.04);
+    }
+    .afdb-links a {
+      flex: 1;
+      text-align: center;
+      padding: 6px 0;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      color: #7fb8f0;
+      text-decoration: none;
+      background: rgba(74,158,255,0.06);
+      border: 1px solid rgba(74,158,255,0.1);
+      transition: background 0.12s;
+    }
+    .afdb-links a:hover {
+      background: rgba(74,158,255,0.14);
+    }
+
+    #title {
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: rgba(14, 14, 18, 0.7) !important;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 10px !important;
+    }
+
+    /* Dragging */
+    .afdb-dragging { cursor: grabbing !important; }
+    .card-header { cursor: grab; }
+
+    /* Point size slider */
+    .afdb-slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 6px;
+    }
+    .afdb-slider-wrap label {
+      font-size: 10px;
+      color: #888;
+      white-space: nowrap;
+    }
+    .afdb-slider-wrap input[type="range"] {
+      width: 80px;
+      height: 3px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: rgba(255,255,255,0.15);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    .afdb-slider-wrap input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: #7fb8f0;
+      border: none;
+      cursor: pointer;
+    }
+    .afdb-slider-wrap .afdb-slider-val {
+      font-size: 10px;
+      color: #aaa;
+      min-width: 20px;
+      text-align: right;
+    }
+{% endblock %}
+
+{% block extra_elements %}
+  <!-- Point size slider injected into toolbar -->
+{% endblock %}
+
+{% block extra_runtime %}
+// ====================================================================
+// AFDB Extension — Redesigned card, Mol*, panel controls
+// ====================================================================
+
+// ── Point size slider ──
+{
+  const toolbar = document.getElementById('toolbar');
+  const sep = document.createElement('span');
+  sep.className = 'tb-sep';
+  toolbar.appendChild(sep);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'afdb-slider-wrap';
+  wrap.innerHTML = '<label>Size</label>' +
+    '<input type="range" id="afdb-point-size" min="0.5" max="8" step="0.5" value="' +
+    (metadata.pointSize || 2) + '">' +
+    '<span class="afdb-slider-val" id="afdb-ps-val">' + (metadata.pointSize || 2) + '</span>';
+  toolbar.appendChild(wrap);
+
+  const slider = document.getElementById('afdb-point-size');
+  const valLabel = document.getElementById('afdb-ps-val');
+  slider.addEventListener('input', () => {
+    const v = parseFloat(slider.value);
+    valLabel.textContent = v;
+    scatterplot.set({ pointSize: v });
+  });
+}
+
+if (proteinColumn) {
+  const structureCache = new Map();
+  const metadataCache = new Map();
+
+  // ── Mol* lazy loader ──
+  let molstarLoadPromise = null;
+  function loadMolstar() {
+    if (molstarLoadPromise) return molstarLoadPromise;
+    molstarLoadPromise = new Promise((resolve, reject) => {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = 'https://cdn.jsdelivr.net/npm/molstar@latest/build/viewer/molstar.css';
+      document.head.appendChild(link);
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/molstar@latest/build/viewer/molstar.js';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load Mol*'));
+      document.head.appendChild(script);
+    });
+    return molstarLoadPromise;
+  }
+
+  const cifUrlCache = new Map();
+  async function resolveAlphaFoldUrl(id) {
+    if (cifUrlCache.has(id)) return cifUrlCache.get(id);
+    try {
+      const r = await fetch('https://alphafold.ebi.ac.uk/api/prediction/' + id);
+      if (!r.ok) { cifUrlCache.set(id, null); return null; }
+      const entries = await r.json();
+      const entry = Array.isArray(entries) ? entries[0] : entries;
+      const url = entry && entry.cifUrl ? entry.cifUrl : null;
+      cifUrlCache.set(id, url);
+      return url;
+    } catch (e) { cifUrlCache.set(id, null); return null; }
+  }
+
+  async function loadStructure(id, container) {
+    if (structureCache.get(id) === 'error') {
+      container.innerHTML = '<span class="afdb-structure-msg">No structure available</span>';
+      return;
+    }
+    container.innerHTML = '<span class="afdb-structure-msg">Loading structure\u2026</span>';
+    structureCache.set(id, 'loading');
+    const url = await resolveAlphaFoldUrl(id);
+    if (!url) {
+      container.innerHTML = '<span class="afdb-structure-msg">No AlphaFold structure</span>';
+      structureCache.set(id, 'error');
+      return;
+    }
+    try { await loadMolstar(); } catch (e) {
+      container.innerHTML = '<span class="afdb-structure-msg">Viewer unavailable</span>';
+      structureCache.set(id, 'error');
+      return;
+    }
+    container.innerHTML = '';
+    const viewerDiv = document.createElement('div');
+    viewerDiv.className = 'molstar-container';
+    container.appendChild(viewerDiv);
+    try {
+      const viewer = await molstar.Viewer.create(viewerDiv, {
+        layoutIsExpanded: false, layoutShowControls: false,
+        layoutShowRemoteState: false, layoutShowSequence: false,
+        layoutShowLog: false, layoutShowLeftPanel: false,
+        viewportShowExpand: false, viewportShowSelectionMode: false,
+        viewportShowAnimation: false,
+        collapseLeftPanel: true, collapseRightPanel: true,
+      });
+      await viewer.loadStructureFromUrl(url, 'mmcif');
+      structureCache.set(id, 'loaded');
+    } catch (err) {
+      container.innerHTML = '<span class="afdb-structure-msg">Failed to load structure</span>';
+      structureCache.set(id, 'error');
+    }
+  }
+
+  // ── UniProt fetch ──
+  async function fetchAnnotations(id, container) {
+    if (metadataCache.has(id)) {
+      const c = metadataCache.get(id);
+      if (c) renderAnno(c, container);
+      return;
+    }
+    container.innerHTML = '<span class="afdb-structure-msg">Loading\u2026</span>';
+    try {
+      const r = await fetch('https://rest.uniprot.org/uniprotkb/' + id + '.json');
+      if (!r.ok) { metadataCache.set(id, null); container.innerHTML = ''; return; }
+      const d = await r.json();
+      const m = {
+        organism: (d.organism && d.organism.scientificName) || '',
+        gene: (d.genes && d.genes[0] && d.genes[0].geneName && d.genes[0].geneName.value) || '',
+        ec: '',
+        go_f: [],
+        go_p: [],
+      };
+      if (d.proteinDescription && d.proteinDescription.recommendedName &&
+          d.proteinDescription.recommendedName.ecNumbers)
+        m.ec = d.proteinDescription.recommendedName.ecNumbers.map(e => e.value).join(', ');
+      if (d.uniProtKBCrossReferences) {
+        for (const xref of d.uniProtKBCrossReferences) {
+          if (xref.database !== 'GO') continue;
+          const p = (xref.properties || []).find(p => p.key === 'GoTerm');
+          if (!p) continue;
+          const v = p.value || '';
+          if (v.startsWith('F:')) m.go_f.push(v.slice(2));
+          else if (v.startsWith('P:')) m.go_p.push(v.slice(2));
+        }
+      }
+      metadataCache.set(id, m);
+      renderAnno(m, container);
+    } catch (e) { metadataCache.set(id, null); container.innerHTML = ''; }
+  }
+
+  function renderAnno(m, el) {
+    el.innerHTML = '';
+    const fields = [
+      { k: 'Organism', v: m.organism },
+      { k: 'Gene', v: m.gene },
+      { k: 'EC', v: m.ec },
+      { k: 'GO (F)', v: m.go_f.slice(0,4).join('; ') },
+      { k: 'GO (P)', v: m.go_p.slice(0,4).join('; ') },
+    ];
+    for (const f of fields) {
+      if (!f.v) continue;
+      const row = document.createElement('div');
+      row.className = 'afdb-anno-row';
+      row.innerHTML = '<span class="ak">' + f.k + '</span><span class="av">' +
+        String(f.v).replace(/</g, '&lt;') + '</span>';
+      el.appendChild(row);
+    }
+  }
+
+  // ── Star rating ──
+  function stars(score) {
+    const n = Math.round(score);
+    let h = '<span class="afdb-stars">';
+    for (let i = 1; i <= 5; i++) h += i <= n ? '\u2605' : '<span class="dim">\u2605</span>';
+    return h + '</span>';
+  }
+
+  // Helper to read a column value
+  function colVal(name, idx) {
+    const c = columns[name];
+    if (!c) return null;
+    let v = c.values[idx];
+    if (c.dictionary && typeof v === 'number') v = c.dictionary[v];
+    return v;
+  }
+
+  function fmt(v) {
+    if (v == null || v === '' || (typeof v === 'number' && isNaN(v))) return null;
+    if (typeof v === 'number') return v % 1 === 0 ? v.toLocaleString() : v.toFixed(2);
+    return String(v);
+  }
+
+  // ── Override card rendering ──
+  cardStack.addEventListener('cardrendered', async (e) => {
+    const { idx } = e.detail;
+    const proteinCol = columns[proteinColumn];
+    if (!proteinCol) return;
+    const uid = proteinCol.values[idx];
+    if (!uid || typeof uid !== 'string') return;
+
+    const cards = cardStack.querySelectorAll('.card');
+    const card = cards[cards.length - 1];
+    if (!card) return;
+
+    const cardBody = card.querySelector('.card-body');
+    if (!cardBody) return;
+
+    // Clear base template content (the flat rows)
+    // We'll rebuild entirely
+    const label = card.querySelector('.card-label');
+    if (label) label.style.display = 'none';
+
+    // ── ID + subtitle ──
+    const idDiv = document.createElement('div');
+    idDiv.className = 'afdb-card-id';
+    idDiv.innerHTML = '<a href="https://www.uniprot.org/uniprot/' + uid +
+      '" target="_blank" rel="noopener">' + uid + '</a>';
+    cardBody.prepend(idDiv);
+
+    const nameVal = colVal('protein_name', idx);
+    if (nameVal && nameVal !== 'deleted') {
+      const sub = document.createElement('div');
+      sub.className = 'afdb-card-subtitle';
+      sub.textContent = nameVal;
+      idDiv.after(sub);
+    }
+
+    // ── Overview section ──
+    const overviewSection = document.createElement('div');
+    overviewSection.className = 'afdb-section';
+    overviewSection.innerHTML = '<div class="afdb-section-head" data-section="overview">' +
+      '<span>Overview</span><span class="toggle-icon">\u25BC</span></div>';
+    const overviewContent = document.createElement('div');
+    overviewContent.className = 'afdb-section-content';
+
+    const grid = document.createElement('div');
+    grid.className = 'afdb-grid';
+
+    // Gather overview fields
+    const fields = [
+      { k: 'Cluster size', v: colVal('Members', idx) },
+      { k: 'Superkingdom', v: colVal('superkingdom', idx) || colVal('Kingdom', idx) },
+      { k: 'Dark protein', v: (() => { const d = colVal('is_dark', idx); return d === 'dark' ? 'Yes' : d === 'annotated' ? 'No' : fmt(d); })() },
+      { k: 'pLDDT (rep)', v: fmt(colVal('pLDDT (rep)', idx)) },
+      { k: 'Seq length', v: (() => { const v = colVal('sequence length (log10)', idx); return v != null && !isNaN(v) ? Math.round(Math.pow(10, v)).toLocaleString() + ' aa' : null; })() },
+    ];
+
+    for (const f of fields) {
+      if (f.v == null) continue;
+      grid.innerHTML += '<span class="k">' + f.k + '</span><span class="v">' + f.v + '</span>';
+    }
+
+    // Annotation score as stars
+    const score = colVal('annotation score', idx);
+    if (score != null && !isNaN(score) && score > 0) {
+      grid.innerHTML += '<span class="k">Annotation</span><span class="v">' + stars(score) + '</span>';
+    }
+
+    // InterPro
+    const iprFamily = colVal('interpro_family', idx);
+    const iprId = colVal('interpro_id', idx);
+    if (iprFamily || iprId) {
+      const display = iprId
+        ? '<a href="https://www.ebi.ac.uk/interpro/entry/InterPro/' + iprId + '/" target="_blank" rel="noopener">' +
+          (iprFamily || iprId) + '</a>'
+        : iprFamily;
+      grid.innerHTML += '<span class="k">Family</span><span class="v">' + display + '</span>';
+    }
+
+    overviewContent.appendChild(grid);
+    overviewSection.appendChild(overviewContent);
+    cardBody.appendChild(overviewSection);
+
+    // ── Structure section ──
+    const structSection = document.createElement('div');
+    structSection.className = 'afdb-section';
+    structSection.innerHTML = '<div class="afdb-section-head" data-section="structure">' +
+      '<span>3D Structure</span><span class="toggle-icon">\u25BC</span></div>';
+    const structContent = document.createElement('div');
+    structContent.className = 'afdb-section-content';
+    const structWrap = document.createElement('div');
+    structWrap.className = 'afdb-structure-wrap';
+    structContent.appendChild(structWrap);
+    structSection.appendChild(structContent);
+    cardBody.appendChild(structSection);
+    loadStructure(uid, structWrap);
+
+    // ── Annotations section (on-demand) ──
+    const annoSection = document.createElement('div');
+    annoSection.className = 'afdb-section';
+    annoSection.innerHTML = '<div class="afdb-section-head" data-section="annotations">' +
+      '<span>Annotations</span><span class="toggle-icon">\u25BC</span></div>';
+    const annoContent = document.createElement('div');
+    annoContent.className = 'afdb-section-content';
+    const annoInner = document.createElement('div');
+    annoContent.appendChild(annoInner);
+    annoSection.appendChild(annoContent);
+    cardBody.appendChild(annoSection);
+    fetchAnnotations(uid, annoInner);
+
+    // ── Links bar ──
+    const links = document.createElement('div');
+    links.className = 'afdb-links';
+    links.innerHTML =
+      '<a href="https://www.uniprot.org/uniprot/' + uid + '" target="_blank" rel="noopener">UniProt</a>' +
+      '<a href="https://alphafold.ebi.ac.uk/entry/' + uid + '" target="_blank" rel="noopener">AlphaFold</a>' +
+      '<a href="https://search.foldseek.com/search?accession=' + uid + '&source=AlphaFoldDB" target="_blank" rel="noopener">Foldseek</a>';
+    cardBody.appendChild(links);
+
+    // ── Section collapse toggles ──
+    card.querySelectorAll('.afdb-section-head').forEach(head => {
+      head.addEventListener('click', () => {
+        head.parentElement.classList.toggle('collapsed');
+      });
+    });
+  });
+
+  // ── Tooltip override ──
+  const _origTooltip = showTooltip;
+  showTooltip = function(idx) {
+    _origTooltip(idx);
+    const pc = columns[proteinColumn];
+    if (!pc) return;
+    const uid = pc.values[idx];
+    if (!uid || typeof uid !== 'string') return;
+    const rows = tooltip.querySelectorAll('.tooltip-row');
+    for (const r of rows) {
+      const lbl = r.querySelector('.tooltip-label');
+      const val = r.querySelector('.tooltip-value');
+      if (lbl && val && lbl.textContent.trim() === proteinColumn) {
+        val.innerHTML = '<a style="color:#7fb8f0;text-decoration:none" href="https://www.uniprot.org/uniprot/' +
+          uid + '" target="_blank" rel="noopener">' + uid + '</a>';
+        break;
+      }
+    }
+  };
+
+  // ── Draggable card ──
+  (function() {
+    let dragging = false, startX, startY, origX, origY;
+    cardStack.addEventListener('mousedown', (e) => {
+      if (!e.target.closest('.card-header')) return;
+      e.preventDefault();
+      dragging = true;
+      const rect = cardStack.getBoundingClientRect();
+      startX = e.clientX; startY = e.clientY;
+      origX = rect.left; origY = rect.top;
+      document.body.classList.add('afdb-dragging');
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX, dy = e.clientY - startY;
+      cardStack.style.left = (origX + dx) + 'px';
+      cardStack.style.top = (origY + dy) + 'px';
+      cardStack.style.right = 'auto';
+      cardStack.style.bottom = 'auto';
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove('afdb-dragging');
+    });
+  })();
+
+
+  console.log('AFDB visualization enabled:', proteinColumn);
+}
+{% endblock %}
