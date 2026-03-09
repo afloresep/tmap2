@@ -440,8 +440,19 @@ class TmapViz:
 
         Args:
             name: Column name displayed in the tooltip header.
-            values: One value per point. Non-string values are converted via ``str()``.
+
+        Raises:
+            ValueError: If *name* already exists as a color-layout column.
+                Overwriting a layout column with a label would corrupt the
+                binary data (JS expects float32/uint32 but gets JSON string).
         """
+        if name in self._layout_keys:
+            raise ValueError(
+                f"Cannot add label '{name}': it already exists as a color layout. "
+                f"Layout columns with add_as_label=True already appear in tooltips. "
+                f"Use a different name if you need a separate label."
+            )
+
         if isinstance(values, np.ndarray):
             values = values.tolist()
         else:
@@ -1053,6 +1064,46 @@ class TmapViz:
         _display_scatter(scatter, controls=controls)
         return scatter
 
+    def _validate(self) -> None:
+        """Pre-flight checks before rendering HTML or writing static files.
+
+        Catches Python-side mistakes that would otherwise surface as
+        cryptic JS console errors (ArrayBuffer mismatches, missing columns).
+        """
+        if self._points_array is None:
+            raise ValueError("Call set_points() before rendering.")
+
+        n_points = len(self._points_array)
+        for col in self._columns.values():
+            if len(col.values) != n_points:
+                raise ValueError(
+                    f"Column '{col.name}' has {len(col.values)} values but there are "
+                    f"{n_points} points"
+                )
+
+        # Every layout key must have a numeric column (float32 or uint32)
+        for name in self._layout_keys:
+            if name not in self._columns:
+                raise ValueError(
+                    f"Layout '{name}' is registered but has no column data. "
+                    f"This would cause a JS fetch error."
+                )
+            col = self._columns[name]
+            if col.dtype == "label":
+                raise ValueError(
+                    f"Layout '{name}' has dtype 'label' (string) but layouts "
+                    f"require numeric data (float32/uint32). "
+                    f"This happens when add_label() overwrites a color layout. "
+                    f"Use a different name for the label."
+                )
+
+        # Every label key must have a column
+        for name in self._labels_keys:
+            if name not in self._columns:
+                raise ValueError(
+                    f"Label '{name}' is registered but has no column data."
+                )
+
     def to_html(self, template_name: str = "base.html.j2") -> str:
         """Return a self-contained HTML document as a string.
 
@@ -1066,16 +1117,9 @@ class TmapViz:
         Returns:
             Full HTML document string.
         """
-        if self._points_array is None:
-            raise ValueError("Call set_points() before rendering.")
+        self._validate()
 
         n_points = len(self._points_array)
-        for col in self._columns.values():
-            if len(col.values) != n_points:
-                raise ValueError(
-                    f"Column '{col.name}' has {len(col.values)} values but there are "
-                    f"{n_points} points"
-                )
 
         # Pack coordinates as binary
         coords_compressed = _pack_coords_binary(self._points_array, bits=16)
@@ -1206,6 +1250,7 @@ class TmapViz:
     def write_html(
         self,
         path: str | Path,
+        template_name: str = "base.html.j2",
     ) -> Path:
         """Write HTML to disk and return the path.
 
@@ -1213,6 +1258,7 @@ class TmapViz:
             path: Either a full file path (ending in .html) or a directory path.
                   - If a file path: saves to that exact location
                   - If a directory: uses self.title as the filename
+            template_name: Jinja2 template to use for rendering.
 
         Returns:
             Path to the saved file
@@ -1242,7 +1288,7 @@ class TmapViz:
         # Create parent directory if needed
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        html = self.to_html()
+        html = self.to_html(template_name=template_name)
 
         output_path.write_text(html, encoding="utf-8")
         return output_path
@@ -1265,19 +1311,12 @@ class TmapViz:
         Returns:
             Path to the output directory.
         """
-        if self._points_array is None:
-            raise ValueError("Call set_points() before write_static().")
+        self._validate()
 
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         n_points = len(self._points_array)
-        for col in self._columns.values():
-            if len(col.values) != n_points:
-                raise ValueError(
-                    f"Column '{col.name}' has {len(col.values)} values but there are "
-                    f"{n_points} points"
-                )
 
         # --- Write binary data files ---
         # Coordinates
