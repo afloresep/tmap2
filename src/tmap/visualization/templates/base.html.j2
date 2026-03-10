@@ -705,7 +705,7 @@
     }
 
     /* ── Light theme ── */
-    [data-theme="light"] { background: #f5f5f7 !important; color: #1d1d1f; }
+    [data-theme="light"], [data-theme="light"] body { background: #0d0d0e !important; color: #1d1d1f; }
     [data-theme="light"] #toolbar {
       background: rgba(245, 245, 248, 0.88);
       border-color: rgba(0,0,0,0.08);
@@ -1337,14 +1337,19 @@ async function applyColor(columnName) {
   const cmap = (col.colormap && colormaps[col.colormap]) || [fallbackPointColor];
 
   if (col.dtype === 'categorical') {
-    const mapping = new Map();
-    const z = new Float32Array(n);
+    // Collect unique values
+    const uniqueSet = new Set();
     const values = col.values;
-    for (let i = 0; i < n; i++) {
-      const v = values[i];
-      if (!mapping.has(v)) mapping.set(v, mapping.size);
-      z[i] = mapping.get(v);
-    }
+    for (let i = 0; i < n; i++) uniqueSet.add(values[i]);
+    const unique = [...uniqueSet];
+    // Sort numerically if all values are numbers
+    const allNum = unique.every(v => !isNaN(Number(v)));
+    if (allNum) unique.sort((a, b) => Number(a) - Number(b));
+    const mapping = new Map();
+    unique.forEach((v, i) => mapping.set(v, i));
+    const z = new Float32Array(n);
+    for (let i = 0; i < n; i++) z[i] = mapping.get(values[i]);
+    col._sortedMapping = mapping;
     edgeNeedsRedraw = true;
     scatterplot.set({ colorBy: 'valueA', pointColor: cmap });
     scatterplot.draw({ x, y, z, w: zeroArray }).then(() => { redrawEdges(); });
@@ -1390,16 +1395,12 @@ function updateLegend(columnName, col) {
   legendTitle.textContent = columnName;
 
   if (col.dtype === 'categorical') {
-    const mapping = new Map();
-    const items = [];
-    for (let i = 0; i < col.values.length; i++) {
-      const v = col.values[i];
-      if (!mapping.has(v)) { mapping.set(v, mapping.size); items.push(v); }
-    }
+    // Use the sorted mapping built by applyColor
+    const sortedItems = col._sortedMapping ? [...col._sortedMapping.keys()] : [];
     let html = '';
-    for (let i = 0; i < items.length; i++) {
+    for (let i = 0; i < sortedItems.length; i++) {
       html += '<div class="legend-item"><span class="legend-swatch" style="background:' +
-        cmap[i % cmap.length] + '"></span><span>' + items[i] + '</span></div>';
+        cmap[i % cmap.length] + '"></span><span>' + sortedItems[i] + '</span></div>';
     }
     legendContent.innerHTML = html;
   } else {
@@ -1717,6 +1718,20 @@ function renderCardStack() {
     }
   }
 
+  // Links (from card config) — placed prominently before structure/fields
+  if (cardConfig && cardConfig.links && cardConfig.links.length > 0) {
+    html += '<div class="card-links">';
+    for (const link of cardConfig.links) {
+      let url = link.url;
+      url = url.replace(/\{([^}]+)\}/g, (match, colName) => {
+        const c = columns[colName];
+        return c ? encodeURI(String(c.values[idx])) : match;
+      });
+      html += '<a class="card-link" href="' + url + '" target="_blank" rel="noopener">' + link.label + '</a>';
+    }
+    html += '</div>';
+  }
+
   // Structure container placeholder (only if SMILES or protein data exists)
   if (metadata.smilesColumn || metadata.proteinColumn || metadata.structuresColumn) {
     html += '<div class="card-structure-container hidden" id="card-structure"></div>';
@@ -1750,7 +1765,9 @@ function renderCardStack() {
     const colUi = (columnMeta[name] && columnMeta[name].ui) || {};
     const displayName = colUi.displayName || name;
     const displayVal = truncateString(formatValue(val), 30);
-    const isCopyable = colUi.copyable === true || (typeof val === 'string' && val.length > 0 && colUi.copyable !== false);
+    const colRole = (columnMeta[name] && columnMeta[name].role) || '';
+    const isLayoutCol = colRole.indexOf('layout') !== -1;
+    const isCopyable = colUi.copyable === true || (!isLayoutCol && typeof val === 'string' && val.length > 0 && colUi.copyable !== false);
 
     if (isCopyable && typeof val === 'string' && val.length > 0) {
       html += '<div class="card-copy-row">';
@@ -1764,21 +1781,6 @@ function renderCardStack() {
       html += '<span class="value">' + displayVal + '</span>';
       html += '</div>';
     }
-  }
-
-  // Links (from card config)
-  if (cardConfig && cardConfig.links && cardConfig.links.length > 0) {
-    html += '<div class="card-links">';
-    for (const link of cardConfig.links) {
-      let url = link.url;
-      // Replace {column_name} placeholders with values from this point
-      url = url.replace(/\{([^}]+)\}/g, (match, colName) => {
-        const c = columns[colName];
-        return c ? encodeURIComponent(String(c.values[idx])) : match;
-      });
-      html += '<a class="card-link" href="' + url + '" target="_blank" rel="noopener">' + link.label + '</a>';
-    }
-    html += '</div>';
   }
 
   html += '</div>'; // close card-body
@@ -2484,8 +2486,8 @@ tbClear.addEventListener('click', () => { clearAllFilters(); updateToolbarCount(
 
 // ── Theme toggle ──
 const tbTheme = document.getElementById('tb-theme');
-const darkBg = [0.06, 0.06, 0.07, 1];
-const lightBg = [0.96, 0.96, 0.97, 1];
+const darkBg = [0, 0, 0, 1];
+const lightBg = [1, 1, 1, 1];
 let isDarkTheme = true;
 // Force dark background on load regardless of viz.background_color
 scatterplot.set({ backgroundColor: darkBg });
