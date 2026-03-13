@@ -37,11 +37,6 @@ class LSHForest:
     """
     LSH Forest data structure for approximate nearest neighbor search.
 
-    Uses a custom Numba-accelerated implementation:
-    - Parallel hash band computation (replaces datasketch's Python loops)
-    - Sorted arrays with binary search for efficient lookups
-    - Parallel linear scan for k-NN graph construction
-
     Args:
         d: Dimensionality of MinHash vectors (number of permutations). Default: 128
         l: Number of prefix trees (bands). Default: d // 2. Lower values increase
@@ -65,11 +60,6 @@ class LSHForest:
         >>>
         >>> # Build k-NN graph (Numba-accelerated linear scan)
         >>> knn_graph = lsh.get_knn_graph(k=20, kc=10)
-
-    Performance:
-        - 1M signatures batch_add: ~1s (vs 300s+ with datasketch)
-        - Linear scan uses Numba parallel processing
-        - Signature storage is contiguous for cache efficiency
     """
 
     def __init__(
@@ -112,10 +102,6 @@ class LSHForest:
         self._is_indexed: bool = False
         self._needs_reindex: bool = False
 
-    # =========================================================================
-    # Properties
-    # =========================================================================
-
     @property
     def size(self) -> int:
         """Number of indexed MinHash signatures."""
@@ -141,9 +127,7 @@ class LSHForest:
         """Number of prefix trees."""
         return self._is_indexed
 
-    # =========================================================================
     # Internal helpers
-    # =========================================================================
 
     def _validate_signature_shape(self, signature: NDArray[np.uint64], batch: bool = False) -> None:
         """Validate signature shape matches configuration."""
@@ -173,9 +157,7 @@ class LSHForest:
         else:
             return cast(float, jaccard_distance(sig_a, sig_b))
 
-    # =========================================================================
     # Add methods
-    # =========================================================================
 
     def add(self, signature: NDArray[np.uint64]) -> None:
         """
@@ -214,9 +196,7 @@ class LSHForest:
 
         self._needs_reindex = True
 
-    # =========================================================================
     # Index method
-    # =========================================================================
 
     def index(self) -> None:
         """
@@ -244,14 +224,14 @@ class LSHForest:
         self._signatures_list = []  # free intermediate copies
         n = self._signatures.shape[0]
 
-        # Compute hash bands for all signatures (Numba-parallel)
+        # Compute hash bands for all signatures
         if self._weighted:
             self._hash_bands = compute_hash_bands_weighted(self._signatures, self._l, self._k)
         else:
             self._hash_bands = compute_hash_bands(self._signatures, self._l, self._k)
 
         # Build sorted hash tables for each band
-        # We flatten all bands into single arrays with offsets for Numba compatibility
+        # flatten all bands into single arrays 
         sorted_hashes_list = []
         sorted_indices_list = []
         band_sizes = []
@@ -276,9 +256,7 @@ class LSHForest:
         self._is_indexed = True
         self._needs_reindex = False
 
-    # =========================================================================
     # Query methods
-    # =========================================================================
 
     def query(self, signature: NDArray[np.uint64], k: int) -> NDArray[np.int32]:
         """
@@ -350,9 +328,7 @@ class LSHForest:
 
         return self.query(self._signatures[id], k)
 
-    # =========================================================================
-    # Linear scan methods (Numba-accelerated)
-    # =========================================================================
+    # Linear scan methods 
 
     def linear_scan(
         self,
@@ -458,9 +434,7 @@ class LSHForest:
         # Exclude self from results
         return [(d, i) for d, i in results if i != id][:k]
 
-    # =========================================================================
     # k-NN Graph methods (main output for TMAP pipeline)
-    # =========================================================================
 
     def get_all_nearest_neighbors(
         self,
@@ -489,7 +463,7 @@ class LSHForest:
         """
         Construct the k-nearest neighbor graph of all indexed signatures.
 
-        This is the primary output method - produces input for OGDF layout
+        This is the primary output method becuase it produces input for OGDF layout
         and MST construction APIs.
 
         Args:
@@ -552,7 +526,7 @@ class LSHForest:
         """Query k-nearest stored neighbors for a batch of *external* signatures.
 
         Uses the same Numba-parallel pipeline as :meth:`get_knn_graph`
-        (hash-band retrieval → linear scan) but does **not** exclude
+        (hash-band retrieval -> linear scan) but does **not** exclude
         self-matches, since the query signatures are not part of the index.
 
         Parameters
@@ -597,7 +571,7 @@ class LSHForest:
             max_candidates,
         )
 
-        # Batch linear scan with exclude_self=False (Numba-parallel)
+        # Batch linear scan with exclude_self=False 
         if self._weighted:
             indices, distances = linear_scan_batch_weighted(
                 signatures,
@@ -622,9 +596,7 @@ class LSHForest:
 
         return indices, distances
 
-    # =========================================================================
     # Distance methods
-    # =========================================================================
 
     @staticmethod
     def get_distance(
@@ -714,9 +686,6 @@ class LSHForest:
                 NDArray[np.float32], compute_distances_to_candidates(signature, self._signatures)
             )
 
-    # =========================================================================
-    # Storage / Retrieval
-    # =========================================================================
 
     def get_hash(self, id: int) -> NDArray[np.uint64]:
         """
@@ -741,9 +710,6 @@ class LSHForest:
 
         return cast(NDArray[np.uint64], self._signatures[id].copy())
 
-    # =========================================================================
-    # Persistence
-    # =========================================================================
 
     def save(self, path: str) -> None:
         """
@@ -802,10 +768,6 @@ class LSHForest:
         instance._needs_reindex = False
 
         return instance
-
-    # =========================================================================
-    # State methods
-    # =========================================================================
 
     def clear(self) -> None:
         """Clear all added data and computed indices."""

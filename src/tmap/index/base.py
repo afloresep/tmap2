@@ -27,10 +27,6 @@ class Index(ABC):
         self._metric: str | None = None
         self._rng = np.random.default_rng(seed)
 
-    # =========================================================================
-    # PUBLIC API - These are what users call
-    # =========================================================================
-
     def build_from_vectors(
         self,
         vectors: NDArray[np.float32],
@@ -80,8 +76,6 @@ class Index(ABC):
     ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
         """
         Query k-nearest neighbors for a single NEW point.
-
-        This is for INSERTION - finding where a new point belongs.
 
         Args:
             point: Shape (n_features,)

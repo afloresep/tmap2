@@ -17,19 +17,11 @@ from typing import cast
 from tmap.graph.types import Tree
 from tmap.index.types import KNNGraph
 
-try:
-    from numba import njit  # type: ignore[import-untyped]
-
-    _HAS_NUMBA = True
-except ImportError:  # pragma: no cover - optional dependency
-    njit = None
-    _HAS_NUMBA = False
+from numba import njit
 
 
-if _HAS_NUMBA:
-
-    @njit(cache=True)  # type: ignore[untyped-decorator]
-    def _reduce_sorted_min_numba(
+@njit(cache=True)
+def _reduce_sorted_min_numba(
         keys: NDArray[np.int64],
         u: NDArray[np.int32],
         v: NDArray[np.int32],
@@ -76,27 +68,6 @@ if _HAS_NUMBA:
         return out_u[:m], out_v[:m], out_w[:m]
 
 
-def _reduce_sorted_min_numpy(
-    keys: NDArray[np.int64],
-    u: NDArray[np.int32],
-    v: NDArray[np.int32],
-    w: NDArray[np.float32],
-) -> tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
-    """NumPy fallback for min-reduction over sorted undirected edge keys."""
-    if keys.size == 0:
-        return (
-            np.empty(0, dtype=np.int32),
-            np.empty(0, dtype=np.int32),
-            np.empty(0, dtype=np.float32),
-        )
-
-    starts = np.concatenate(([0], np.flatnonzero(np.diff(keys)) + 1))
-    w_min = np.minimum.reduceat(w, starts).astype(np.float32, copy=False)
-    u_min = u[starts]
-    v_min = v[starts]
-    return u_min, v_min, w_min
-
-
 def _reduce_sorted_min(
     keys: NDArray[np.int64],
     u: NDArray[np.int32],
@@ -104,12 +75,10 @@ def _reduce_sorted_min(
     w: NDArray[np.float32],
 ) -> tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
     """Select the minimum edge weight for each sorted undirected edge key."""
-    if _HAS_NUMBA:
-        return cast(
-            tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]],
-            _reduce_sorted_min_numba(keys, u, v, w),
-        )
-    return _reduce_sorted_min_numpy(keys, u, v, w)
+    return cast(
+        tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]],
+        _reduce_sorted_min_numba(keys, u, v, w),
+    )
 
 
 # not very good so far

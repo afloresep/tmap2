@@ -254,7 +254,8 @@ class TMAP:
         *,
         knn_graph: KNNGraph | None = None,
     ) -> Tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.int32], NDArray[np.int32]]:
-        """Fit and return 2D coordinates with shape (n_samples, 2)."""
+        """Fit and return 2D coordinates with shape (n_samples, 4) \
+            = (x,y coordinates + s,y edges)."""
         self.fit(X, knn_graph=knn_graph)
         # Return x,y coordinates  + s,t edges
         return (
@@ -266,6 +267,7 @@ class TMAP:
 
     def transform(self, X: Any) -> NDArray[np.float32]:
         """Embed new points into an existing embedding."""
+        #TODO: Wrapper around add_points
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support transform(new_X) yet."
         )
@@ -361,15 +363,11 @@ class TMAP:
             viz.title = title
         return viz.write_html(path)
 
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
     def save(self, path: str | Path) -> Path:
         """Save the fitted model to disk.
 
         The entire estimator state is serialised, including the embedding,
-        tree, KNN graph, and — when present — the LSH Forest and ANN index.
+        tree, KNN graph, and, when present, the LSH Forest and ANN index.
         A saved model can later be loaded and extended with
         :meth:`add_points`.
 
@@ -550,10 +548,6 @@ class TMAP:
             figsize=figsize,
         )
 
-    # ------------------------------------------------------------------
-    # Incremental insertion
-    # ------------------------------------------------------------------
-
     def add_points(self, X: Any) -> NDArray[np.float32]:
         """Add new points to an existing embedding without re-fitting.
 
@@ -568,7 +562,7 @@ class TMAP:
 
             - ``'jaccard'``: ``(m, n_features)`` binary matrix
             - ``'cosine'``/``'euclidean'``: ``(m, n_features)`` float matrix
-            - ``'precomputed'``: ``(m, n_existing)`` distance matrix (new→existing)
+            - ``'precomputed'``: ``(m, n_existing)`` distance matrix (new->existing)
 
         Returns
         -------
@@ -734,6 +728,11 @@ class TMAP:
         (the tree parent) with a small offset toward the local neighborhood
         centroid.  This keeps tree edges short while still reflecting the
         broader neighborhood structure.
+
+        NOTE: If you try to do a FDL with N neighbors to figure out the location
+        then you get a point too far from the branch where is supposed to be and
+        edges crossing each other (breaks MST). That's why an offset is a good 
+        (simpler) option
         """
         m = new_indices.shape[0]
         existing = self._embedding  # (n, 2)
@@ -862,9 +861,7 @@ class TMAP:
             raise ValueError("Input matrix must contain only finite values.")
         return arr
 
-    # ------------------------------------------------------------------
     # Tree exploration convenience methods
-    # ------------------------------------------------------------------
 
     def path(self, from_idx: int, to_idx: int) -> list[int]:
         """Shortest path in the tree between two points.

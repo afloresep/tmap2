@@ -536,20 +536,8 @@ class TestWeightedMinHashIntegration:
 class TestMinHashNumbaBackend:
     """Test MinHash with Numba JIT backend."""
 
-    def test_numba_available_property(self):
-        """Test that numba_available property reflects actual state."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        mh = MinHash(num_perm=32)
-        assert mh.numba_available == NUMBA_AVAILABLE
-
     def test_numba_encode_shape(self):
         """Test that Numba backend produces correct output shape."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=64, seed=42)
         data = np.array([[1, 0, 1, 1, 0], [0, 1, 1, 0, 1]], dtype=np.uint8)
         sigs = mh.encode(data)
@@ -559,11 +547,6 @@ class TestMinHashNumbaBackend:
 
     def test_numba_determinism(self):
         """Test that Numba backend is deterministic with same seed."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh1 = MinHash(num_perm=64, seed=42)
         mh2 = MinHash(num_perm=64, seed=42)
 
@@ -576,11 +559,6 @@ class TestMinHashNumbaBackend:
 
     def test_numba_distance_accuracy(self):
         """Test that Numba backend produces accurate Jaccard estimates."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=512, seed=42)
 
         # Create two fingerprints with known overlap
@@ -604,11 +582,6 @@ class TestMinHashNumbaBackend:
 
     def test_numba_sparse_consistency(self):
         """Test that sparse and dense paths produce consistent results."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=128, seed=42)
 
         # Create same data in sparse and dense format
@@ -623,11 +596,6 @@ class TestMinHashNumbaBackend:
 
     def test_numba_batch_consistency(self):
         """Test that batch and single encoding produce same results."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=64, seed=42)
 
         # Single fingerprints
@@ -646,11 +614,6 @@ class TestMinHashNumbaBackend:
 
     def test_numba_large_batch(self):
         """Test Numba backend with large batch (performance sanity check)."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=128, seed=42)
 
         # 10k fingerprints, 2048 bits each
@@ -667,11 +630,6 @@ class TestMinHashNumbaBackend:
 
     def test_identical_inputs_zero_distance_numba(self):
         """Test that identical inputs produce zero distance with Numba."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=128, seed=42)
 
         fp = np.array([1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1], dtype=np.uint8)
