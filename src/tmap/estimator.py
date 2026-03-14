@@ -32,7 +32,8 @@ def _resolve_ann_backend(n_samples: int = 0, seed: int | None = None) -> Any:
     except ImportError:
         raise ImportError(
             "metric='cosine' and metric='euclidean' require faiss. "
-            "Install with:\n  pip install faiss-cpu"
+            "Install with:\n  pip install faiss or \
+                conda install faiss (recommended for MacOS (arm64)"
         )
 
     from tmap.index.faiss_index import FaissIndex
@@ -201,16 +202,7 @@ class TMAP:
             knn = knn_graph
             self._lsh_forest = None
         elif self.metric == "jaccard":
-            binary_matrix = self._coerce_binary_matrix(X)
-            if self.n_neighbors >= binary_matrix.shape[0]:
-                raise ValueError(
-                    f"n_neighbors={self.n_neighbors} must be < n_samples={binary_matrix.shape[0]}"
-                )
-
-            encoder = MinHash(num_perm=self.n_permutations, seed=self.minhash_seed)
-            signatures = encoder.batch_from_binary_array(binary_matrix)
-            n_samples = binary_matrix.shape[0]
-            del binary_matrix  # free input matrix before building forest
+            signatures, n_samples = self._encode_jaccard(X)
 
             lsh_l = _select_lsh_l(self.n_permutations, n_samples)
             forest = LSHForest(d=self.n_permutations, l=lsh_l)
@@ -996,6 +988,61 @@ class TMAP:
         if hasattr(config, "seed"):
             config.seed = self.seed
         return config
+
+    def _encode_jaccard(self, X: Any) -> tuple[NDArray[np.uint64], int]:
+        """Detect input type for metric='jaccard' and return MinHash signatures.
+
+        Supports three input formats:
+        - 2D binary array (n_samples, n_features) ->  batch_from_binary_array
+        - list of string sequences ->  batch_from_string_array
+        - list of integer sequences ->  batch_from_sparse_binary_array
+
+        Returns:
+            (signatures, n_samples)
+        """
+        if X is None:
+            raise ValueError("X cannot be None for metric='jaccard'.")
+
+        encoder = MinHash(num_perm=self.n_permutations, seed=self.minhash_seed)
+
+        # 2D numpy array ->  binary path
+        if isinstance(X, np.ndarray):
+            binary_matrix = self._coerce_binary_matrix(X)
+            n_samples = binary_matrix.shape[0]
+            if self.n_neighbors >= n_samples:
+                raise ValueError(
+                    f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
+                )
+            signatures = encoder.batch_from_binary_array(binary_matrix)
+            del binary_matrix
+            return signatures, n_samples
+
+        # List of sequences ->  peek at elements to decide string vs integer
+        if not isinstance(X, (list, tuple)) or len(X) < 2:
+            raise ValueError(
+                "metric='jaccard' expects a 2D binary array or a list of sequences "
+                "(at least 2 samples)."
+            )
+
+        n_samples = len(X)
+        if self.n_neighbors >= n_samples:
+            raise ValueError(
+                f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
+            )
+
+        # Find first non-empty element to determine type
+        first_elem = None
+        for seq in X:
+            if seq:
+                first_elem = next(iter(seq))
+                break
+
+        if first_elem is not None and isinstance(first_elem, str):
+            signatures = encoder.batch_from_string_array(X)
+        else:
+            signatures = encoder.batch_from_sparse_binary_array(X)
+
+        return signatures, n_samples
 
     def _coerce_binary_matrix(self, X: Any | None) -> NDArray[np.uint8]:
         if X is None:

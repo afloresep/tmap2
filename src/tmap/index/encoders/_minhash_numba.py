@@ -151,17 +151,6 @@ def minhash_batch_from_dense(
 
     return signatures
 
-# Simple polynomial hash for strings (much faster than SHA1) -> TODO: Again, probably this way instead of datasketch (SHA1)
-@numba.njit(cache=True)
-def _polynomial_hash(s: bytes) -> np.uint64:
-    """Fast polynomial rolling hash for a byte string."""
-    h = np.uint64(0)
-    for c in s:
-        h = h * np.uint64(31) + np.uint64(c)
-    return h & MAX_HASH
-
-
-
 def binary_to_sparse(data: NDArray[np.uint8]) -> tuple[NDArray[np.int64], NDArray[np.int64]]:
     """
     Convert dense binary array to CSR-like sparse representation.

@@ -2,16 +2,15 @@
 Test suite for MinHash and WeightedMinHash encoders.
 
 Tests verify:
-- Consistency with datasketch library
 - Correct output shapes and dtypes
 - Deterministic behavior with fixed seeds
+- Jaccard estimate quality (statistical properties)
 - Error handling for invalid inputs
 - API compatibility (from_* methods)
 """
 
 import numpy as np
 import pytest
-from datasketch import MinHash as DatasketchMinHash
 from datasketch.weighted_minhash import WeightedMinHashGenerator
 
 from tmap.index.encoders.minhash import MinHash, WeightedMinHash
@@ -101,42 +100,36 @@ class TestMinHashDeterminism:
         assert not np.array_equal(sig1, sig2)
 
 
-class TestMinHashDatasketchConsistency:
-    """Test that our MinHash produces identical results to datasketch."""
+class TestMinHashJaccardQuality:
+    """Test that MinHash produces accurate Jaccard estimates for sets."""
 
-    def test_consistency_with_datasketch(self):
-        """Our implementation should produce identical hashes to datasketch."""
-        num_perm = 64
-        seed = 42
-        test_set = {1, 5, 10, 50, 100}
+    def test_integer_sets_jaccard_quality(self):
+        """Integer sets should give accurate Jaccard estimates."""
+        mh = MinHash(num_perm=512, seed=42)
+        set1 = {1, 2, 3, 4, 5, 6, 7, 8}
+        set2 = {5, 6, 7, 8, 9, 10, 11, 12}
 
-        # Our implementation
-        mh = MinHash(num_perm=num_perm, seed=seed)
-        our_sig = mh.encode([test_set])[0]
+        sig1 = mh.encode([set1])[0]
+        sig2 = mh.encode([set2])[0]
 
-        # Datasketch implementation
-        ds_mh = DatasketchMinHash(num_perm=num_perm, seed=seed)
-        for item in test_set:
-            ds_mh.update(str(item).encode("utf-8"))
-        ds_sig = ds_mh.hashvalues
+        estimated = 1 - mh.get_distance(sig1, sig2)
+        true_jaccard = len(set1 & set2) / len(set1 | set2)  # 4/12 = 0.333
 
-        np.testing.assert_array_equal(our_sig, ds_sig)
+        assert abs(estimated - true_jaccard) < 0.1
 
-    def test_consistency_with_strings(self):
-        """Test consistency with string elements."""
-        num_perm = 64
-        seed = 1
-        test_set = {"apple", "banana", "cherry"}
+    def test_string_sets_jaccard_quality(self):
+        """String sets should give accurate Jaccard estimates."""
+        mh = MinHash(num_perm=512, seed=42)
+        set1 = {"apple", "banana", "cherry", "date", "elderberry"}
+        set2 = {"cherry", "date", "elderberry", "fig", "grape"}
 
-        mh = MinHash(num_perm=num_perm, seed=seed)
-        our_sig = mh.encode([test_set])[0]
+        sig1 = mh.encode([set1])[0]
+        sig2 = mh.encode([set2])[0]
 
-        ds_mh = DatasketchMinHash(num_perm=num_perm, seed=seed)
-        for item in test_set:
-            ds_mh.update(str(item).encode("utf-8"))
-        ds_sig = ds_mh.hashvalues
+        estimated = 1 - mh.get_distance(sig1, sig2)
+        true_jaccard = len(set1 & set2) / len(set1 | set2)  # 3/7 ≈ 0.429
 
-        np.testing.assert_array_equal(our_sig, ds_sig)
+        assert abs(estimated - true_jaccard) < 0.1
 
 
 class TestMinHashDistance:
@@ -722,20 +715,15 @@ class TestMinHashInputValidation:
 class TestMinHashBinaryStringIncompatibility:
     """Test and document that binary and string signatures are NOT comparable.
 
-    This is a critical user pitfall - binary encoding uses a different hash
-    function than string encoding (which uses SHA1 via datasketch).
+    Binary encoding uses column indices as element IDs. String encoding uses
+    xxhash64 outputs as element IDs. Different ID spaces, incomparable signatures.
     """
 
     def test_binary_vs_string_produce_different_signatures(self):
         """Binary and string encoding produce different signatures for same data.
 
-        Covers: Critical warning - binary and string signatures use different
-        hash functions and should NOT be compared with each other.
-
-        This test documents that:
-        - Binary encoding uses universal hash: (a*x + b) mod prime
-        - String encoding uses SHA1 (via datasketch)
-        - Same conceptual data produces DIFFERENT signatures
+        Binary uses column indices as element IDs, strings use xxhash64 outputs.
+        Same conceptual data produces DIFFERENT signatures.
         """
         mh = MinHash(num_perm=64, seed=42)
 
@@ -758,8 +746,7 @@ class TestMinHashBinaryStringIncompatibility:
     def test_binary_string_distance_is_meaningless(self):
         """Distance between binary and string signatures is not meaningful.
 
-        Covers: Warning that comparing mixed-type signatures is invalid.
-        While get_distance() won't error (same shape), the result is meaningless.
+        get_distance() won't error (same shape), but the result is meaningless.
         """
         mh = MinHash(num_perm=64, seed=42)
 
@@ -776,10 +763,9 @@ class TestMinHashBinaryStringIncompatibility:
 
 
 class TestMinHashBatchMethods:
-    """Test batch method behavior and n_jobs parameter.
+    """Test batch method behavior.
 
-    These tests verify that batch methods work correctly with different
-    parallelization settings.
+    These tests verify that batch methods work correctly.
     """
 
     def test_batch_from_binary_array_accepts_list_of_arrays(self):
@@ -794,24 +780,6 @@ class TestMinHashBatchMethods:
         ]
         sigs = mh.batch_from_binary_array(arrays)
         assert sigs.shape == (2, 32)
-
-    def test_batch_from_string_n_jobs_parameter(self):
-        """batch_from_string_array respects n_jobs parameter.
-
-        Covers: Parallel processing for string encoding (datasketch backend).
-        n_jobs=1 forces sequential processing.
-        """
-        mh = MinHash(num_perm=32, seed=42)
-        data = [["a", "b", "c"], ["b", "c", "d"], ["c", "d", "e"]]
-
-        # Sequential
-        sig_seq = mh.batch_from_string_array(data, n_jobs=1)
-
-        # Parallel (if available)
-        sig_par = mh.batch_from_string_array(data, n_jobs=2)
-
-        # Results should be identical regardless of parallelization
-        np.testing.assert_array_equal(sig_seq, sig_par)
 
     def test_batch_from_sparse_with_varied_lengths(self):
         """batch_from_sparse_binary_array handles varied-length index lists.
