@@ -22,7 +22,6 @@ except ImportError:
     _JINJA_AVAILABLE = False
 
 COLORMAPS = list(colormaps)
-TEMPLATES_DIR = Path(__file__).parent / "templates"
 VENDOR_DIR = Path(__file__).parent / "vendor"
 
 
@@ -469,8 +468,7 @@ class TmapViz:
     ) -> None:
         """Add a SMILES column for molecular structure visualization.
 
-        When using the SMILES template (smiles.html.j2), molecules will be
-        rendered in the tooltip when hovering over points.
+        Molecules are rendered in the HTML tooltip when hovering over points.
 
         Args:
             name: Column name (displayed in tooltip)
@@ -534,9 +532,9 @@ class TmapViz:
     ) -> None:
         """Add a protein ID column for structure visualization.
 
-        When using the protein template (protein.html.j2), pinned cards will
-        show a Mol* 3D structure viewer (lazy-loaded from AlphaFold DB) and
-        on-demand UniProt metadata.  IDs also appear as clickable links.
+        Pinned cards show a Mol* 3D structure viewer (lazy-loaded from
+        AlphaFold DB) and on-demand UniProt metadata. IDs also appear as
+        clickable links.
 
         Args:
             values: List of UniProt accessions (e.g. ``"E4ZVF8"``), one per point.
@@ -710,7 +708,7 @@ class TmapViz:
         Returns:
             ``pandas.DataFrame`` with one row per point.
         """
-        import pandas as pd  # type: ignore[import-untyped]
+        import pandas as pd  
 
         n_rows = len(self._points_array) if self._points_array is not None else 0
         if n_rows == 0 and self._columns:

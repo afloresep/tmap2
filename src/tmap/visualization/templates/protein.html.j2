@@ -1,9 +1,0 @@
-{#
-  Protein template compatibility alias.
-
-  Protein rendering (UniProt links, AlphaFold loading, metadata enrichment) is
-  built into base.html.j2 when metadata.proteinColumn is present. This alias
-  is kept so existing calls to template_name='protein.html.j2' continue to
-  work.
-#}
-{% extends "base.html.j2" %}
