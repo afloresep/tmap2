@@ -1,10 +1,8 @@
 """OGDF-backed layout helpers for TMAP visualizations."""
 
 from tmap.layout._ogdf import _AVAILABLE as OGDF_AVAILABLE
-from tmap.layout.types import Coordinates
 
 __all__ = [
-    "Coordinates",
     "OGDF_AVAILABLE",
 ]
 
