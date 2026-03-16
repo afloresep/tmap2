@@ -123,8 +123,8 @@ class LSHForest:
         return self._l
 
     @property
-    def is_indexed(self) -> int:
-        """Number of prefix trees."""
+    def is_indexed(self) -> bool:
+        """Whether the index has been built (index() called after adding)."""
         return self._is_indexed
 
     # Internal helpers

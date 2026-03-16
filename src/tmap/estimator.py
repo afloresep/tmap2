@@ -601,7 +601,7 @@ class TMAP:
         k = self.n_neighbors
 
         if self.metric == "jaccard":
-            binary = self._coerce_binary_matrix_allow_one(X)
+            binary = self._coerce_binary_matrix(X, min_samples=0)
             m = binary.shape[0]
             if m == 0:
                 return (
@@ -644,7 +644,7 @@ class TMAP:
                     "No ANN index stored. Reconstruct with store_index=True "
                     "to use add_points() with metric={!r}.".format(self.metric)
                 )
-            X_dense = self._coerce_dense_matrix_allow_one(X)
+            X_dense = self._coerce_dense_matrix(X, min_samples=0)
             m = X_dense.shape[0]
             if m == 0:
                 return (
@@ -707,17 +707,13 @@ class TMAP:
         self,
         new_indices: NDArray[np.int32],
     ) -> NDArray[np.float32]:
-        """Position new points near their tree parent with a local offset.
+        """Position new points near their nearest existing neighbor (tree parent).
 
-        Each new point is placed close to its nearest existing neighbor
-        (the tree parent) with a small offset toward the local neighborhood
-        centroid.  This keeps tree edges short while still reflecting the
-        broader neighborhood structure.
-
-        NOTE: If you try to do a FDL with N neighbors to figure out the location
-        then you get a point too far from the branch where is supposed to be and
-        edges crossing each other (breaks MST). That's why an offset is a good 
-        (simpler) option
+        We place each new point at its parent plus a small offset pointing
+        toward the local neighborhood centroid. We can't run a full
+        force-directed layout here because that would push the new point
+        far from its branch and create crossing edges that break the MST
+        visual. A simple offset keeps edges short and looks clean.
         """
         m = new_indices.shape[0]
         existing = self._embedding  # (n, 2)
@@ -725,64 +721,50 @@ class TMAP:
 
         centroid = existing.mean(axis=0)
         coord_range = existing.max(axis=0) - existing.min(axis=0)
-        jitter_scale = coord_range * 0.001  # 0.1% of range
+        jitter_scale = coord_range * 0.001  # tiny jitter to avoid exact overlaps
 
-        # Typical edge length in the existing embedding for scale reference.
-        # Use the mean distance between each node and its nearest KNN neighbor.
-        if self._graph is not None and self._graph.distances.shape[0] > 0:
-            finite_dists = self._graph.distances[:, 0]
-            finite_dists = finite_dists[np.isfinite(finite_dists)]
-        else:
-            finite_dists = np.array([], dtype=np.float32)
-
-        if len(finite_dists) > 0:
-            # Median embedding distance between KNN-connected pairs
-            nn_embed_dists = []
-            sample_n = min(200, existing.shape[0])
-            sample_idx = np.linspace(0, existing.shape[0] - 1, sample_n, dtype=int)
-            for si in sample_idx:
-                nb = int(self._graph.indices[si, 0])
-                if nb >= 0:
-                    nn_embed_dists.append(float(np.linalg.norm(existing[si] - existing[nb])))
-            local_scale = float(np.median(nn_embed_dists)) if nn_embed_dists else 1.0
-        else:
-            local_scale = 1.0
+        # We need a sense of how far apart connected nodes are in the
+        # embedding so offset distances look proportional.
+        # Measure the typical embedding distance between each node and its
+        # nearest KNN neighbor, then take the median.
+        local_scale = 1.0
+        if self._graph is not None and self._graph.indices.shape[0] > 0:
+            nn_idx = self._graph.indices[:, 0]
+            valid = nn_idx >= 0
+            if valid.any():
+                diffs = existing[valid] - existing[nn_idx[valid]]
+                nn_dists = np.linalg.norm(diffs, axis=1)
+                local_scale = float(np.median(nn_dists)) or 1.0
 
         rng = np.random.default_rng(self.seed)
 
         for i in range(m):
-            """
-            New points have to be placed at parent + some offset along the direction 
-            because otherwise you get edges crossing over other branches or getting far 
-            away from the actual branch and it looks weird.
-            """
-            valid = new_indices[i] >= 0
-            idxs = new_indices[i][valid]
-            # dists = new_distances[i][valid] NOTE: could be used in the future
+            idxs = new_indices[i][new_indices[i] >= 0]
 
             if len(idxs) == 0:
+                # No valid neighbors found, drop at the global centroid
                 new_coords[i] = centroid
             else:
-                parent_coord = existing[idxs[0]]  # nearest neighbor = tree parent
+                # nearest neighbor becomes the tree parent
+                parent_coord = existing[idxs[0]]
 
                 if len(idxs) >= 2:
-                    # Compute a local direction from the neighborhood centroid
+                    # Point the offset toward the centroid of the next
+                    # few neighbors so the new point sits on the correct
+                    # "side" of its parent branch.
                     nb_coords = existing[idxs[1 : min(5, len(idxs))]]
-                    nb_centroid = nb_coords.mean(axis=0)
-                    direction = nb_centroid - parent_coord
+                    direction = nb_coords.mean(axis=0) - parent_coord
                     norm = np.linalg.norm(direction)
                     if norm > 1e-8:
-                        direction = direction / norm
+                        direction /= norm
                     else:
+                        # Neighbors are on top of each other then pick a random direction
                         direction = rng.normal(0, 1, size=2).astype(np.float32)
                         direction /= np.linalg.norm(direction)
-                    # Place at parent + small offset along the direction
-                    offset_mag = local_scale * 0.3
-                    new_coords[i] = parent_coord + direction * offset_mag
+                    new_coords[i] = parent_coord + direction * (local_scale * 0.3)
                 else:
                     new_coords[i] = parent_coord
 
-            # Small jitter to avoid exact overlaps
             new_coords[i] += rng.normal(0, 1, size=2).astype(np.float32) * jitter_scale
 
         return new_coords
@@ -817,34 +799,6 @@ class TMAP:
             weights=all_weights,
             root=old_tree.root,
         )
-
-    def _coerce_binary_matrix_allow_one(self, X: Any) -> NDArray[np.uint8]:
-        """Like _coerce_binary_matrix but allows m >= 1 (single row)."""
-        if X is None:
-            raise ValueError("X cannot be None for metric='jaccard'.")
-        arr = np.asarray(X)
-        if arr.ndim != 2:
-            raise ValueError(
-                "metric='jaccard' expects a 2D binary matrix of shape (n_samples, n_features)."
-            )
-        if arr.dtype != np.bool_ and not np.issubdtype(arr.dtype, np.number):
-            raise ValueError("Binary matrix must contain numeric/boolean values.")
-        if arr.shape[0] > 0 and not np.all((arr == 0) | (arr == 1)):
-            raise ValueError("Binary matrix must contain only 0/1 values.")
-        return arr.astype(np.uint8, copy=False)
-
-    def _coerce_dense_matrix_allow_one(self, X: Any) -> NDArray[np.float32]:
-        """Like _coerce_dense_matrix but allows m >= 1."""
-        if X is None:
-            raise ValueError(f"X cannot be None for metric={self.metric!r}.")
-        arr = np.asarray(X, dtype=np.float32)
-        if arr.ndim != 2:
-            raise ValueError(
-                f"metric={self.metric!r} expects a 2D matrix of shape (n_samples, n_features)."
-            )
-        if arr.shape[0] > 0 and not np.all(np.isfinite(arr)):
-            raise ValueError("Input matrix must contain only finite values.")
-        return arr
 
     # Tree exploration convenience methods
 
@@ -968,30 +922,25 @@ class TMAP:
 
         return signatures, n_samples
 
-    def _coerce_binary_matrix(self, X: Any | None) -> NDArray[np.uint8]:
+    def _coerce_binary_matrix(self, X: Any | None, min_samples: int = 2) -> NDArray[np.uint8]:
         if X is None:
             raise ValueError("X cannot be None for metric='jaccard'.")
-
         arr = np.asarray(X)
         if arr.ndim != 2:
             raise ValueError(
                 "metric='jaccard' expects a 2D binary matrix of shape (n_samples, n_features)."
             )
-        if arr.shape[0] < 2:
-            raise ValueError("Need at least 2 samples.")
-
+        if arr.shape[0] < min_samples:
+            raise ValueError(f"Need at least {min_samples} samples.")
         if arr.dtype != np.bool_ and not np.issubdtype(arr.dtype, np.number):
             raise ValueError("Binary matrix must contain numeric/boolean values.")
-
-        if not np.all((arr == 0) | (arr == 1)):
+        if arr.shape[0] > 0 and not np.all((arr == 0) | (arr == 1)):
             raise ValueError("Binary matrix must contain only 0/1 values.")
-
         return arr.astype(np.uint8, copy=False)
 
     def _coerce_distance_matrix(self, X: Any | None) -> NDArray[np.float32]:
         if X is None:
             raise ValueError("X cannot be None for metric='precomputed'.")
-
         distances = np.asarray(X, dtype=np.float32)
         if distances.ndim != 2 or distances.shape[0] != distances.shape[1]:
             raise ValueError(
@@ -1001,21 +950,18 @@ class TMAP:
             raise ValueError("Distance matrix must contain at least 2 samples.")
         if not np.all(np.isfinite(distances)):
             raise ValueError("Distance matrix must contain only finite values.")
-
         return distances
 
-    def _coerce_dense_matrix(self, X: Any | None) -> NDArray[np.float32]:
+    def _coerce_dense_matrix(self, X: Any | None, min_samples: int = 2) -> NDArray[np.float32]:
         if X is None:
             raise ValueError(f"X cannot be None for metric={self.metric!r}.")
-
         arr = np.asarray(X, dtype=np.float32)
         if arr.ndim != 2:
             raise ValueError(
                 f"metric={self.metric!r} expects a 2D matrix of shape (n_samples, n_features)."
             )
-        if arr.shape[0] < 2:
-            raise ValueError("Need at least 2 samples.")
+        if arr.shape[0] < min_samples:
+            raise ValueError(f"Need at least {min_samples} samples.")
         if not np.all(np.isfinite(arr)):
             raise ValueError("Input matrix must contain only finite values.")
-
         return arr
