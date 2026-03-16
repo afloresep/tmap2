@@ -2,9 +2,11 @@
 
 from tmap.utils.chemistry import (
     AVAILABLE_PROPERTIES,
+    AVAILABLE_REACTION_PROPERTIES,
     fingerprints_from_smiles,
     molecular_properties,
     murcko_scaffolds,
+    reaction_properties,
 )
 from tmap.utils.proteins import (
     AVAILABLE_SEQUENCE_PROPERTIES,
@@ -22,6 +24,7 @@ from tmap.utils.singlecell import cell_metadata, from_anndata, marker_scores
 
 __all__ = [
     "AVAILABLE_PROPERTIES",
+    "AVAILABLE_REACTION_PROPERTIES",
     "AVAILABLE_SEQUENCE_PROPERTIES",
     "cell_metadata",
     "fetch_alphafold",
@@ -31,6 +34,7 @@ __all__ = [
     "marker_scores",
     "molecular_properties",
     "murcko_scaffolds",
+    "reaction_properties",
     "parse_alignment",
     "read_fasta",
     "read_id_list",

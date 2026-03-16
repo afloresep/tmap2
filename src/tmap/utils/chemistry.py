@@ -4,6 +4,8 @@ Requires ``rdkit`` (install via ``pip install tmap[chemistry]``).
 
 from __future__ import annotations
 
+import importlib.util
+import logging
 import multiprocessing
 import os
 import sys
@@ -11,6 +13,8 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+
+logger = logging.getLogger(__name__)
 
 # default params
 _FP_RADIUS: int = 2
@@ -33,6 +37,14 @@ AVAILABLE_PROPERTIES: list[str] = [
     "qed",
 ]
 
+AVAILABLE_REACTION_PROPERTIES: list[str] = [
+    "delta_mw",
+    "delta_heavy_atoms",
+    "delta_rings",
+    "delta_aromatic_rings",
+    "atom_economy",
+    "delta_logp",
+]
 
 def _init_fp_worker(radius: int, n_bits: int) -> None:
     global _FP_RADIUS, _FP_NBITS
@@ -45,43 +57,58 @@ def _init_props_worker(prop_names: list[str]) -> None:
     _PROP_NAMES = prop_names
 
 
-def _morgan_fp_batch(smiles_batch: list[str]) -> tuple[NDArray[np.uint8], list[int]]:
-    """Process a batch of SMILES, return (fps_array, valid_local_indices)."""
+# Fingerprint batch functions (called inside Pool workers)
+
+def _morgan_fp_batch(smiles_batch: list[str]) -> NDArray[np.uint8]:
+    """Process a batch of SMILES, return fps array for valid entries."""
     from rdkit import Chem
     from rdkit.Chem import rdFingerprintGenerator
 
     gen = rdFingerprintGenerator.GetMorganGenerator(radius=_FP_RADIUS, fpSize=_FP_NBITS)
     fps = []
-    valid = []
-    for i, smi in enumerate(smiles_batch):
+    for smi in smiles_batch:
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             fps.append(gen.GetFingerprintAsNumPy(mol).astype(np.uint8))
-            valid.append(i)
     if fps:
-        return np.stack(fps), valid
-    return np.empty((0, _FP_NBITS), dtype=np.uint8), valid
+        return np.stack(fps)
+    return np.empty((0, _FP_NBITS), dtype=np.uint8)
 
 
-def _mqn_fp_batch(smiles_batch: list[str]) -> tuple[NDArray[np.uint8], list[int]]:
+def _mqn_fp_batch(smiles_batch: list[str]) -> NDArray[np.int16]:
+    """Process a batch of SMILES, return MQN fingerprints (42 integer counts) for valid entries."""
     from rdkit import Chem
-    from rdkit.Chem import Descriptors
+    from rdkit.Chem import rdMolDescriptors
 
     fps = []
-    valid = []
-    for i, smi in enumerate(smiles_batch):
+    for smi in smiles_batch:
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
-            mqn = np.array(Descriptors.MQNs_(mol), dtype=np.float32)  # type: ignore
-            fps.append((mqn > 0).astype(np.uint8))
-            valid.append(i)
+            fps.append(np.array(rdMolDescriptors.MQNs_(mol), dtype=np.int16))
     if fps:
-        return np.stack(fps), valid
-    return np.empty((0, 42), dtype=np.uint8), valid
+        return np.stack(fps)
+    return np.empty((0, 42), dtype=np.int16)
 
 
-# TODO: Probably add more fp
+def _mxfp_fp_batch(smiles_batch: list[str]) -> NDArray[np.int64]:
+    """Process a batch of SMILES, return MXFP fingerprints (217-dim counts) for valid entries."""
+    from mxfp.mxfp import MXFPCalculator
 
+    calc = MXFPCalculator()
+    fps = []
+    for smi in smiles_batch:
+        try:
+            fp = calc.mxfp_from_smiles(smi)
+            if fp is not None:
+                fps.append(fp)
+        except Exception:
+            pass
+    if fps:
+        return np.stack(fps)
+    return np.empty((0, 217), dtype=np.int64)
+
+
+# Property batch functions (called inside Pool workers)
 
 def _mol_props_batch(smiles_batch: list[str]) -> NDArray[np.float64]:
     """Process a batch, return (len(batch), n_props) array. Invalid rows are NaN."""
@@ -114,6 +141,65 @@ def _mol_props_batch(smiles_batch: list[str]) -> NDArray[np.float64]:
     return out
 
 
+def _rxn_props_batch(rxn_smiles_batch: list[str]) -> NDArray[np.float64]:
+    """Process a batch of reaction SMILES, return (len(batch), n_props) array."""
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors, rdMolDescriptors
+
+    props = _PROP_NAMES
+    out = np.full((len(rxn_smiles_batch), len(props)), np.nan, dtype=np.float64)
+
+    for i, rxn in enumerate(rxn_smiles_batch):
+        # Split reaction SMILES: reactants>reagents>products or reactants>>products
+        parts = rxn.split(">")
+        if len(parts) < 2:
+            continue
+        reactant_str, product_str = parts[0].strip(), parts[-1].strip()
+        if not reactant_str or not product_str:
+            continue
+
+        r_mols = [Chem.MolFromSmiles(s) for s in reactant_str.split(".") if s]
+        p_mols = [Chem.MolFromSmiles(s) for s in product_str.split(".") if s]
+        r_mols = [m for m in r_mols if m is not None]
+        p_mols = [m for m in p_mols if m is not None]
+        if not r_mols or not p_mols:
+            continue
+
+        def _sum(mols: list, fn) -> float:  # type: ignore[type-arg]
+            return sum(fn(m) for m in mols)
+
+        r_mw = _sum(r_mols, Descriptors.ExactMolWt)
+        p_mw = _sum(p_mols, Descriptors.ExactMolWt)
+
+        computers = {
+            "delta_mw": p_mw - r_mw,
+            "delta_heavy_atoms": (
+                _sum(p_mols, lambda m: m.GetNumHeavyAtoms())
+                - _sum(r_mols, lambda m: m.GetNumHeavyAtoms())
+            ),
+            "delta_rings": (
+                _sum(p_mols, rdMolDescriptors.CalcNumRings)
+                - _sum(r_mols, rdMolDescriptors.CalcNumRings)
+            ),
+            "delta_aromatic_rings": (
+                _sum(p_mols, rdMolDescriptors.CalcNumAromaticRings)
+                - _sum(r_mols, rdMolDescriptors.CalcNumAromaticRings)
+            ),
+            "atom_economy": (p_mw / r_mw * 100.0) if r_mw > 0 else np.nan,
+            "delta_logp": (
+                _sum(p_mols, Descriptors.MolLogP)
+                - _sum(r_mols, Descriptors.MolLogP)
+            ),
+        }
+
+        for j, name in enumerate(props):
+            out[i, j] = computers[name]
+
+    return out
+
+
+# Utilities
+
 def _get_mp_context() -> multiprocessing.context.BaseContext:  # type:ignore
     if sys.platform == "darwin":
         return multiprocessing.get_context("spawn")
@@ -130,42 +216,161 @@ def _split_into_chunks(lst: list[Any], n_chunks: int) -> list[list[Any]]:
     return [lst[i * k + min(i, m) : (i + 1) * k + min(i + 1, m)] for i in range(n_chunks)]
 
 
+# Fingerprint helpers with built-in parallelization (no Pool wrapper)
+
+def _drfp_fingerprints(
+    smiles: list[str], n_workers: int, **kwargs: Any
+) -> NDArray[np.uint8]:
+    """Compute DRFP reaction fingerprints using the drfp package.
+
+    DRFP (Differential Reaction Fingerprint) encodes chemical reactions
+    by extracting circular substructures from reactants and products,
+    computing their symmetric difference, and hashing into a fixed-length
+    binary vector.
+
+    Uses drfp's built-in joblib parallelization via ``n_jobs``.
+    """
+    try:
+        from drfp import DrfpEncoder
+    except ImportError:
+        raise ImportError(
+            "drfp is required for fp_type='drfp'. Install with: pip install drfp"
+        ) from None
+
+    n_folded_length = kwargs.get("n_folded_length", 2048)
+    radius = kwargs.get("radius", 3)
+    min_radius = kwargs.get("min_radius", 0)
+    rings = kwargs.get("rings", True)
+
+    fps_list = DrfpEncoder.encode(
+        smiles,
+        n_folded_length=n_folded_length,
+        radius=radius,
+        min_radius=min_radius,
+        rings=rings,
+        n_jobs=n_workers,
+    )
+    return np.array(fps_list, dtype=np.uint8)
+
+
+def _map4_fingerprints(
+    smiles: list[str], n_workers: int, **kwargs: Any
+) -> NDArray[np.uint8]:
+    """Compute MAP4 fingerprints using the map4 package.
+
+    MAP4 (MinHashed Atom-Pair fingerprint of radius 2) encodes molecules
+    by extracting all atom-pair shingles at multiple radii, then hashing
+    and folding into a fixed-length binary vector.
+
+    Uses MAP4Calculator.calculate_many() which handles parallelization
+    internally.
+    """
+    try:
+        from map4 import MAP4Calculator
+    except ImportError:
+        raise ImportError(
+            "map4 is required for fp_type='map4'. Install with: pip install map4"
+        ) from None
+    from rdkit import Chem
+
+    dimensions = kwargs.get("dimensions", 1024)
+    radius = kwargs.get("radius", 2)
+    is_counted = kwargs.get("is_counted", False)
+
+    calc = MAP4Calculator(dimensions=dimensions, radius=radius, is_folded=True, is_counted=is_counted)
+
+    mols = []
+    for smi in smiles:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is not None:
+            mols.append(mol)
+
+    n_valid = len(mols)
+    if n_valid == 0:
+        return np.empty((0, dimensions), dtype=np.uint8)
+    if n_valid < len(smiles):
+        logger.warning(
+            "%d/%d SMILES could not be parsed and were skipped.",
+            len(smiles) - n_valid, len(smiles),
+        )
+
+    fps = calc.calculate_many(mols)
+    return np.array(fps, dtype=np.uint8)
+
+
+# fingerprints_from_smiles
+
 def fingerprints_from_smiles(
     smiles: list[str],
     fp_type: str = "morgan",
     n_workers: int | None = None,
     **kwargs: Any,
-) -> tuple[NDArray[np.uint8], NDArray[np.int64]]:
+) -> NDArray:
     """Compute molecular fingerprints in parallel.
 
     Parameters
     ----------
     smiles : list[str]
-        Input SMILES strings.
+        Input SMILES strings. For ``fp_type='drfp'``, these should be
+        reaction SMILES (``reactants>>products``).
     fp_type : str, default ``'morgan'``
-        Fingerprint type. ``'morgan'`` uses Morgan circular fingerprints
-        (kwargs: ``radius=2``, ``n_bits=2048``). ``'mqn'`` uses Molecular
-        Quantum Numbers (42-dim binarized vector, no kwargs).
+        Fingerprint type:
+
+        - ``'morgan'`` -- Morgan circular fingerprints (``uint8``).
+          kwargs: ``radius=2``, ``n_bits=2048``.
+        - ``'mqn'`` -- Molecular Quantum Numbers, 42 integer counts
+          (``int16``). No additional kwargs.
+        - ``'mxfp'`` -- Macromolecule Extended Fingerprint, 217-dim
+          pharmacophoric distance counts (``int64``). Requires the
+          ``mxfp`` package. No additional kwargs.
+        - ``'map4'`` -- MinHashed Atom-Pair fingerprint (``uint8``).
+          Requires the ``map4`` package. kwargs: ``dimensions=1024``,
+          ``radius=2``, ``is_counted=False``.
+        - ``'drfp'`` -- Differential Reaction Fingerprint for chemical
+          reactions (``uint8``). Requires the ``drfp`` package.
+          kwargs: ``n_folded_length=2048``, ``radius=3``,
+          ``min_radius=0``, ``rings=True``.
     n_workers : int or None
         Number of parallel workers. Defaults to ``min(cpu_count, 12)``.
     **kwargs
-        Passed to the fingerprint generator (Morgan only).
+        Passed to the fingerprint generator.
 
     Returns
     -------
-    fps : ndarray of shape ``(n_valid, n_bits)``, dtype ``uint8``
-        Fingerprint matrix for valid SMILES.
-    valid_indices : ndarray of shape ``(n_valid,)``, dtype ``int64``
-        Indices into the original *smiles* list for each valid row.
+    fps : ndarray of shape ``(n_valid, n_bits)``
+        Fingerprint matrix. Invalid SMILES are silently skipped (a
+        warning is logged with the count). Dtype depends on
+        ``fp_type``: ``uint8`` for Morgan/DRFP/MAP4, ``int16`` for
+        MQN, ``int64`` for MXFP.
+
+    Examples
+    --------
+    >>> from tmap.utils import fingerprints_from_smiles
+    >>> fps = fingerprints_from_smiles(["CCO", "c1ccccc1"], fp_type="morgan")
+    >>> fps.shape
+    (2, 2048)
+
+    >>> fps = fingerprints_from_smiles(["CCO"], fp_type="mqn")
+    >>> fps.shape
+    (1, 42)
+    >>> fps.dtype
+    dtype('int16')
     """
     n = len(smiles)
     if n == 0:
-        return np.empty((0, 0), dtype=np.uint8), np.empty(0, dtype=np.int64)
+        return np.empty((0, 0), dtype=np.uint8)
 
     if n_workers is None:
         n_workers = _default_n_workers()
     n_workers = min(n_workers, n)
 
+    # Fingerprints with built-in parallelization (no Pool needed)
+    if fp_type == "drfp":
+        return _drfp_fingerprints(smiles, n_workers=n_workers, **kwargs)
+    if fp_type == "map4":
+        return _map4_fingerprints(smiles, n_workers=n_workers, **kwargs)
+
+    # Fingerprints using our Pool wrapper
     ctx = _get_mp_context()
     chunks = _split_into_chunks(smiles, n_workers)
 
@@ -177,41 +382,36 @@ def fingerprints_from_smiles(
     elif fp_type == "mqn":
         with ctx.Pool(n_workers) as pool:
             batch_results = pool.map(_mqn_fp_batch, chunks)
+    elif fp_type == "mxfp":
+        if importlib.util.find_spec("mxfp") is None:
+            raise ImportError(
+                "mxfp is required for fp_type='mxfp'. Install with: pip install mxfp"
+            )
+        with ctx.Pool(n_workers) as pool:
+            batch_results = pool.map(_mxfp_fp_batch, chunks)
     else:
-        raise ValueError(f"Unsupported fp_type={fp_type!r}. Use 'morgan' or 'mqn'.")
+        raise ValueError(
+            f"Unsupported fp_type={fp_type!r}. "
+            "Use 'morgan', 'mqn', 'mxfp', 'map4', or 'drfp'."
+        )
 
-    # each batch returns (fps_array, local_valid_indices)
-    fps_parts: list[NDArray[np.uint8]] = []
-    valid_idx: list[int] = []
-    offset = 0
-    for fps_arr, local_valid in batch_results:
-        if len(local_valid) > 0:
-            fps_parts.append(fps_arr)
-            for li in local_valid:
-                valid_idx.append(offset + li)
-        offset += len(chunks[len(fps_parts) - 1]) if len(local_valid) > 0 else 0
+    fps_parts = [r for r in batch_results if len(r) > 0]
+    if not fps_parts:
+        return np.empty((0, 0), dtype=np.uint8)
 
-    # recompute properly
-    fps_parts2: list[NDArray[np.uint8]] = []
-    valid_idx2: list[int] = []
-    offset = 0
-    for chunk_i, (fps_arr, local_valid) in enumerate(batch_results):
-        if len(local_valid) > 0:
-            fps_parts2.append(fps_arr)
-            for li in local_valid:
-                valid_idx2.append(offset + li)
-        offset += len(chunks[chunk_i])
+    fps = np.concatenate(fps_parts)
+    n_valid = len(fps)
+    if n_valid < n:
+        logger.warning(
+            "%d/%d SMILES could not be parsed and were skipped.", n - n_valid, n
+        )
+    return fps
 
-    if not fps_parts2:
-        return np.empty((0, 0), dtype=np.uint8), np.empty(0, dtype=np.int64)
 
-    print(f"  [FP] {len(valid_idx2):,}/{n:,} valid")
-    fps = np.concatenate(fps_parts2)
-    return fps, np.array(valid_idx2, dtype=np.int64)
-
+# Scaffolds
 
 def _scaffolds_batch(smiles_batch: list[str]) -> list[str]:
-    """Return Murcko scaffold SMILES for a batch. Invalid SMILES → empty string."""
+    """Return Murcko scaffold SMILES for a batch. Invalid SMILES -> empty string."""
     from rdkit import Chem
     from rdkit.Chem.Scaffolds import MurckoScaffold
 
@@ -235,7 +435,7 @@ def murcko_scaffolds(
     """Compute Murcko scaffolds in parallel.
 
     The Murcko scaffold is the core ring system plus linkers of a
-    molecule — useful for grouping/coloring by chemical series.
+    molecule -- useful for grouping/coloring by chemical series.
 
     Parameters
     ----------
@@ -273,6 +473,8 @@ def murcko_scaffolds(
     print(f"  [Scaffolds] {n_valid:,}/{n:,} valid")
     return result
 
+
+# Molecular properties
 
 def molecular_properties(
     smiles: list[str],
@@ -329,5 +531,87 @@ def molecular_properties(
 
     props = np.concatenate(batch_results)  # (n, len(properties))
     print(f"  [Props] {n:,} done, {np.isnan(props[:, 0]).sum():,} invalid")
+
+    return {name: props[:, j] for j, name in enumerate(properties)}
+
+
+# Reaction properties
+
+def reaction_properties(
+    rxn_smiles: list[str],
+    properties: list[str] | None = None,
+    n_workers: int | None = None,
+) -> dict[str, NDArray[np.float64]]:
+    """Compute reaction-level descriptors in parallel.
+
+    Each reaction SMILES is split on ``>`` into reactant and product
+    sides. Properties are computed as deltas (product - reactant) or
+    ratios across all molecules on each side.
+
+    Parameters
+    ----------
+    rxn_smiles : list[str]
+        Reaction SMILES in ``reactants>>products`` or
+        ``reactants>reagents>products`` format.
+    properties : list[str] or None
+        Which properties to compute. Defaults to all in
+        ``AVAILABLE_REACTION_PROPERTIES``:
+
+        - ``'delta_mw'`` -- change in total molecular weight.
+        - ``'delta_heavy_atoms'`` -- change in heavy atom count.
+        - ``'delta_rings'`` -- ring-forming (+) or ring-breaking (-).
+        - ``'delta_aromatic_rings'`` -- aromatization change.
+        - ``'atom_economy'`` -- product MW / reactant MW * 100.
+        - ``'delta_logp'`` -- change in lipophilicity.
+    n_workers : int or None
+        Number of parallel workers. Defaults to ``min(cpu_count, 12)``.
+
+    Returns
+    -------
+    dict[str, ndarray]
+        Each key is a property name, each value is an ndarray of
+        length ``len(rxn_smiles)``. Unparseable reactions produce
+        ``NaN``.
+
+    Examples
+    --------
+    >>> from tmap.utils import reaction_properties
+    >>> rxn = ["CCO.CC(=O)O>>CC(=O)OCC.O"]
+    >>> props = reaction_properties(rxn)
+    >>> props["delta_rings"]
+    array([0.])
+    """
+    if properties is None:
+        properties = list(AVAILABLE_REACTION_PROPERTIES)
+    else:
+        bad = [p for p in properties if p not in AVAILABLE_REACTION_PROPERTIES]
+        if bad:
+            raise ValueError(
+                f"Unknown reaction properties: {bad}. "
+                f"Available: {AVAILABLE_REACTION_PROPERTIES}"
+            )
+
+    n = len(rxn_smiles)
+    if n == 0:
+        return {p: np.empty(0, dtype=np.float64) for p in properties}
+
+    if n_workers is None:
+        n_workers = _default_n_workers()
+    n_workers = min(n_workers, n)
+
+    ctx = _get_mp_context()
+    chunks = _split_into_chunks(rxn_smiles, n_workers)
+
+    with ctx.Pool(
+        n_workers, initializer=_init_props_worker, initargs=(properties,)
+    ) as pool:
+        batch_results = pool.map(_rxn_props_batch, chunks)
+
+    props = np.concatenate(batch_results)  # (n, len(properties))
+    n_invalid = np.isnan(props[:, 0]).sum()
+    if n_invalid > 0:
+        logger.warning(
+            "%d/%d reaction SMILES could not be parsed.", int(n_invalid), n
+        )
 
     return {name: props[:, j] for j, name in enumerate(properties)}

@@ -23,9 +23,11 @@ if TYPE_CHECKING:
     from tmap.index.lsh_forest import LSHForest
     from tmap.utils.chemistry import (
         AVAILABLE_PROPERTIES,
+        AVAILABLE_REACTION_PROPERTIES,
         fingerprints_from_smiles,
         molecular_properties,
         murcko_scaffolds,
+        reaction_properties,
     )
     from tmap.utils.proteins import (
         AVAILABLE_SEQUENCE_PROPERTIES,
@@ -50,6 +52,7 @@ __all__ = [
     "LSHForest",
     "TMAP",
     "AVAILABLE_PROPERTIES",
+    "AVAILABLE_REACTION_PROPERTIES",
     "AVAILABLE_SEQUENCE_PROPERTIES",
     "cell_metadata",
     "fingerprints_from_smiles",
@@ -57,6 +60,7 @@ __all__ = [
     "marker_scores",
     "molecular_properties",
     "murcko_scaffolds",
+    "reaction_properties",
     "parse_alignment",
     "sequence_properties",
     "fetch_uniprot",
@@ -75,6 +79,7 @@ _LAZY_IMPORTS: dict[str, str] = {
     "WeightedMinHash": "tmap.index.encoders.minhash",
     "FaissIndex": "tmap.index.faiss_index",
     "AVAILABLE_PROPERTIES": "tmap.utils.chemistry",
+    "AVAILABLE_REACTION_PROPERTIES": "tmap.utils.chemistry",
     "AVAILABLE_SEQUENCE_PROPERTIES": "tmap.utils.proteins",
     "fingerprints_from_smiles": "tmap.utils.chemistry",
     "cell_metadata": "tmap.utils.singlecell",
@@ -82,6 +87,7 @@ _LAZY_IMPORTS: dict[str, str] = {
     "marker_scores": "tmap.utils.singlecell",
     "molecular_properties": "tmap.utils.chemistry",
     "murcko_scaffolds": "tmap.utils.chemistry",
+    "reaction_properties": "tmap.utils.chemistry",
     "sequence_properties": "tmap.utils.proteins",
     "fetch_uniprot": "tmap.utils.proteins",
     "fetch_alphafold": "tmap.utils.proteins",
