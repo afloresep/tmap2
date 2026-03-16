@@ -1,4 +1,4 @@
-"""Graph module: MST construction, tree data structures, and analysis."""
+"""Graph module: tree extraction, tree data structures, and analysis."""
 
 from tmap.graph.analysis import (
     boundary_edges,
@@ -8,11 +8,11 @@ from tmap.graph.analysis import (
     path_properties,
     subtree_purity,
 )
-from tmap.graph.mst import MSTBuilder
+from tmap.graph.mst import tree_from_knn_graph
 from tmap.graph.types import Tree
 
 __all__ = [
-    "MSTBuilder",
+    "tree_from_knn_graph",
     "Tree",
     "boundary_edges",
     "confusion_matrix_from_tree",

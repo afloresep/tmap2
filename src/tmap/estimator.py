@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Self, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
+from tmap.graph.mst import _tree_from_ogdf_edges, tree_from_knn_graph
 from tmap.graph.types import Tree
 from tmap.index.encoders.minhash import MinHash
 from tmap.index.lsh_forest import LSHForest
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from tmap.visualization import TmapViz
 
 
-def _resolve_ann_backend(n_samples: int = 0, seed: int | None = None) -> Any:
+def _resolve_ann_backend(seed: int | None = None) -> Any:
     """Return a FaissIndex for cosine/euclidean kNN search.
 
     Raises ImportError with install instructions if faiss is not available.
@@ -98,9 +99,6 @@ class TMAP:
         Random seed for MinHash permutation generation when
         ``metric='jaccard'``. Keep this fixed to make k-NN graph topology
         stable while varying ``seed`` for layout initialization.
-    mst_bias : float, default=0.0
-        Reserved for low-level MST tuning. The high-level ``TMAP`` estimator
-        currently ignores this value.
     layout_iterations : int, default=1000
         Number of iterations for the force-directed layout algorithm.
     store_index : bool, default=False
@@ -149,7 +147,6 @@ class TMAP:
         kc: int = 10,
         seed: int = 42,
         minhash_seed: int = 42,
-        mst_bias: float = 0.0,
         layout_iterations: int = 1000,
         layout_config: Any | None = None,
         store_index: bool = False,
@@ -160,8 +157,6 @@ class TMAP:
             raise ValueError(f"n_permutations must be > 0, got {n_permutations}")
         if kc <= 0:
             raise ValueError(f"kc must be > 0, got {kc}")
-        if not 0.0 <= mst_bias <= 1.0:
-            raise ValueError(f"mst_bias must be in [0, 1], got {mst_bias}")
 
         metric = metric.lower()
         valid_metrics = {"jaccard", "precomputed", "cosine", "euclidean"}
@@ -175,7 +170,6 @@ class TMAP:
         self.kc = kc
         self.seed = seed
         self.minhash_seed = minhash_seed
-        self.mst_bias = mst_bias
         self.layout_iterations = layout_iterations
         self.layout_config = layout_config
         self.store_index = store_index
@@ -221,7 +215,7 @@ class TMAP:
                 raise ValueError(
                     f"n_neighbors={self.n_neighbors} must be < n_samples={X_dense.shape[0]}"
                 )
-            index = _resolve_ann_backend(n_samples=X_dense.shape[0], seed=self.seed)
+            index = _resolve_ann_backend(seed=self.seed)
             index.build_from_vectors(X_dense, metric=self.metric)
             knn = index.query_knn(k=self.n_neighbors)
             self._lsh_forest = None
@@ -235,7 +229,7 @@ class TMAP:
         require_ogdf()
         config = self._make_layout_config()
         x, y, s, t = layout_from_knn_graph(knn, config=config, create_mst=True)
-        self._tree = self._tree_from_ogdf_edges(knn, s, t)
+        self._tree = _tree_from_ogdf_edges(knn, s, t)
 
         self._embedding = np.column_stack([x, y]).astype(np.float32, copy=False)
         return self
@@ -246,8 +240,7 @@ class TMAP:
         *,
         knn_graph: KNNGraph | None = None,
     ) -> Tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.int32], NDArray[np.int32]]:
-        """Fit and return 2D coordinates with shape (n_samples, 4) \
-            = (x,y coordinates + s,y edges)."""
+        """Fit the estimator and return ``(x, y, s, t)`` arrays."""
         self.fit(X, knn_graph=knn_graph)
         # Return x,y coordinates  + s,t edges
         return (
@@ -259,7 +252,7 @@ class TMAP:
 
     def transform(self, X: Any) -> NDArray[np.float32]:
         """Embed new points into an existing embedding."""
-        #TODO: Wrapper around add_points
+        # TODO: Decide whether transform() should wrap add_points().
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support transform(new_X) yet."
         )
@@ -277,7 +270,7 @@ class TMAP:
         if self._tree is None:
             if self._graph is None:
                 raise RuntimeError("Estimator is not fitted. Call fit() first.")
-            self._tree = self._extract_tree_from_knn(self._graph)
+            self._tree = tree_from_knn_graph(self._graph)
         return self._tree
 
     @property
@@ -898,82 +891,6 @@ class TMAP:
         """
         return self.tree_.distances_from(source)
 
-    def _tree_from_ogdf_edges(
-        self,
-        knn: KNNGraph,
-        s: NDArray[np.uint32],
-        t: NDArray[np.uint32],
-    ) -> Tree:
-        """Build a Tree object from OGDF edge topology output."""
-        edge_count = len(s)
-        if edge_count == 0:
-            return Tree(
-                n_nodes=knn.n_nodes,
-                edges=np.empty((0, 2), dtype=np.int32),
-                weights=np.empty(0, dtype=np.float32),
-                root=0,
-            )
-
-        edges = np.column_stack(
-            [
-                s.astype(np.int32, copy=False),
-                t.astype(np.int32, copy=False),
-            ]
-        )
-
-        # Recover edge weights from the k-NN table where possible.
-        edge_weights: dict[tuple[int, int], float] = {}
-        for i in range(knn.n_nodes):
-            for j_idx in range(knn.k):
-                j = int(knn.indices[i, j_idx])
-                if j < 0 or j == i:
-                    continue
-                w = float(knn.distances[i, j_idx])
-                if not np.isfinite(w):
-                    continue
-                key = (min(i, j), max(i, j))
-                prev = edge_weights.get(key)
-                if prev is None or w < prev:
-                    edge_weights[key] = w
-
-        weights = np.ones(edge_count, dtype=np.float32)
-        for idx, (src, tgt) in enumerate(edges):
-            key = (min(int(src), int(tgt)), max(int(src), int(tgt)))
-            w_opt = edge_weights.get(key)
-            if w_opt is not None:
-                weights[idx] = np.float32(w_opt)
-
-        degree = np.zeros(knn.n_nodes, dtype=np.int32)
-        np.add.at(degree, edges[:, 0], 1)
-        np.add.at(degree, edges[:, 1], 1)
-        root = int(np.argmax(degree))
-
-        return Tree(
-            n_nodes=knn.n_nodes,
-            edges=edges,
-            weights=weights,
-            root=root,
-        )
-
-    def _extract_tree_from_knn(self, knn: KNNGraph) -> Tree:
-        """Extract MST topology via OGDF and convert to Tree."""
-        config = self._make_tree_extraction_config()
-        _, _, s, t = layout_from_knn_graph(knn, config=config, create_mst=True)
-        return self._tree_from_ogdf_edges(knn, s, t)
-
-    def _make_tree_extraction_config(self) -> Any | None:
-        """Create a lightweight layout config used only for MST extraction."""
-        if LayoutConfig is None:
-            return None
-        config = LayoutConfig()
-        if hasattr(config, "fme_iterations"):
-            config.fme_iterations = 1
-        if hasattr(config, "deterministic"):
-            config.deterministic = True
-        if hasattr(config, "seed"):
-            config.seed = self.seed
-        return config
-
     def _make_layout_config(self) -> Any | None:
         if self.layout_config is not None:
             return self.layout_config
@@ -1017,12 +934,19 @@ class TMAP:
             del binary_matrix
             return signatures, n_samples
 
-        # List of sequences ->  peek at elements to decide string vs integer
         if not isinstance(X, (list, tuple)) or len(X) < 2:
             raise ValueError(
                 "metric='jaccard' expects a 2D binary array or a list of sequences "
                 "(at least 2 samples)."
             )
+
+        # List of uniform-length numeric lists (e.g. data.tolist()) -> try binary path
+        try:
+            arr = np.asarray(X)
+            if arr.ndim == 2 and np.issubdtype(arr.dtype, np.number):
+                return self._encode_jaccard(arr)  # recurse into the ndarray branch
+        except (ValueError, TypeError):
+            pass  # ragged lists, mixed types, etc. --> falls through
 
         n_samples = len(X)
         if self.n_neighbors >= n_samples:
@@ -1030,7 +954,7 @@ class TMAP:
                 f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
             )
 
-        # Find first non-empty element to determine type
+        # first non-empty element to decide string vs integer
         first_elem = None
         for seq in X:
             if seq:

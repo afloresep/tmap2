@@ -1,229 +1,88 @@
-"""
-Minimum Spanning Tree construction from k-NN graph.
-MST finds the tree that:
-1. Connects all nodes
-2. Minimizes total edge weight
+"""Tree extraction from k-NN graphs."""
 
-For k-NN graphs, edge weight = distance. So MST connects
-all points using the shortest possible total distance.
-"""
+from __future__ import annotations
+
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.sparse import csr_matrix  # type: ignore[import-untyped]
-from scipy.sparse.csgraph import minimum_spanning_tree  # type: ignore[import-untyped]
-from typing import cast
 
 from tmap.graph.types import Tree
 from tmap.index.types import KNNGraph
 
-from numba import njit
+
+def _edge_weights_from_knn(knn: KNNGraph) -> dict[tuple[int, int], float]:
+    """Return the minimum observed weight for each undirected k-NN edge."""
+    edge_weights: dict[tuple[int, int], float] = {}
+
+    for i in range(knn.n_nodes):
+        for j_idx in range(knn.k):
+            j = int(knn.indices[i, j_idx])
+            if j < 0 or j == i:
+                continue
+
+            weight = float(knn.distances[i, j_idx])
+            if not np.isfinite(weight):
+                continue
+
+            key = (min(i, j), max(i, j))
+            prev = edge_weights.get(key)
+            if prev is None or weight < prev:
+                edge_weights[key] = weight
+
+    return edge_weights
 
 
-@njit(cache=True)
-def _reduce_sorted_min_numba(
-        keys: NDArray[np.int64],
-        u: NDArray[np.int32],
-        v: NDArray[np.int32],
-        w: NDArray[np.float32],
-    ) -> tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
-        """Reduce sorted undirected edges to minimum weight per unique key."""
-        n = keys.shape[0]
-        if n == 0:
-            return (
-                np.empty(0, dtype=np.int32),
-                np.empty(0, dtype=np.int32),
-                np.empty(0, dtype=np.float32),
-            )
+def _tree_from_ogdf_edges(
+    knn: KNNGraph,
+    s: NDArray[np.uint32],
+    t: NDArray[np.uint32],
+) -> Tree:
+    """Build a Tree from OGDF MST edge topology and original k-NN weights."""
+    if len(s) == 0:
+        return Tree(
+            n_nodes=knn.n_nodes,
+            edges=np.empty((0, 2), dtype=np.int32),
+            weights=np.empty(0, dtype=np.float32),
+            root=0,
+        )
 
-        out_u = np.empty(n, dtype=np.int32)
-        out_v = np.empty(n, dtype=np.int32)
-        out_w = np.empty(n, dtype=np.float32)
+    edges = np.column_stack(
+        [
+            s.astype(np.int32, copy=False),
+            t.astype(np.int32, copy=False),
+        ]
+    )
 
-        cur_key = keys[0]
-        cur_u = u[0]
-        cur_v = v[0]
-        cur_w = w[0]
-        m = 0
+    edge_weights = _edge_weights_from_knn(knn)
+    weights = np.ones(len(edges), dtype=np.float32)
+    for idx, (src, tgt) in enumerate(edges):
+        key = (min(int(src), int(tgt)), max(int(src), int(tgt)))
+        weight = edge_weights.get(key)
+        if weight is not None:
+            weights[idx] = np.float32(weight)
 
-        for i in range(1, n):
-            if keys[i] != cur_key:
-                out_u[m] = cur_u
-                out_v[m] = cur_v
-                out_w[m] = cur_w
-                m += 1
+    degree = np.zeros(knn.n_nodes, dtype=np.int32)
+    np.add.at(degree, edges[:, 0], 1)
+    np.add.at(degree, edges[:, 1], 1)
 
-                cur_key = keys[i]
-                cur_u = u[i]
-                cur_v = v[i]
-                cur_w = w[i]
-            elif w[i] < cur_w:
-                cur_w = w[i]
-
-        out_u[m] = cur_u
-        out_v[m] = cur_v
-        out_w[m] = cur_w
-        m += 1
-
-        return out_u[:m], out_v[:m], out_w[:m]
-
-
-def _reduce_sorted_min(
-    keys: NDArray[np.int64],
-    u: NDArray[np.int32],
-    v: NDArray[np.int32],
-    w: NDArray[np.float32],
-) -> tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
-    """Select the minimum edge weight for each sorted undirected edge key."""
-    return cast(
-        tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]],
-        _reduce_sorted_min_numba(keys, u, v, w),
+    return Tree(
+        n_nodes=knn.n_nodes,
+        edges=edges,
+        weights=weights,
+        root=int(np.argmax(degree)),
     )
 
 
-# not very good so far
-# TODO: rewrite MSTBUilder
-class MSTBuilder:
-    """
-    Build MST from k-NN graph.
+def tree_from_knn_graph(knn: KNNGraph, config: Any | None = None) -> Tree:
+    """Compute a Tree from a KNNGraph using OGDF's MST path."""
+    from tmap.layout._ogdf import LayoutConfig, layout_from_knn_graph
 
-    Example:
-        knn = index.query_knn(k=20)
-        builder = MSTBuilder(bias_factor=0.1)
-        tree = builder.build(knn)
-    """
+    if config is None and LayoutConfig is not None:
+        config = LayoutConfig()
+        config.fme_iterations = 1
+        config.deterministic = True
+        config.seed = 0
 
-    def __init__(self, bias_factor: float = 0.0) -> None:
-        """
-        Initialize MST builder.
-
-        Args:
-            bias_factor: How much to prefer closer neighbors (0-1).
-                0.0 = standard MST (no bias)
-                0.1 = slight preference for close neighbors
-                0.5 = strong preference
-                1.0 = very strong (may hurt global structure)
-
-        Start with 0.0, increase if layout looks too "stringy".
-        """
-        if not 0.0 <= bias_factor <= 1.0:
-            raise ValueError(f"bias_factor must be in [0, 1], got {bias_factor}")
-        self.bias_factor = bias_factor
-
-    def build(self, knn: KNNGraph) -> Tree:
-        """
-        Build MST from k-NN graph.
-
-        Steps:
-        1. Convert directed k-NN to undirected sparse adjacency matrix
-           using union-min symmetrization (preserves one-way neighbors)
-        2. Apply optional rank bias directly while building adjacency
-        3. Run scipy's MST algorithm
-        4. Extract edges and build Tree object
-        """
-        # Step 1-2: Build sparse adjacency matrix with optional bias
-        adj = self._knn_to_sparse(knn)
-
-        # Step 3: Compute MST using scipy
-        # minimum_spanning_tree returns a sparse matrix with MST edges
-        mst_sparse = minimum_spanning_tree(adj)
-
-        # Step 4: Extract edges and weights
-        edges, weights = self._sparse_to_edges(mst_sparse)
-
-        # Find good root (highest degree node)
-        root = self._find_root(edges, knn.n_nodes)
-
-        return Tree(
-            n_nodes=knn.n_nodes,
-            edges=edges,
-            weights=weights,
-            root=root,
-        )
-
-    def _knn_to_sparse(self, knn: KNNGraph) -> csr_matrix:
-        """
-        Convert KNNGraph to scipy sparse matrix.
-
-        k-NN is directional (i->neighbors[i]), but MST needs undirected edges.
-        build an undirected edge set by union of directed edges and keep
-        the minimum observed weight per undirected pair which
-        avoids dropping one-way neighbors
-        """
-        n = knn.n_nodes
-        k = knn.k
-
-        rows = np.repeat(np.arange(n, dtype=np.int32), k)
-        cols = np.asarray(knn.indices.ravel(), dtype=np.int32)
-        weights = np.asarray(knn.distances.ravel(), dtype=np.float32)
-
-        # Remove invalid nodes and self-loops.
-        valid = (cols >= 0) & (cols < n) & (cols != rows) & np.isfinite(weights)
-        if not np.any(valid):
-            return csr_matrix((n, n), dtype=np.float32)
-
-        rows = rows[valid]
-        cols = cols[valid]
-        weights = weights[valid]
-
-        """A bit hacky so far. Def can be improved. scipy is slow"""
-        # Apply rank bias directly on directed edges before undirected reduction.
-        if self.bias_factor > 0:
-            ranks = np.tile(np.arange(k, dtype=np.float32), n)[valid]
-            weights = weights * (1.0 + self.bias_factor * (ranks / float(k)))
-
-        # Canonicalize directed edges (i, j) and (j, i) to the same key.
-        u = np.minimum(rows, cols).astype(np.int32, copy=False)
-        v = np.maximum(rows, cols).astype(np.int32, copy=False)
-        keys = u.astype(np.int64) * np.int64(n) + v.astype(np.int64)
-
-        # Group by key and keep minimum weight per undirected pair.
-        order = np.argsort(keys, kind="mergesort")
-        keys_sorted = keys[order]
-        u_sorted = u[order]
-        v_sorted = v[order]
-        w_sorted = weights[order]
-        u_min, v_min, w_min = _reduce_sorted_min(keys_sorted, u_sorted, v_sorted, w_sorted)
-
-        # Build symmetric sparse matrix for undirected MST.
-        rows_sym = np.concatenate((u_min, v_min))
-        cols_sym = np.concatenate((v_min, u_min))
-        data_sym = np.concatenate((w_min, w_min)).astype(np.float32, copy=False)
-        adj = csr_matrix((data_sym, (rows_sym, cols_sym)), shape=(n, n), dtype=np.float32)
-
-        return adj
-
-    def _sparse_to_edges(
-        self,
-        mst: csr_matrix,
-    ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
-        """Extract edge list from sparse MST matrix."""
-        # Get non-zero entries
-        rows, cols = mst.nonzero()
-
-        if len(rows) == 0:
-            return (
-                np.empty((0, 2), dtype=np.int32),
-                np.empty(0, dtype=np.float32),
-            )
-
-        weights = np.asarray(mst[rows, cols], dtype=np.float32).ravel()
-
-        # Stack into edge array
-        edges = np.column_stack([rows, cols]).astype(np.int32)
-        return edges, weights
-
-    def _find_root(self, edges: NDArray[np.int32], n_nodes: int) -> int:
-        """
-        Find good root node (highest degree).
-
-        High-degree nodes make better roots because:
-        - More balanced tree depth
-        - Better for radial layouts
-        """
-        degree = np.zeros(n_nodes, dtype=np.int32)
-        for src, tgt in edges:
-            degree[src] += 1
-            degree[tgt] += 1
-
-        return int(np.argmax(degree))
+    _, _, s, t = layout_from_knn_graph(knn, config=config, create_mst=True)
+    return _tree_from_ogdf_edges(knn, s, t)
