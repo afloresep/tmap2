@@ -61,6 +61,19 @@ class MinHash:
             give more accurate Jaccard similarity estimates but use more memory.
         seed: Random seed for reproducibility.
 
+    Example:
+        >>> mh = MinHash(num_perm=128, seed=42)
+        >>> # From binary fingerprint (uses Numba - fast!)
+        >>> fp = np.array([1, 0, 1, 1, 0, 0, 1, 0], dtype=np.uint8)
+        >>> sig = mh.from_binary_array(fp)
+        >>> # From sparse indices (uses Numba)
+        >>> sig = mh.from_sparse_binary_array([0, 2, 3, 6])
+        >>> # From strings 
+        >>> sig = mh.from_string_array(["hello", "world"])
+        >>> # Batch processing (very fast with Numba!)
+        >>> fps = np.random.randint(0, 2, size=(10000, 2048), dtype=np.uint8)
+        >>> sigs = mh.batch_from_binary_array(fps)
+
     Notes:
         - Binary data uses universal hash function (a*x + b) mod prime
         - String data is hashed to int64 IDs via xxhash64, then uses the same
