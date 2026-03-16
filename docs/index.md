@@ -34,7 +34,7 @@ x, y, s, t = layout_from_lsh_forest(lsh, cfg)
 |----------|-------------|
 | [MinHash Guide](minhash_guide.md) | **Start here!** Understanding MinHash encoding and choosing the right method for your data. |
 | [LSHForest Guide](lshforest_guide.md) | Building the LSH index, query methods, and k-NN graph construction. |
-| [Graph Guide](graph_guide.md) | MST construction from k-NN graphs, Tree traversal, and bias_factor tuning. |
+| [Graph Guide](graph_guide.md) | MST extraction from k-NN graphs and Tree traversal. |
 | [Layout Guide](layout_guide.md) | Visual, conceptual explanation of how TMAP layout works and parameter tuning. |
 | [Visualization Guide](visualization_guide.md) | Creating interactive HTML visualizations with TmapViz. |
 | [API Reference](api_reference.md) | Quick reference for functions, classes, and parameters. |
@@ -44,14 +44,14 @@ x, y, s, t = layout_from_lsh_forest(lsh, cfg)
 ### The Pipeline
 
 ```
-Your Data → MinHash → LSHForest → k-NN Graph → MST → Layout → Visualization
+Your Data -> MinHash -> LSHForest -> k-NN Graph -> MST -> Layout -> Visualization
 ```
 
 1. **MinHash**: Compresses data into compact signatures preserving similarity
 2. **LSHForest**: Builds a searchable index for fast neighbor queries
 3. **k-NN Graph**: Connects each point to its k nearest neighbors
 4. **MST**: Extracts essential tree structure (minimum spanning tree)
-5. **Layout**: Arranges tree in 2D using force-directed algorithm
+5. **Layout**: Arranges the MST in 2D with OGDF's multilevel layout
 
 ### Which Function to Use?
 
@@ -60,7 +60,7 @@ Your Data → MinHash → LSHForest → k-NN Graph → MST → Layout → Visual
 | Most cases | `layout_from_lsh_forest()` | Best connectivity, matches original TMAP |
 | Custom k-NN | `layout_from_knn_graph()` | When you want to inspect/modify k-NN first |
 | Custom edges | `layout_from_edge_list()` | For non-LSH graphs |
-| Modular pipeline | `ForceDirectedLayout` class | When using MSTBuilder separately |
+| Tree analysis from custom k-NN | `tree_from_knn_graph()` | When you need a `Tree` from FAISS, Annoy, or another k-NN source |
 
 ### Common Parameters
 

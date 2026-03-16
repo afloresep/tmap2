@@ -45,6 +45,23 @@ x, y, s, t = layout_from_knn_graph(
 
 ---
 
+### `tree_from_knn_graph`
+
+If you already have a `KNNGraph` and need a `Tree` object for analysis,
+compute the MST through the same OGDF path used by the estimator.
+
+```python
+from tmap.graph import tree_from_knn_graph
+
+tree = tree_from_knn_graph(knn)
+print(tree.n_nodes, len(tree.edges))
+```
+
+**When to use:** When k-NN comes from FAISS, Annoy, or another tool and you want
+tree traversal, distances, or subtree analysis before visualization.
+
+---
+
 ### `layout_from_edge_list`
 
 Low-level function for custom edge lists.
@@ -155,35 +172,6 @@ How layout scales during refinement.
 | `RelativeToAvgLength` | Scale relative to average edge weight |
 | `RelativeToDesiredLength` | Scale relative to desired edge length |
 | `Absolute` | Absolute scaling factor |
-
----
-
-## ForceDirectedLayout Class
-
-Object-oriented interface for the Layout ABC.
-
-```python
-from tmap.layout import ForceDirectedLayout
-
-layout = ForceDirectedLayout(
-    seed=42,                    # Random seed
-    max_iterations=1000,        # fme_iterations
-    placer=Placer.Barycenter,   # Placement strategy
-    merger=Merger.LocalBiconnected,  # Coarsening strategy
-    node_size=1/65,             # Repulsion strength
-    mmm_repeats=1,              # Refinement passes
-    sl_extra_scaling_steps=2,   # Scaling refinement
-    sl_scaling_type=ScalingType.RelativeToDrawing,
-    merger_factor=2.0,          # Coarsening factor
-    config=None,                # Or pass full LayoutConfig
-)
-
-# Compute layout from Tree
-coords = layout.compute(tree)
-print(coords.x, coords.y)
-```
-
-**When to use:** When working with the modular pipeline (MSTBuilder → Layout).
 
 ---
 

@@ -67,9 +67,9 @@ viz.opacity = 0.85                  # Point opacity [0-1]
 x, y, s, t = layout_from_lsh_forest(lsh, cfg)
 viz.set_points(x, y)
 
-# Or from ForceDirectedLayout
-coords = layout.compute(tree)
-viz.set_points(coords.x, coords.y)
+# Or from layout_from_knn_graph if k-NN was computed elsewhere
+x, y, s, t = layout_from_knn_graph(knn, cfg)
+viz.set_points(x, y)
 ```
 
 **Note:** Coordinates are automatically normalized to [-1, 1] for WebGL rendering.
@@ -168,7 +168,7 @@ viz.add_smiles(
 )
 ```
 
-This automatically uses the `smiles.html.j2` template which includes a SMILES renderer.
+The default HTML view renders SMILES structures in the tooltip automatically.
 
 **Note:** Only one SMILES column is supported per visualization.
 
@@ -428,24 +428,20 @@ Categorical colormaps have limited colors. Either:
 
 ## Templates
 
-All templates use binary encoding by default (gzip-compressed typed arrays).
-The base template is selected automatically; specialized templates extend it
-for domain-specific features.
+All HTML output uses binary encoding by default (gzip-compressed typed arrays).
+`base.html.j2` handles the standard interactive visualization, including
+SMILES, image thumbnails, and protein cards when the corresponding metadata
+columns are present.
 
 | Template | Use Case |
 |----------|----------|
-| `base.html.j2` | Default visualization (binary encoded) |
-| `smiles.html.j2` | Molecular structures (auto-selected with SMILES) |
-| `images.html.j2` | Image thumbnails in tooltips (auto-selected with images) |
-| `protein.html.j2` | Protein 3D viewer + UniProt metadata (auto-selected with protein IDs) |
-| `server.html.j2` | Backward-compatible alias to `base.html.j2` |
+| `base.html.j2` | Default visualization, including SMILES/images/proteins |
 | `afdb.html.j2` | AlphaFold DB cluster explorer (extends base template) |
 
-Templates are auto-selected based on registered columns (SMILES, images,
-protein IDs). You can override manually:
+Use `template_name=` only when you explicitly want the AlphaFold DB shell:
 
 ```python
-html = viz.to_html(template_name="smiles.html.j2")
+html = viz.to_html(template_name="afdb.html.j2")
 ```
 
 ---
