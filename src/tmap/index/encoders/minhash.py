@@ -29,7 +29,6 @@ from ._minhash_numba import (
     minhash_batch_from_dense,
     minhash_batch_from_sparse,
 )
-from .base import Encoder
 
 __all__ = [
     "MinHash",
@@ -50,37 +49,17 @@ def _encode_weighted_chunk(
     return signatures
 
 
-class MinHash(Encoder):
-    """
-    MinHash encoder for binary/set data (e.g., molecular fingerprints).
+class MinHash:
+    """MinHash encoder for binary/set data (e.g., molecular fingerprints).
 
-    This implementation automatically selects the optimal backend:
-    - Binary arrays -> Numba JIT (50-100x faster)
+    Automatically selects the optimal backend:
+    - Binary arrays -> Numba JIT
     - String data -> xxhash64 token IDs -> Numba JIT
 
     Args:
         num_perm: Number of permutation functions (hash functions). Higher values
             give more accurate Jaccard similarity estimates but use more memory.
-            Default is 128.
-        seed: Random seed for reproducibility. Using the same seed produces
-            identical signatures for identical inputs.
-
-    Example:
-        >>> mh = MinHash(num_perm=128, seed=42)
-        >>> # From binary fingerprint (uses Numba - fast!)
-        >>> fp = np.array([1, 0, 1, 1, 0, 0, 1, 0], dtype=np.uint8)
-        >>> sig = mh.from_binary_array(fp)
-        >>> # From sparse indices (uses Numba)
-        >>> sig = mh.from_sparse_binary_array([0, 2, 3, 6])
-        >>> # From strings 
-        >>> sig = mh.from_string_array(["hello", "world"])
-        >>> # Batch processing (very fast with Numba!)
-        >>> fps = np.random.randint(0, 2, size=(10000, 2048), dtype=np.uint8)
-        >>> sigs = mh.batch_from_binary_array(fps)
-
-    Performance:
-        With Numba: ~150,000 fingerprints/second (2048-bit, 128 permutations)
-        1M fingerprints in ~6.6 seconds
+        seed: Random seed for reproducibility.
 
     Notes:
         - Binary data uses universal hash function (a*x + b) mod prime
@@ -91,7 +70,6 @@ class MinHash(Encoder):
     """
 
     def __init__(self, num_perm: int = 128, seed: int = 1):
-        super().__init__(num_perm=num_perm, seed=seed)
         self._num_perm = num_perm
         self._seed = seed
 
@@ -381,9 +359,8 @@ class MinHash(Encoder):
         return self._encode_strings([set(s) for s in string_lists])
 
 # for integer/float data
-class WeightedMinHash(Encoder):
-    """
-    Weighted MinHash for float/integer vectors.
+class WeightedMinHash:
+    """Weighted MinHash for float/integer vectors.
 
     Uses consistent weighted sampling to create MinHash signatures that
     estimate weighted Jaccard similarity.
@@ -392,14 +369,9 @@ class WeightedMinHash(Encoder):
         dim: Number of features (must know upfront for generator)
         num_perm: Number of hash permutations
         seed: Random seed for reproducibility
-
-    Note:
-        The original TMAP supported ICWS and I2CWS methods. This implementation
-        uses datasketch's consistent weighted sampling which is similar to ICWS.
     """
 
     def __init__(self, dim: int, num_perm: int = 128, seed: int = 1):
-        super().__init__(num_perm=num_perm, seed=seed)
         self._num_perm = num_perm
         self._seed = seed
         self._dim = dim
@@ -419,7 +391,8 @@ class WeightedMinHash(Encoder):
                 Each signature has 2 values per hash (k, y_k from the algorithm)
         """
         n_samples, n_features = data.shape
-        self._validate_non_negative_vector(data)
+        if not np.all(data > 0):
+            raise ValueError("Vector must contain only positive values")
         if n_features != self._dim:
             raise ValueError(f"Expected {self._dim} features, got {n_features}")
 
