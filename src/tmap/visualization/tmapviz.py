@@ -337,6 +337,9 @@ class TmapViz:
         self._structures_format: str = "pdb"
         self._columns: dict[str, Column] = {}
 
+        # Custom hex colormaps registered via add_color_layout(color=[...] or color={...})
+        self._custom_colormaps: dict[str, list[str]] = {}
+
         # UI configuration (new declarative API)
         self._filterable: list[str] = []
         self._searchable: list[str] = []
@@ -349,13 +352,39 @@ class TmapViz:
         values: list[Any] | NDArray,
         categorical: bool = False,
         add_as_label: bool = True,
-        color: str | None = None,
+        color: str | list[str] | dict[str, str] | None = None,
     ) -> None:
+        """Add a color layout column (continuous or categorical).
 
-        import matplotlib
+        Parameters
+        ----------
+        name : str
+            Column name shown in the layout selector and tooltip.
+        values : list or ndarray
+            One value per point. For categorical layouts these become the
+            legend labels, so you can pass human-readable strings directly
+            (e.g. ``["Bacteria", "Fungi", "Virus", ...]``).
+        categorical : bool, default False
+            If True, treat values as discrete categories.
+        add_as_label : bool, default True
+            Also show values in the hover tooltip.
+        color : str, list of str, dict, or None
+            How to color the points. Accepts three formats:
 
+            - **str** (default): a matplotlib colormap name like ``"tab10"``
+              or ``"viridis"``.
+            - **list of hex strings**: one color per unique category, assigned
+              in the order the categories first appear in *values*.
+              Example: ``["#e41a1c", "#377eb8", "#4daf4a"]``.
+            - **dict mapping value to hex color**: explicit color per category.
+              Example: ``{"Bacteria": "#e41a1c", "Fungi": "#377eb8"}``.
+              Categories not in the dict fall back to gray (``#888888``).
+
+            Custom hex lists and dicts are only supported for categorical
+            layouts. If None, defaults to ``"tab10"`` for categorical and
+            ``"viridis"`` for continuous.
+        """
         if isinstance(values, np.ndarray) and not categorical:
-            # Keep numeric arrays as numpy — avoid costly .tolist()
             values = np.asarray(values, dtype=np.float32)
         elif isinstance(values, np.ndarray):
             values = values.tolist()
@@ -368,10 +397,96 @@ class TmapViz:
             "categorical" if categorical else "continuous"
         )
 
-        # Default colors
+        # Resolve the color parameter into a colormap name (str) that
+        # we can look up later in colormaps_payload.
+        color_key = self._resolve_color(name, color, values, categorical)
+
+        if not categorical and _contains_nan(values):
+            warnings.warn(
+                f"Continuous layout '{name}' contains NaN values. "
+                "NaN points will be rendered in black (#000000).",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        if name not in self._layout_keys:
+            self._layout_keys.append(name)
+
+        if add_as_label:
+            if name not in self._labels_keys:
+                self._labels_keys.append(name)
+            role: Literal["layout", "layout+label"] = "layout+label"
+        else:
+            if name in self._labels_keys:
+                self._labels_keys.remove(name)
+            role = "layout"
+
+        self._columns[name] = Column(name, values, role, _column_dtype, color=color_key)
+
+    def _resolve_color(
+        self,
+        column_name: str,
+        color: str | list[str] | dict[str, str] | None,
+        values: list[Any] | NDArray,
+        categorical: bool,
+    ) -> str:
+        """Turn the user-supplied color argument into a colormap key.
+
+        For matplotlib colormap names the key is the name itself.
+        For custom hex lists or dicts we store the colors under a
+        synthetic key in self._custom_colormaps and return that key.
+        """
+        import matplotlib
+
+        # Default
         if color is None:
             color = "tab10" if categorical else "viridis"
 
+        # dict {value: hex} -> convert to ordered hex list 
+        if isinstance(color, dict):
+            if not categorical:
+                raise ValueError(
+                    "A color dict mapping values to hex colors is only "
+                    "supported for categorical layouts (categorical=True)."
+                )
+            # Determine category order (first-appearance order in values)
+            seen: dict[str, int] = {}
+            for v in values:
+                s = str(v)
+                if s not in seen:
+                    seen[s] = len(seen)
+            # Build hex list in that order, falling back to gray
+            hex_list = [
+                _normalize_hex_color(color.get(cat, color.get(cat, "#888888")))
+                for cat in seen
+            ]
+            color = hex_list  # fall through to list handling
+
+        # list of hex strings -> store as custom colormap 
+        if isinstance(color, list):
+            if not categorical:
+                raise ValueError(
+                    "A list of hex colors is only supported for "
+                    "categorical layouts (categorical=True)."
+                )
+            hex_colors = [_normalize_hex_color(c) for c in color]
+
+            unique_count = len(set(str(v) for v in values))
+            if len(hex_colors) < unique_count:
+                warnings.warn(
+                    f"Categorical layout '{column_name}' has {unique_count} "
+                    f"unique values but only {len(hex_colors)} custom colors "
+                    f"were provided. Colors will cycle.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                hex_colors = [hex_colors[i % len(hex_colors)] for i in range(unique_count)]
+
+            key = f"_custom_{column_name}"
+            self._custom_colormaps[key] = hex_colors
+            return key
+
+        # string: matplotlib colormap name 
         if color not in COLORMAPS:
             raise ValueError(f"Color option not found. Choose from {list(matplotlib.colormaps)}")
 
@@ -401,34 +516,14 @@ class TmapViz:
             cmap_size = matplotlib.colormaps[color].N
             if unique_count > cmap_size:
                 warnings.warn(
-                    f"Categorical layout '{name}' has {unique_count} unique values but "
+                    f"Categorical layout '{column_name}' has {unique_count} unique values but "
                     f"colormap '{color}' only provides {cmap_size} colors. "
                     f"Colors will cycle.",
                     UserWarning,
                     stacklevel=2,
                 )
 
-        if not categorical and _contains_nan(values):
-            warnings.warn(
-                f"Continuous layout '{name}' contains NaN values. "
-                "NaN points will be rendered in black (#000000).",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        if name not in self._layout_keys:
-            self._layout_keys.append(name)
-
-        if add_as_label:
-            if name not in self._labels_keys:
-                self._labels_keys.append(name)
-            role: Literal["layout", "layout+label"] = "layout+label"
-        else:
-            if name in self._labels_keys:
-                self._labels_keys.remove(name)
-            role = "layout"
-
-        self._columns[name] = Column(name, values, role, _column_dtype, color=color)
+        return color
 
     def add_label(
         self,
@@ -1126,7 +1221,8 @@ class TmapViz:
         # Pack columns
         columns_b64: dict[str, str] = {}
         columns_meta: dict[str, dict[str, Any]] = {}
-        colormaps_payload: dict[str, list[str]] = {}
+        # Seed with custom hex colormaps so _colormap_to_hex is not called for them
+        colormaps_payload: dict[str, list[str]] = dict(self._custom_colormaps)
 
         for name, col in self._columns.items():
             colormap_name = col.color if col.role in ("layout", "layout+label") else None
@@ -1331,7 +1427,7 @@ class TmapViz:
 
         # Columns
         columns_meta: dict[str, dict[str, Any]] = {}
-        colormaps_payload: dict[str, list[str]] = {}
+        colormaps_payload: dict[str, list[str]] = dict(self._custom_colormaps)
 
         for name, col in self._columns.items():
             colormap_name = col.color if col.role in ("layout", "layout+label") else None
