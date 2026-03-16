@@ -16,12 +16,10 @@ API Compatibility:
 import os
 from collections.abc import Collection, Sequence
 from concurrent.futures import ProcessPoolExecutor
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
-from datasketch.weighted_minhash import (  
-    WeightedMinHashGenerator as _WeightedMinHashGenerator,
-)
+from datasketch.weighted_minhash import WeightedMinHashGenerator as _WeightedMinHashGenerator
 from numpy.typing import NDArray
 import xxhash
 
@@ -93,6 +91,7 @@ class MinHash(Encoder):
     """
 
     def __init__(self, num_perm: int = 128, seed: int = 1):
+        super().__init__(num_perm=num_perm, seed=seed)
         self._num_perm = num_perm
         self._seed = seed
 
@@ -200,10 +199,6 @@ class MinHash(Encoder):
     # Alias for backward compatibility
     jaccard_distance = get_distance
 
-    def _binary_to_sets(self, vectors: NDArray[Any]) -> list[set[int]]:
-        """Convert binary vectors to sets of 'on' indices."""
-        return [set(np.where(row)[0]) for row in vectors]
-
     def from_binary_array(self, arr: NDArray[np.uint8] | list[int]) -> NDArray[np.uint64]:
         """
         Create a MinHash signature from a single binary vector.
@@ -251,40 +246,37 @@ class MinHash(Encoder):
                 1,
             )[0],
         )
-    
-    def _encode_strings(self, sets: list[set]) -> NDArray[np.uint64]: 
-        """_summary_
 
-        Args:
-            sets (list[set]): batch of samples, each sample is a set of
-            unique string tokens. 
+    def _encode_strings(self, sets: list[set[str]]) -> NDArray[np.uint64]:
+        """Encode batches of string tokens through the sparse MinHash path."""
+        cache: dict[str, int] = {}
+        #CSR
+        indices_flat: list[int] = []
+        offsets = [0]
+        n_tokens = 0
 
-        Returns:
-            NDArray[np.uint64]: _description_
-        """
-        cache = {}
-        #CSR flat arrays
-        indices_flat = []
-        offsets= [0]
-
-        # Cache  
-        i = 0
         for token_set in sets:
-            for sample in token_set:
-                i+=1
-                if sample not in cache:
+            for token in token_set:
+                n_tokens += 1
+                if token not in cache:
                     # xxhas64 could be up to 2^64 but numpy int64 holds up to  2^63 -1
                     # so mask to 63 bits ANDing the number 
-                    cache[sample] = (xxhash.xxh64_intdigest(str(sample)) & 0x7FFFFFFFFFFFFFFF)
-                indices_flat.append(cache[sample])
-            offsets.append(i)
-        n_samples = len(sets)
+                    
+                    cache[token] = xxhash.xxh64_intdigest(token) & 0x7FFFFFFFFFFFFFFF
+                indices_flat.append(cache[token])
+            offsets.append(n_tokens)
 
-        return minhash_batch_from_sparse(np.array(indices_flat, dtype=np.int64), np.array(offsets, dtype=np.int64), 
-                                         self._a, 
-                                         self._b, 
-                                         self._num_perm, 
-                                         n_samples)
+        return cast(
+            NDArray[np.uint64],
+            minhash_batch_from_sparse(
+                np.array(indices_flat, dtype=np.int64),
+                np.array(offsets, dtype=np.int64),
+                self._a,
+                self._b,
+                self._num_perm,
+                len(sets),
+            ),
+        )
 
     def from_string_array(self, strings: Sequence[str]) -> NDArray[np.uint64]:
         """
@@ -307,7 +299,7 @@ class MinHash(Encoder):
         if not all(isinstance(x, str) for x in strings):
             raise ValueError("All elements must be strings")
 
-        return cast(NDArray[np.uint64],self._encode_strings([set(strings)])[0])
+        return cast(NDArray[np.uint64], self._encode_strings([set(strings)])[0])
 
     # Batch methods
     def batch_from_binary_array(
@@ -407,6 +399,7 @@ class WeightedMinHash(Encoder):
     """
 
     def __init__(self, dim: int, num_perm: int = 128, seed: int = 1):
+        super().__init__(num_perm=num_perm, seed=seed)
         self._num_perm = num_perm
         self._seed = seed
         self._dim = dim
