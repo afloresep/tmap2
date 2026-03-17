@@ -16,9 +16,10 @@ from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
 
-# default params
+# default params (set via worker initializers for multiprocessing)
 _FP_RADIUS: int = 2
 _FP_NBITS: int = 1024
+_DRFP_PARAMS: dict[str, Any] = {}
 _PROP_NAMES: list[str] = []
 
 AVAILABLE_PROPERTIES: list[str] = [
@@ -50,6 +51,18 @@ def _init_fp_worker(radius: int, n_bits: int) -> None:
     global _FP_RADIUS, _FP_NBITS
     _FP_RADIUS = radius
     _FP_NBITS = n_bits
+
+
+def _init_drfp_worker(
+    n_folded_length: int, radius: int, min_radius: int, rings: bool
+) -> None:
+    global _DRFP_PARAMS
+    _DRFP_PARAMS = {
+        "n_folded_length": n_folded_length,
+        "radius": radius,
+        "min_radius": min_radius,
+        "rings": rings,
+    }
 
 
 def _init_props_worker(prop_names: list[str]) -> None:
@@ -106,6 +119,14 @@ def _mxfp_fp_batch(smiles_batch: list[str]) -> NDArray[np.int64]:
     if fps:
         return np.stack(fps)
     return np.empty((0, 217), dtype=np.int64)
+
+
+def _drfp_fp_batch(smiles_batch: list[str]) -> NDArray[np.uint8]:
+    """Process a batch of reaction SMILES, return DRFP fingerprints for the batch."""
+    from drfp import DrfpEncoder
+
+    fps_list = DrfpEncoder.encode(smiles_batch, **_DRFP_PARAMS)
+    return np.array(fps_list, dtype=np.uint8)
 
 
 # Property batch functions (called inside Pool workers)
@@ -218,41 +239,6 @@ def _split_into_chunks(lst: list[Any], n_chunks: int) -> list[list[Any]]:
 
 # Fingerprint helpers with built-in parallelization (no Pool wrapper)
 
-def _drfp_fingerprints(
-    smiles: list[str], n_workers: int, **kwargs: Any
-) -> NDArray[np.uint8]:
-    """Compute DRFP reaction fingerprints using the drfp package.
-
-    DRFP (Differential Reaction Fingerprint) encodes chemical reactions
-    by extracting circular substructures from reactants and products,
-    computing their symmetric difference, and hashing into a fixed-length
-    binary vector.
-
-    Uses drfp's built-in joblib parallelization via ``n_jobs``.
-    """
-    try:
-        from drfp import DrfpEncoder
-    except ImportError:
-        raise ImportError(
-            "drfp is required for fp_type='drfp'. Install with: pip install drfp"
-        ) from None
-
-    n_folded_length = kwargs.get("n_folded_length", 2048)
-    radius = kwargs.get("radius", 3)
-    min_radius = kwargs.get("min_radius", 0)
-    rings = kwargs.get("rings", True)
-
-    fps_list = DrfpEncoder.encode(
-        smiles,
-        n_folded_length=n_folded_length,
-        radius=radius,
-        min_radius=min_radius,
-        rings=rings,
-        n_jobs=n_workers,
-    )
-    return np.array(fps_list, dtype=np.uint8)
-
-
 def _map4_fingerprints(
     smiles: list[str], n_workers: int, **kwargs: Any
 ) -> NDArray[np.uint8]:
@@ -364,13 +350,11 @@ def fingerprints_from_smiles(
         n_workers = _default_n_workers()
     n_workers = min(n_workers, n)
 
-    # Fingerprints with built-in parallelization (no Pool needed)
-    if fp_type == "drfp":
-        return _drfp_fingerprints(smiles, n_workers=n_workers, **kwargs)
+    # MAP4 has built-in parallelization via calculate_many()
     if fp_type == "map4":
         return _map4_fingerprints(smiles, n_workers=n_workers, **kwargs)
 
-    # Fingerprints using our Pool wrapper
+    # All other fingerprints use our Pool wrapper
     ctx = _get_mp_context()
     chunks = _split_into_chunks(smiles, n_workers)
 
@@ -389,6 +373,21 @@ def fingerprints_from_smiles(
             )
         with ctx.Pool(n_workers) as pool:
             batch_results = pool.map(_mxfp_fp_batch, chunks)
+    elif fp_type == "drfp":
+        if importlib.util.find_spec("drfp") is None:
+            raise ImportError(
+                "drfp is required for fp_type='drfp'. Install with: pip install drfp"
+            )
+        n_folded_length = kwargs.get("n_folded_length", 2048)
+        drfp_radius = kwargs.get("radius", 3)
+        min_radius = kwargs.get("min_radius", 0)
+        rings = kwargs.get("rings", True)
+        with ctx.Pool(
+            n_workers,
+            initializer=_init_drfp_worker,
+            initargs=(n_folded_length, drfp_radius, min_radius, rings),
+        ) as pool:
+            batch_results = pool.map(_drfp_fp_batch, chunks)
     else:
         raise ValueError(
             f"Unsupported fp_type={fp_type!r}. "
