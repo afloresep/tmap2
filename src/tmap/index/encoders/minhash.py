@@ -109,6 +109,12 @@ class MinHash:
         """
         # Fast path: binary numpy array with Numba
         if isinstance(data, np.ndarray):
+            if data.ndim == 1:
+                raise ValueError(
+                    "encode() received a 1D array. If this is a single binary "
+                    "vector, reshape to (1, n_features). If these are element "
+                    "IDs, use from_sparse_binary_array() instead."
+                )
             return self._encode_binary_numba(data)
 
         if isinstance(data, list) and all(isinstance(s, set) for s in data):
@@ -124,7 +130,25 @@ class MinHash:
                 break
 
         if first_elem is not None and isinstance(first_elem, str):
+            # Validate all elements are strings
+            for s in sets:
+                bad = [e for e in s if not isinstance(e, str)]
+                if bad:
+                    raise TypeError(
+                        f"Sets contain mixed types. First non-string element: "
+                        f"{bad[0]!r} ({type(bad[0]).__name__}). "
+                        f"All elements must be the same type (all str or all int)."
+                    )
             return self._encode_strings(sets)
+
+        # Validate all elements are numeric (not strings mixed in)
+        for s in sets:
+            for e in s:
+                if isinstance(e, str):
+                    raise TypeError(
+                        f"Sets contain mixed types: found str {e!r} in an "
+                        f"integer set. All elements must be the same type."
+                    )
 
         # Integer sets -> sparse numba path (integers are already valid IDs)
         return self.batch_from_sparse_binary_array([list(s) for s in sets])
@@ -225,6 +249,11 @@ class MinHash:
                 raise ValueError("indices must be a 1D sequence of ints, not a nested sequence")
 
         indices_arr = np.array(indices, dtype=np.int64)
+        if indices_arr.size > 0 and indices_arr.min() < 0:
+            raise ValueError(
+                "Indices must be non-negative. "
+                f"Got minimum index {indices_arr.min()}."
+            )
         offsets = np.array([0, len(indices)], dtype=np.int64)
         return cast(
             NDArray[np.uint64],
@@ -343,6 +372,22 @@ class MinHash:
         indices_flat = np.empty(total_nnz, dtype=np.int64)
         for i, indices in enumerate(indices_list):
             indices_flat[offsets[i] : offsets[i + 1]] = indices
+
+        # Validate: reject non-integer floats and negative indices
+        if total_nnz > 0:
+            if indices_flat.min() < 0:
+                raise ValueError(
+                    "Indices must be non-negative. "
+                    f"Got minimum index {indices_flat.min()}."
+                )
+            # Check original values for float truncation
+            for seq in indices_list:
+                for val in seq:
+                    if isinstance(val, float) and val != int(val):
+                        raise TypeError(
+                            f"Sparse indices must be integers, got float {val}. "
+                            f"Non-integer floats would be silently truncated."
+                        )
 
         return cast(
             NDArray[np.uint64],

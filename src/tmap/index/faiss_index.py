@@ -290,6 +290,12 @@ class FaissIndex:
         return index
 
     def _query_all(self, k: int) -> KNNGraph:
+        if self._vectors is None:
+            raise RuntimeError(
+                "Cannot call query_knn() on a loaded index: the original "
+                "vectors were not saved. Rebuild the index with "
+                "build_from_vectors() or use query_point()/query_batch() instead."
+            )
         n = self._vectors.shape[0]
         distances, indices = self._faiss_index.search(self._vectors, k + 1)
 

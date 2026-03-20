@@ -560,7 +560,10 @@ class LSHForest:
         max_candidates = k * kc
 
         # Compute hash bands for the external signatures
-        query_bands = compute_hash_bands(signatures, self._l, self._k)
+        if self._weighted:
+            query_bands = compute_hash_bands_weighted(signatures, self._l, self._k)
+        else:
+            query_bands = compute_hash_bands(signatures, self._l, self._k)
 
         # Batch LSH candidate retrieval (Numba-parallel)
         all_candidates, candidate_counts = query_lsh_forest_batch(
