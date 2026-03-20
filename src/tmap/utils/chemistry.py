@@ -80,6 +80,8 @@ def _morgan_fp_batch(smiles_batch: list[str]) -> NDArray[np.uint8]:
     gen = rdFingerprintGenerator.GetMorganGenerator(radius=_FP_RADIUS, fpSize=_FP_NBITS)
     fps = []
     for smi in smiles_batch:
+        if not smi:
+            continue
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             fps.append(gen.GetFingerprintAsNumPy(mol).astype(np.uint8))
@@ -95,6 +97,8 @@ def _mqn_fp_batch(smiles_batch: list[str]) -> NDArray[np.int16]:
 
     fps = []
     for smi in smiles_batch:
+        if not smi:
+            continue
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             fps.append(np.array(rdMolDescriptors.MQNs_(mol), dtype=np.int16))
@@ -110,6 +114,8 @@ def _mxfp_fp_batch(smiles_batch: list[str]) -> NDArray[np.int64]:
     calc = MXFPCalculator()
     fps = []
     for smi in smiles_batch:
+        if not smi:
+            continue
         try:
             fp = calc.mxfp_from_smiles(smi)
             if fp is not None:
@@ -125,7 +131,11 @@ def _drfp_fp_batch(smiles_batch: list[str]) -> NDArray[np.uint8]:
     """Process a batch of reaction SMILES, return DRFP fingerprints for the batch."""
     from drfp import DrfpEncoder
 
-    fps_list = DrfpEncoder.encode(smiles_batch, **_DRFP_PARAMS)
+    clean = [smi for smi in smiles_batch if smi]
+    if not clean:
+        n_bits = _DRFP_PARAMS.get("n_folded_length", 2048)
+        return np.empty((0, n_bits), dtype=np.uint8)
+    fps_list = DrfpEncoder.encode(clean, **_DRFP_PARAMS)
     return np.array(fps_list, dtype=np.uint8)
 
 
@@ -155,6 +165,8 @@ def _mol_props_batch(smiles_batch: list[str]) -> NDArray[np.float64]:
     props = _PROP_NAMES
     out = np.full((len(smiles_batch), len(props)), np.nan, dtype=np.float64)
     for i, smi in enumerate(smiles_batch):
+        if not smi:
+            continue
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             for j, name in enumerate(props):
@@ -171,6 +183,8 @@ def _rxn_props_batch(rxn_smiles_batch: list[str]) -> NDArray[np.float64]:
     out = np.full((len(rxn_smiles_batch), len(props)), np.nan, dtype=np.float64)
 
     for i, rxn in enumerate(rxn_smiles_batch):
+        if not rxn:
+            continue
         # Split reaction SMILES: reactants>reagents>products or reactants>>products
         parts = rxn.split(">")
         if len(parts) < 2:
@@ -267,6 +281,8 @@ def _map4_fingerprints(
 
     mols = []
     for smi in smiles:
+        if not smi:
+            continue
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             mols.append(mol)
@@ -342,9 +358,19 @@ def fingerprints_from_smiles(
     >>> fps.dtype
     dtype('int16')
     """
+    # Canonical shapes/dtypes per fp_type for empty returns
+    _EMPTY_SHAPES = {
+        "morgan": (2048, np.uint8),
+        "mqn": (42, np.int16),
+        "mxfp": (217, np.int64),
+        "drfp": (kwargs.get("n_folded_length", 2048), np.uint8),
+        "map4": (kwargs.get("dimensions", 1024), np.uint8),
+    }
+
     n = len(smiles)
     if n == 0:
-        return np.empty((0, 0), dtype=np.uint8)
+        ncols, dt = _EMPTY_SHAPES.get(fp_type, (0, np.uint8))
+        return np.empty((0, ncols), dtype=dt)
 
     if n_workers is None:
         n_workers = _default_n_workers()
@@ -396,7 +422,8 @@ def fingerprints_from_smiles(
 
     fps_parts = [r for r in batch_results if len(r) > 0]
     if not fps_parts:
-        return np.empty((0, 0), dtype=np.uint8)
+        ncols, dt = _EMPTY_SHAPES.get(fp_type, (0, np.uint8))
+        return np.empty((0, ncols), dtype=dt)
 
     fps = np.concatenate(fps_parts)
     n_valid = len(fps)
@@ -416,6 +443,9 @@ def _scaffolds_batch(smiles_batch: list[str]) -> list[str]:
 
     out: list[str] = []
     for smi in smiles_batch:
+        if not smi:
+            out.append("")
+            continue
         mol = Chem.MolFromSmiles(smi)
         if mol is not None:
             try:

@@ -723,6 +723,9 @@ def sequence_properties(
     n_invalid = 0
 
     for i, seq in enumerate(sequences):
+        if seq is None:
+            n_invalid += 1
+            continue
         seq_upper = seq.upper()
         if _is_valid_sequence(seq_upper):
             for j, name in enumerate(properties):
