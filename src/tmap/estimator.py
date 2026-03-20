@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import pickle
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self, Tuple
 
@@ -30,12 +31,13 @@ def _resolve_ann_backend(seed: int | None = None) -> Any:
     """
     try:
         import faiss  # noqa: F401
-    except ImportError:
+    except (ImportError, AttributeError) as exc:
         raise ImportError(
             "metric='cosine' and metric='euclidean' require faiss. "
-            "Install with:\n  pip install faiss or \
-                conda install faiss (recommended for MacOS (arm64)"
-        )
+            "Install with:\n  pip install faiss-cpu\n"
+            "or:  conda install faiss  (recommended for MacOS arm64)\n"
+            f"Original error: {exc}"
+        ) from exc
 
     from tmap.index.faiss_index import FaissIndex
 
@@ -179,6 +181,8 @@ class TMAP:
         self._tree: Tree | None = None
         self._graph: KNNGraph | None = None
         self._lsh_forest: LSHForest | None = None
+        self._n_features: int | None = None
+        self._jaccard_mode: str | None = None  # "binary", "sets", or "strings"
 
     def fit(
         self,
@@ -195,8 +199,10 @@ class TMAP:
         if knn_graph is not None:
             knn = knn_graph
             self._lsh_forest = None
+            self._n_features = None
         elif self.metric == "jaccard":
-            signatures, n_samples = self._encode_jaccard(X)
+            signatures, n_samples, n_features = self._encode_jaccard(X)
+            self._n_features = n_features
 
             lsh_l = _select_lsh_l(self.n_permutations, n_samples)
             forest = LSHForest(d=self.n_permutations, l=lsh_l)
@@ -204,11 +210,33 @@ class TMAP:
             del signatures  # forest has its own copy
             forest.index()
             knn = forest.get_knn_graph(k=self.n_neighbors, kc=self.kc)
+
+            # B01: validate kNN graph quality after LSH retrieval
+            n_missing = int(np.sum(knn.indices == -1))
+            n_total = knn.indices.size
+            if n_total > 0 and n_missing == n_total:
+                raise ValueError(
+                    "kNN graph is completely empty (all neighbors are -1). "
+                    "The data may be too sparse for LSH to find any neighbors. "
+                    "Try increasing kc, n_permutations, or check that input "
+                    "rows have sufficient overlap."
+                )
+            if n_total > 0 and n_missing / n_total > 0.9:
+                warnings.warn(
+                    f"kNN graph is very sparse: {n_missing}/{n_total} neighbor "
+                    f"slots are empty (-1). Embedding quality may be poor. "
+                    f"Consider increasing kc (currently {self.kc}) or "
+                    f"n_permutations (currently {self.n_permutations}).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
             self._lsh_forest = forest
         elif self.metric == "precomputed":
             distance_matrix = self._coerce_distance_matrix(X)
             knn = KNNGraph.from_distance_matrix(distance_matrix, k=self.n_neighbors)
             self._lsh_forest = None
+            self._n_features = None
         elif self.metric in {"cosine", "euclidean"}:
             X_dense = self._coerce_dense_matrix(X)
             if self.n_neighbors >= X_dense.shape[0]:
@@ -219,6 +247,7 @@ class TMAP:
             index.build_from_vectors(X_dense, metric=self.metric)
             knn = index.query_knn(k=self.n_neighbors)
             self._lsh_forest = None
+            self._n_features = X_dense.shape[1]
             self._index = index if self.store_index else None
         else:
             # Defensive fallback; __init__ already validates metrics.
@@ -601,7 +630,21 @@ class TMAP:
         k = self.n_neighbors
 
         if self.metric == "jaccard":
+            # B02: reject add_points when fit used incompatible encoding
+            if self._jaccard_mode in ("sets", "strings"):
+                raise TypeError(
+                    f"add_points() requires a binary matrix, but fit() used "
+                    f"{self._jaccard_mode} input. add_points() is only supported "
+                    f"when fit() was called with a binary array, DataFrame, or "
+                    f"sparse matrix."
+                )
             binary = self._coerce_binary_matrix(X, min_samples=0)
+            # B02: validate feature dimensions match what fit() saw
+            if self._n_features is not None and binary.shape[1] != self._n_features:
+                raise ValueError(
+                    f"Feature dimension mismatch: fit() saw {self._n_features} "
+                    f"features, but add_points() received {binary.shape[1]}."
+                )
             m = binary.shape[0]
             if m == 0:
                 return (
@@ -645,6 +688,12 @@ class TMAP:
                     "to use add_points() with metric={!r}.".format(self.metric)
                 )
             X_dense = self._coerce_dense_matrix(X, min_samples=0)
+            # B02: validate feature dimensions match what fit() saw
+            if self._n_features is not None and X_dense.shape[1] != self._n_features:
+                raise ValueError(
+                    f"Feature dimension mismatch: fit() saw {self._n_features} "
+                    f"features, but add_points() received {X_dense.shape[1]}."
+                )
             m = X_dense.shape[0]
             if m == 0:
                 return (
@@ -669,6 +718,11 @@ class TMAP:
 
         elif self.metric == "precomputed":
             dist_matrix = np.asarray(X, dtype=np.float32)
+            # B03: reject non-finite distances (matches fit() validation)
+            if not np.all(np.isfinite(dist_matrix)):
+                raise ValueError(
+                    "Distance matrix for add_points() contains NaN or Inf values."
+                )
             if dist_matrix.ndim != 2:
                 raise ValueError(
                     "metric='precomputed' expects a 2D distance matrix (m_new, n_existing)."
@@ -860,33 +914,67 @@ class TMAP:
             config.seed = self.seed
         return config
 
-    def _encode_jaccard(self, X: Any) -> tuple[NDArray[np.uint64], int]:
+    def _encode_jaccard(self, X: Any) -> tuple[NDArray[np.uint64], int, int | None]:
         """Detect input type for metric='jaccard' and return MinHash signatures.
 
         Supports three input formats:
         - 2D binary array (n_samples, n_features) ->  batch_from_binary_array
+        - scipy sparse matrix -> efficient row-wise sparse encoding
+        - pandas DataFrame -> converted to ndarray
         - list of string sequences ->  batch_from_string_array
         - list of integer sequences ->  batch_from_sparse_binary_array
 
         Returns:
-            (signatures, n_samples)
+            (signatures, n_samples, n_features)
+            n_features is None for list-of-sets/strings (variable width).
         """
         if X is None:
             raise ValueError("X cannot be None for metric='jaccard'.")
 
         encoder = MinHash(num_perm=self.n_permutations, seed=self.minhash_seed)
 
+        # scipy sparse -> encode directly from sparse indices (avoids full densification)
+        if hasattr(X, "tocsr"):
+            import scipy.sparse as sp
+
+            csr = sp.csr_matrix(X)
+            n_samples, n_features = csr.shape
+            if self.n_neighbors >= n_samples:
+                raise ValueError(
+                    f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
+                )
+            # Enforce binary values (same as dense path)
+            if csr.nnz > 0 and not np.all(csr.data == 1):
+                raise ValueError(
+                    "Sparse matrix must contain only binary (0/1) values. "
+                    "Non-zero entries other than 1 were found."
+                )
+            # Extract per-row nonzero column indices
+            indices_list = [
+                csr.indices[csr.indptr[i] : csr.indptr[i + 1]].tolist()
+                for i in range(n_samples)
+            ]
+            signatures = encoder.batch_from_sparse_binary_array(indices_list)
+            self._jaccard_mode = "binary"
+            return signatures, n_samples, n_features
+
+        # pandas DataFrame -> ndarray
+        if hasattr(X, "values") and not isinstance(X, np.ndarray):
+            X = X.values
+
         # 2D numpy array ->  binary path
         if isinstance(X, np.ndarray):
             binary_matrix = self._coerce_binary_matrix(X)
             n_samples = binary_matrix.shape[0]
+            n_features = binary_matrix.shape[1]
             if self.n_neighbors >= n_samples:
                 raise ValueError(
                     f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
                 )
             signatures = encoder.batch_from_binary_array(binary_matrix)
             del binary_matrix
-            return signatures, n_samples
+            self._jaccard_mode = "binary"
+            return signatures, n_samples, n_features
 
         if not isinstance(X, (list, tuple)) or len(X) < 2:
             raise ValueError(
@@ -917,14 +1005,21 @@ class TMAP:
 
         if first_elem is not None and isinstance(first_elem, str):
             signatures = encoder.batch_from_string_array(X)
+            self._jaccard_mode = "strings"
         else:
             signatures = encoder.batch_from_sparse_binary_array(X)
+            self._jaccard_mode = "sets"
 
-        return signatures, n_samples
+        return signatures, n_samples, None
 
     def _coerce_binary_matrix(self, X: Any | None, min_samples: int = 2) -> NDArray[np.uint8]:
         if X is None:
             raise ValueError("X cannot be None for metric='jaccard'.")
+        # Convert array-like inputs (DataFrames, sparse matrices)
+        if hasattr(X, "toarray"):
+            X = X.toarray()
+        elif hasattr(X, "values") and not isinstance(X, np.ndarray):
+            X = X.values
         arr = np.asarray(X)
         if arr.ndim != 2:
             raise ValueError(

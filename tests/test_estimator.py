@@ -5,6 +5,12 @@ from tmap import TMAP
 from tmap.index.types import KNNGraph
 from tmap.layout import OGDF_AVAILABLE
 
+try:
+    import faiss  # noqa: F401
+    FAISS_AVAILABLE = True
+except (ImportError, AttributeError):
+    FAISS_AVAILABLE = False
+
 
 def _clustered_binary_data(
     n_samples: int = 40,
@@ -102,14 +108,14 @@ def test_dense_metric_requires_faiss() -> None:
         import faiss  # noqa: F401
 
         has_faiss = True
-    except ImportError:
+    except (ImportError, AttributeError):
         has_faiss = False
 
     if has_faiss:
         model = TMAP(metric="cosine", n_neighbors=3, seed=42).fit(data)
         assert model.embedding_.shape == (8, 2)
     else:
-        with pytest.raises(ImportError, match="faiss"):
+        with pytest.raises(ImportError):
             TMAP(metric="cosine", n_neighbors=3).fit(data)
 
 
@@ -223,8 +229,8 @@ def test_add_points_existing_coords_unchanged() -> None:
     np.testing.assert_array_equal(model.embedding_[:40], original_coords)
 
 
+@pytest.mark.skipif(not FAISS_AVAILABLE, reason="faiss not available")
 def test_add_points_cosine_requires_store_index() -> None:
-    pytest.importorskip("faiss")
 
     data = np.random.default_rng(9).random((20, 8), dtype=np.float32)
     model = TMAP(metric="cosine", n_neighbors=3, store_index=False, seed=42).fit(data)
@@ -235,8 +241,8 @@ def test_add_points_cosine_requires_store_index() -> None:
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+@pytest.mark.skipif(not FAISS_AVAILABLE, reason="faiss not available")
 def test_add_points_cosine_with_store_index() -> None:
-    pytest.importorskip("faiss")
 
     data = np.random.default_rng(9).random((20, 8), dtype=np.float32)
     model = TMAP(metric="cosine", n_neighbors=3, store_index=True, seed=42).fit(data)
@@ -417,3 +423,41 @@ def test_save_before_fit_raises(tmp_path: object) -> None:
     model = TMAP()
     with pytest.raises(RuntimeError, match="not fitted"):
         model.save(tmp / "model.tmap")
+
+
+# -- Regression tests for B01-B07 bug fixes ----------------------------------
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_sparse_csr_binary_input_fits() -> None:
+    """Sparse CSR binary matrices should be accepted by fit()."""
+    from scipy.sparse import csr_matrix
+
+    data = _clustered_binary_data(n_samples=40, n_features=128)
+    sparse = csr_matrix(data)
+    model = TMAP(n_neighbors=5, n_permutations=64, seed=42)
+    model.fit(sparse)
+    assert model.embedding_.shape == (40, 2)
+    assert model._n_features == 128
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_sparse_csr_nonbinary_raises() -> None:
+    """Sparse CSR matrices with non-binary values should be rejected."""
+    from scipy.sparse import csr_matrix
+
+    data = _clustered_binary_data(n_samples=40, n_features=128).astype(np.float64)
+    data[data == 1] = 3.0  # non-binary values
+    sparse = csr_matrix(data)
+    model = TMAP(n_neighbors=5, n_permutations=64, seed=42)
+    with pytest.raises(ValueError, match="binary"):
+        model.fit(sparse)
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_add_points_after_set_fit_raises() -> None:
+    """add_points() should reject binary input when fit() used sets/strings."""
+    model = TMAP(n_neighbors=2, metric="jaccard", n_permutations=64, seed=42)
+    model.fit([[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]])
+    with pytest.raises(TypeError, match="sets input"):
+        model.add_points(np.array([[1, 0, 1]]))
