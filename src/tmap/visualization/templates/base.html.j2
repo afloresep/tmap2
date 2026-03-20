@@ -1262,10 +1262,7 @@ if (hasEdges) {
     if (edgeNeedsRedraw || (event && event.isViewChanged)) renderEdges();
   });
 
-  window.addEventListener('resize', () => {
-    resizeEdgeCanvas();
-    renderEdges();
-  });
+  // Edge resize is handled by the unified resize handler below.
 
   async function toggleEdges() {
     edgesVisible = !edgesVisible;
@@ -1362,13 +1359,17 @@ async function applyColor(columnName) {
   updateLegend(columnName, col);
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 function formatValue(val) {
   if (typeof val === 'number') {
     const abs = Math.abs(val);
     if (abs >= 1000 || (abs > 0 && abs < 0.01)) return val.toExponential(2);
     return val.toFixed(3);
   }
-  return String(val);
+  return escapeHtml(val);
 }
 
 function buildGradient(colors) {
@@ -1400,7 +1401,7 @@ function updateLegend(columnName, col) {
     let html = '';
     for (let i = 0; i < sortedItems.length; i++) {
       html += '<div class="legend-item"><span class="legend-swatch" style="background:' +
-        cmap[i % cmap.length] + '"></span><span>' + sortedItems[i] + '</span></div>';
+        cmap[i % cmap.length] + '"></span><span>' + escapeHtml(sortedItems[i]) + '</span></div>';
     }
     legendContent.innerHTML = html;
   } else {
@@ -1435,7 +1436,7 @@ function showTooltip(idx) {
     const col = columns[name];
     if (!col) continue;
     const val = col.values[idx];
-    html += '<div class="row"><span class="key">' + name + '</span><span class="value">' + formatValue(val) + '</span></div>';
+    html += '<div class="row"><span class="key">' + escapeHtml(name) + '</span><span class="value">' + formatValue(val) + '</span></div>';
   }
   tooltipContent.innerHTML = html;
 
@@ -1454,10 +1455,17 @@ function hideTooltip() { tooltip.classList.remove('visible'); }
 scatterplot.subscribe('pointover', (idx) => showTooltip(idx));
 scatterplot.subscribe('pointout', hideTooltip);
 
-// Resize
+// Resize — unified handler for scatterplot, edges, and UI.
+// Use window.innerWidth/Height because scatterplot.set() overwrites
+// the canvas CSS to fixed pixels, so getBoundingClientRect() would
+// return the stale old size.  set() internally updates canvas pixel
+// dimensions, scale ranges, and queues a redraw; the 'drawing' event
+// then triggers edge redraw via edgeNeedsRedraw.
 window.addEventListener('resize', () => {
-  const { width, height } = canvas.getBoundingClientRect();
-  scatterplot.set({ width, height });
+  scatterplot.set({ width: window.innerWidth, height: window.innerHeight });
+  if (hasEdges) {
+    resizeEdgeCanvas();
+  }
   cardBodyMaxHeight = clampCardBodyHeight(cardBodyMaxHeight);
   applyCardSize();
 });
@@ -1662,6 +1670,7 @@ canvas.addEventListener('mouseup', (e) => {
 });
 
 function truncateString(str, maxLen) {
+  str = escapeHtml(str);
   if (!str || str.length <= maxLen) return str;
   return str.substring(0, maxLen - 3) + '...';
 }
@@ -1727,7 +1736,7 @@ function renderCardStack() {
         const c = columns[colName];
         return c ? encodeURI(String(c.values[idx])) : match;
       });
-      html += '<a class="card-link" href="' + url + '" target="_blank" rel="noopener">' + link.label + '</a>';
+      html += '<a class="card-link" href="' + url + '" target="_blank" rel="noopener">' + escapeHtml(link.label) + '</a>';
     }
     html += '</div>';
   }
@@ -1771,13 +1780,13 @@ function renderCardStack() {
 
     if (isCopyable && typeof val === 'string' && val.length > 0) {
       html += '<div class="card-copy-row">';
-      html += '<span class="key">' + displayName + '</span>';
+      html += '<span class="key">' + escapeHtml(displayName) + '</span>';
       html += '<span class="value">' + displayVal + '</span>';
       html += '<button class="card-copy-btn" data-value="' + String(val).replace(/"/g, '&quot;') + '">Copy</button>';
       html += '</div>';
     } else {
       html += '<div class="card-row">';
-      html += '<span class="key">' + displayName + '</span>';
+      html += '<span class="key">' + escapeHtml(displayName) + '</span>';
       html += '<span class="value">' + displayVal + '</span>';
       html += '</div>';
     }
@@ -1848,7 +1857,7 @@ async function buildExportColumns() {
   for (const name of labelOptions) {
     const col = await fetchColumn(name);
     if (!col) continue;
-    html += '<label><input type="checkbox" value="' + name + '" checked> ' + name + '</label>';
+    html += '<label><input type="checkbox" value="' + escapeHtml(name) + '" checked> ' + escapeHtml(name) + '</label>';
   }
   exportColumns.innerHTML = html;
 }
@@ -2098,7 +2107,7 @@ async function buildFilterSidebar() {
 
     const head = document.createElement('div');
     head.className = 'fs-section-head';
-    head.innerHTML = '<span>' + displayName + '</span><span class="fs-chevron">&#9660;</span>';
+    head.innerHTML = '<span>' + escapeHtml(displayName) + '</span><span class="fs-chevron">&#9660;</span>';
     head.addEventListener('click', () => section.classList.toggle('collapsed'));
     section.appendChild(head);
 
@@ -2138,8 +2147,8 @@ function buildCatSection(colName, col, container) {
     row.dataset.value = isOther ? '__other__' : value;
     const pct = (count / maxCount * 100).toFixed(1);
     row.innerHTML =
-      '<span class="fs-bar-label" title="' + (isOther ? 'other' : String(value).replace(/"/g, '&quot;')) + '">' +
-      (isOther ? '<i>(other)</i>' : String(value).replace(/</g, '&lt;')) + '</span>' +
+      '<span class="fs-bar-label" title="' + (isOther ? 'other' : escapeHtml(value)) + '">' +
+      (isOther ? '<i>(other)</i>' : escapeHtml(value)) + '</span>' +
       '<div class="fs-bar-track"><div class="fs-bar-total" style="width:' + pct + '%"></div>' +
       '<div class="fs-bar-selected" style="width:' + pct + '%"></div></div>' +
       '<span class="fs-bar-count">' + compactNum(count) + ' / ' + compactNum(count) + '</span>';
@@ -2771,7 +2780,7 @@ if (proteinColumn && columns[proteinColumn]) {
       const valEl = row.querySelector('.value');
       if (keyEl && valEl && keyEl.textContent.trim() === proteinColumn) {
         valEl.innerHTML = '<a class="uniprot-link" href="https://www.uniprot.org/uniprot/' +
-          uid + '" target="_blank" rel="noopener">' + uid + '</a>';
+          encodeURI(uid) + '" target="_blank" rel="noopener">' + escapeHtml(uid) + '</a>';
         break;
       }
     }
@@ -2794,7 +2803,7 @@ if (proteinColumn && columns[proteinColumn]) {
 
   async function loadProteinStructure(uid, container) {
     if (structureCache.get(uid) === 'error') {
-      container.innerHTML = '<span class="structure-error">No AlphaFold structure<br>for ' + uid + '</span>';
+      container.innerHTML = '<span class="structure-error">No AlphaFold structure<br>for ' + escapeHtml(uid) + '</span>';
       return;
     }
     container.innerHTML = '<span class="structure-loading">Loading 3D structure...</span>';
@@ -2802,7 +2811,7 @@ if (proteinColumn && columns[proteinColumn]) {
 
     const cifUrl = await resolveAlphaFoldUrl(uid);
     if (!cifUrl) {
-      container.innerHTML = '<span class="structure-error">No AlphaFold structure<br>for ' + uid + '</span>';
+      container.innerHTML = '<span class="structure-error">No AlphaFold structure<br>for ' + escapeHtml(uid) + '</span>';
       structureCache.set(uid, 'error');
       return;
     }
@@ -2816,7 +2825,7 @@ if (proteinColumn && columns[proteinColumn]) {
       structureCache.set(uid, 'loaded');
     } catch (err) {
       console.warn('Failed to load structure for', uid, err);
-      container.innerHTML = '<span class="structure-error">Failed to load structure<br>for ' + uid + '</span>';
+      container.innerHTML = '<span class="structure-error">Failed to load structure<br>for ' + escapeHtml(uid) + '</span>';
       structureCache.set(uid, 'error');
     }
   }
@@ -2855,15 +2864,15 @@ if (proteinColumn && columns[proteinColumn]) {
         if (!v) continue;
         const r = document.createElement('div');
         r.className = 'protein-meta-row';
-        r.innerHTML = '<span class="meta-key">' + k + '</span><span class="meta-val">' + String(v).replace(/</g, '&lt;') + '</span>';
+        r.innerHTML = '<span class="meta-key">' + escapeHtml(k) + '</span><span class="meta-val">' + escapeHtml(v) + '</span>';
         div.appendChild(r);
       }
     }
     const links = document.createElement('div');
     links.className = 'protein-meta-row';
     links.style.marginTop = '4px';
-    links.innerHTML = '<a class="uniprot-link" href="https://www.uniprot.org/uniprot/' + uid + '" target="_blank" rel="noopener" style="font-size:11px;margin-right:8px">UniProt</a>' +
-      '<a class="uniprot-link" href="https://alphafold.ebi.ac.uk/entry/' + uid + '" target="_blank" rel="noopener" style="font-size:11px">AlphaFold</a>';
+    links.innerHTML = '<a class="uniprot-link" href="https://www.uniprot.org/uniprot/' + encodeURI(uid) + '" target="_blank" rel="noopener" style="font-size:11px;margin-right:8px">UniProt</a>' +
+      '<a class="uniprot-link" href="https://alphafold.ebi.ac.uk/entry/' + encodeURI(uid) + '" target="_blank" rel="noopener" style="font-size:11px">AlphaFold</a>';
     div.appendChild(links);
     cardBody.appendChild(div);
   }

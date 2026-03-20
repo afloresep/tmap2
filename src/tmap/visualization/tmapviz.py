@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import math
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -102,13 +103,24 @@ def _get_jinja_env() -> Environment:
     )
 
 
-def _sanitize_filename(name: str) -> str:
-    """Sanitize a column name for use as a filename (URL-safe)."""
+def _sanitize_filename(name: str, seen: set[str] | None = None) -> str:
+    """Sanitize a column name for use as a filename (URL-safe).
+
+    When *seen* is provided, appends a numeric suffix to avoid collisions.
+    The sanitized name is added to *seen* in place.
+    """
     import re
     # Replace spaces, parens, and other non-alphanumeric chars with underscores
     safe = re.sub(r"[^a-zA-Z0-9_\-.]", "_", name)
     # Collapse multiple underscores
     safe = re.sub(r"_+", "_", safe).strip("_")
+    if seen is not None:
+        base = safe
+        counter = 2
+        while safe in seen:
+            safe = f"{base}_{counter}"
+            counter += 1
+        seen.add(safe)
     return safe
 
 
@@ -214,6 +226,47 @@ def _contains_nan(values: Sequence[Any]) -> bool:
     return bool(np.isnan(arr).any())
 
 
+def _safe_float(v: Any) -> float:
+    """Convert a value to float, treating None/empty/NA-like as NaN."""
+    if v is None or (isinstance(v, str) and v == ""):
+        return float("nan")
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return float("nan")
+
+
+def _coerce_json_safe(v: Any) -> Any:
+    """Coerce a single value to a JSON-serializable type.
+
+    Handles numpy scalars, pandas NA, non-finite floats, etc.
+    """
+    # numpy scalar -> Python scalar
+    if isinstance(v, np.generic):
+        v = v.item()
+    # pandas NA-like sentinels
+    try:
+        import pandas as pd
+        if isinstance(v, type(pd.NA)) or (isinstance(v, float) and pd.isna(v)):
+            return None
+    except ImportError:
+        pass
+    # Non-finite Python float -> None (renders as null in JSON)
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return v
+
+
+def _encode_string_column(values: list[Any], name: str) -> bytes:
+    """Encode label/string column values as JSON bytes.
+
+    Handles numpy scalars, pandas NA, non-finite floats, and other
+    non-JSON-native types by coercing them to JSON-safe equivalents.
+    """
+    safe = [_coerce_json_safe(v) for v in values]
+    return json.dumps(safe, separators=(",", ":"), allow_nan=False).encode()
+
+
 def _to_json_safe(value: Any) -> Any:
     """Convert values to JSON-safe types, mapping non-finite numbers to null.
 
@@ -317,7 +370,7 @@ class TmapViz:
         self.title: str = "MyTMAP"
         self.background_color: str = "#FFFFFF"
         self.point_color: str = "#4a9eff"
-        self.point_size: float = 4.0
+        self._point_size: float = 4.0
         self.opacity: float = 0.85
 
         self.edge_color: str = "#000000"
@@ -345,6 +398,16 @@ class TmapViz:
         self._searchable: list[str] = []
         self._card_config: dict[str, Any] | None = None
         self._column_ui: dict[str, dict[str, Any]] = {}
+
+    @property
+    def point_size(self) -> float:
+        return self._point_size
+
+    @point_size.setter
+    def point_size(self, value: float) -> None:
+        if value <= 0:
+            raise ValueError(f"point_size must be > 0, got {value}")
+        self._point_size = float(value)
 
     def add_color_layout(
         self,
@@ -393,6 +456,26 @@ class TmapViz:
 
         # Default to continuous because it will give less issues and having to pass
         # always the type can be annoying...
+        # Validate continuous values are actually numeric
+        if not categorical:
+            for v in values:
+                if v is None or (isinstance(v, str) and v == ""):
+                    continue
+                # pandas NA-like sentinels
+                try:
+                    import pandas as _pd
+                    if isinstance(v, type(_pd.NA)):
+                        continue
+                except ImportError:
+                    pass
+                try:
+                    float(v)
+                except (ValueError, TypeError):
+                    raise ValueError(
+                        f"Continuous layout '{name}' contains non-numeric value "
+                        f"{v!r}. Use categorical=True for string values."
+                    ) from None
+
         _column_dtype: Literal["categorical", "continuous"] = (
             "categorical" if categorical else "continuous"
         )
@@ -442,24 +525,57 @@ class TmapViz:
         if color is None:
             color = "tab10" if categorical else "viridis"
 
-        # dict {value: hex} -> convert to ordered hex list 
+        # dict {value: hex} -> convert to ordered hex list
         if isinstance(color, dict):
             if not categorical:
                 raise ValueError(
                     "A color dict mapping values to hex colors is only "
                     "supported for categorical layouts (categorical=True)."
                 )
-            # Determine category order (first-appearance order in values)
-            seen: dict[str, int] = {}
-            for v in values:
-                s = str(v)
-                if s not in seen:
-                    seen[s] = len(seen)
-            # Build hex list in that order, falling back to gray
-            hex_list = [
-                _normalize_hex_color(color.get(cat, color.get(cat, "#888888")))
-                for cat in seen
-            ]
+            # Collect unique categories as str (matches _pack_categorical_binary)
+            categories = list(dict.fromkeys(str(v) for v in values))
+
+            # Sort numerically if ALL categories parse as finite numbers.
+            # This must mirror the JS sort: unique.every(v => !isNaN(Number(v)))
+            try:
+                parsed = [float(c) for c in categories]
+                if all(p == p for p in parsed):  # exclude NaN
+                    categories.sort(key=float)
+            except (ValueError, TypeError):
+                pass  # keep insertion order for non-numeric categories
+
+            # Normalize dict keys to strings for lookup
+            str_color: dict[str, str] = {str(k): v for k, v in color.items()}
+
+            # Build hex list, trying numeric-equivalent key forms
+            hex_list: list[str] = []
+            unmatched: list[str] = []
+            for cat in categories:
+                hex_val = str_color.get(cat)
+                if hex_val is None:
+                    # Try numeric normalization: "2.0" <-> "2", "3" <->"3.0"
+                    try:
+                        num = float(cat)
+                        if num == int(num):
+                            hex_val = str_color.get(str(int(num)))
+                        if hex_val is None:
+                            hex_val = str_color.get(str(num))
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+                if hex_val is None:
+                    unmatched.append(cat)
+                    hex_val = "#888888"
+                hex_list.append(_normalize_hex_color(hex_val))
+
+            if unmatched:
+                warnings.warn(
+                    f"Categorical layout '{column_name}': {len(unmatched)} of "
+                    f"{len(categories)} categories had no matching key in the "
+                    f"color dict and will use fallback gray (#888888): "
+                    f"{unmatched[:5]}{'...' if len(unmatched) > 5 else ''}",
+                    UserWarning,
+                    stacklevel=3,
+                )
             color = hex_list  # fall through to list handling
 
         # list of hex strings -> store as custom colormap 
@@ -470,6 +586,10 @@ class TmapViz:
                     "categorical layouts (categorical=True)."
                 )
             hex_colors = [_normalize_hex_color(c) for c in color]
+            if not hex_colors:
+                raise ValueError(
+                    "color list must not be empty. Provide at least one hex color."
+                )
 
             unique_count = len(set(str(v) for v in values))
             if len(hex_colors) < unique_count:
@@ -711,34 +831,6 @@ class TmapViz:
             raise TypeError("searchable must be a list of column names")
         self._searchable = list(names)
 
-    def configure_card(
-        self,
-        *,
-        title: str | None = None,
-        subtitle: str | None = None,
-        fields: list[str] | None = None,
-        links: list[dict[str, str]] | None = None,
-    ) -> None:
-        """Configure the pinned-card layout for the HTML visualization.
-
-        Args:
-            title: Column name used as the card heading.
-            subtitle: Column name shown as italic subheading.
-            fields: Column names displayed as key-value rows in the card.
-            links: URL templates with ``{column_name}`` placeholders, e.g.
-                ``[{"label": "UniProt", "url": "https://uniprot.org/{UniProt ID}"}]``.
-        """
-        config: dict[str, Any] = {}
-        if title is not None:
-            config["titleColumn"] = title
-        if subtitle is not None:
-            config["subtitleColumn"] = subtitle
-        if fields is not None:
-            config["fields"] = list(fields)
-        if links is not None:
-            config["links"] = [dict(lnk) for lnk in links]
-        self._card_config = config
-
     def configure_column(
         self,
         name: str,
@@ -767,6 +859,77 @@ class TmapViz:
         if format is not None:
             ui["format"] = format
         self._column_ui[name] = ui
+
+    def configure_card(
+        self,
+        *,
+        title_column: str | None = None,
+        subtitle_column: str | None = None,
+        fields: list[str] | None = None,
+        links: list[dict[str, str]] | None = None,
+    ) -> None:
+        """Configure the pinned-card panel shown when clicking a point.
+
+        By default the card shows every label column as key-value rows.
+        Use this method to pick a title, add a subtitle, restrict which
+        fields appear, or add clickable links with per-point URLs.
+
+        Parameters
+        ----------
+        title_column : str, optional
+            Name of an existing column whose value becomes the card
+            heading for each point.  Example: ``"Gene Name"``.
+        subtitle_column : str, optional
+            Name of an existing column shown as an italic line below
+            the title.  Example: ``"Organism"``.
+        fields : list of str, optional
+            Column names to display as key-value rows in the card body.
+            If omitted, all label columns are shown.
+        links : list of dict, optional
+            Clickable buttons rendered below the subtitle.  Each dict
+            needs ``"label"`` (button text) and ``"url"`` (URL template).
+            Column placeholders like ``{col_name}`` are replaced with the
+            point's value for that column.
+
+            Example::
+
+                [{"label": "UniProt",
+                  "url": "https://uniprot.org/uniprot/{UniProt ID}"}]
+
+        Examples
+        --------
+        >>> viz.configure_card(
+        ...     title_column="Name",
+        ...     subtitle_column="Category",
+        ...     fields=["Name", "Score", "Source"],
+        ...     links=[{"label": "PubChem",
+        ...             "url": "https://pubchem.ncbi.nlm.nih.gov/#query={SMILES}"}],
+        ... )
+        """
+        config: dict[str, Any] = {}
+        # Validate referenced columns exist
+        known = set(self._columns.keys())
+        refs: list[str] = []
+        if title_column is not None:
+            config["titleColumn"] = title_column
+            refs.append(title_column)
+        if subtitle_column is not None:
+            config["subtitleColumn"] = subtitle_column
+            refs.append(subtitle_column)
+        if fields is not None:
+            config["fields"] = list(fields)
+            refs.extend(fields)
+        missing = [r for r in refs if r not in known]
+        if missing:
+            warnings.warn(
+                f"configure_card references columns not yet added: {missing}. "
+                f"Add them before calling to_html() or the card will be incomplete.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if links is not None:
+            config["links"] = [dict(lnk) for lnk in links]
+        self._card_config = config
 
     @property
     def n_points(self) -> int:
@@ -917,7 +1080,9 @@ class TmapViz:
         """
         x_arr = np.asarray(x, dtype=np.float64)
         y_arr = np.asarray(y, dtype=np.float64)
-        # TODO(ISS-015): Profile list→ndarray→list round-trip cost for large inputs
+
+        if x_arr.size == 0:
+            raise ValueError("Cannot set empty coordinates. Provide at least one point.")
 
         if x_arr.shape != y_arr.shape:
             raise ValueError("x and y must have the same shape")
@@ -926,15 +1091,30 @@ class TmapViz:
                 f"Both x and y should be 1 dimensional arrays,\
                 Got x: {x_arr.ndim}D and y: {y_arr.ndim}D"
             )
+        if not np.all(np.isfinite(x_arr)) or not np.all(np.isfinite(y_arr)):
+            raise ValueError(
+                "Coordinates contain NaN or Inf values. "
+                "All x and y values must be finite."
+            )
 
         normalized_coords = _normalize_coords(x_arr, y_arr)
         self._points_array = normalized_coords
+        n = len(normalized_coords)
 
         for col in self._columns.values():
-            if len(col.values) != len(self._points_array):
+            if len(col.values) != n:
                 raise ValueError(
                     f"Column '{col.name}' has {len(col.values)} values but there are "
-                    f"{len(self._points_array)} points"
+                    f"{n} points"
+                )
+
+        # Re-validate edges against the new point count
+        if self._edges_s is not None and self._edges_s.size > 0:
+            max_idx = max(int(self._edges_s.max()), int(self._edges_t.max()))
+            if max_idx >= n:
+                raise ValueError(
+                    f"Edge indices must be < n_points ({n}). "
+                    f"Got max edge index {max_idx}."
                 )
 
     def to_widget(
@@ -1238,7 +1418,7 @@ class TmapViz:
                 }
             elif col.dtype == "continuous":
                 arr = np.array(
-                    [float(v) if v != "" and v is not None else float("nan") for v in col.values],
+                    [_safe_float(v) for v in col.values],
                     dtype=np.float32,
                 )
                 compressed = _pack_numeric_binary(arr, "float32")
@@ -1250,7 +1430,7 @@ class TmapViz:
                 }
             else:
                 # String columns (labels, SMILES, images) — gzip-compress as JSON
-                json_bytes = json.dumps(col.values, separators=(",", ":")).encode("utf-8")
+                json_bytes = _encode_string_column(col.values, name)
                 compressed = gzip.compress(json_bytes, compresslevel=6)
                 columns_b64[name] = base64.b64encode(compressed).decode("ascii")
                 columns_meta[name] = {
@@ -1286,6 +1466,7 @@ class TmapViz:
             elif n_points > 100_000:
                 effective_point_size = 2.0
 
+        # Attach per-column UI hints
         for col_name, ui in self._column_ui.items():
             if col_name in columns_meta:
                 columns_meta[col_name]["ui"] = ui
@@ -1429,9 +1610,10 @@ class TmapViz:
         columns_meta: dict[str, dict[str, Any]] = {}
         colormaps_payload: dict[str, list[str]] = dict(self._custom_colormaps)
 
+        _seen_filenames: set[str] = set()
         for name, col in self._columns.items():
             colormap_name = col.color if col.role in ("layout", "layout+label") else None
-            safe_name = _sanitize_filename(name)
+            safe_name = _sanitize_filename(name, _seen_filenames)
 
             if col.dtype == "categorical":
                 compressed, dictionary = _pack_categorical_binary(col.values)
@@ -1445,7 +1627,7 @@ class TmapViz:
                 }
             elif col.dtype == "continuous":
                 arr = np.array(
-                    [float(v) if v != "" and v is not None else float("nan") for v in col.values],
+                    [_safe_float(v) for v in col.values],
                     dtype=np.float32,
                 )
                 compressed = _pack_numeric_binary(arr, "float32")
@@ -1458,7 +1640,7 @@ class TmapViz:
                 }
             else:
                 # String columns (labels, SMILES, images) — gzip-compress as JSON
-                json_bytes = json.dumps(col.values, separators=(",", ":")).encode("utf-8")
+                json_bytes = _encode_string_column(col.values, name)
                 compressed = gzip.compress(json_bytes, compresslevel=6)
                 (output_dir / f"col_{safe_name}.bin").write_bytes(compressed)
                 columns_meta[name] = {
@@ -1477,6 +1659,7 @@ class TmapViz:
         for col_name, ui in self._column_ui.items():
             if col_name in columns_meta:
                 columns_meta[col_name]["ui"] = ui
+
 
         # Auto-scale point size
         effective_point_size = self.point_size
