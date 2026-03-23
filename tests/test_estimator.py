@@ -274,6 +274,7 @@ def test_add_points_existing_coords_unchanged() -> None:
     np.testing.assert_array_equal(model.embedding_[:40], original_coords)
 
 
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
 def test_add_points_cosine_requires_store_index() -> None:
 
     data = np.random.default_rng(9).random((20, 8), dtype=np.float32)

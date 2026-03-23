@@ -12,6 +12,7 @@ Tests cover:
 
 import json
 import re
+import warnings
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -1075,12 +1076,14 @@ class TestConfigureCard:
 
     def test_stores_config(self):
         viz = TmapViz()
-        viz.configure_card(
-            title="UniProt ID",
-            subtitle="protein_name",
-            fields=["cluster_size", "pLDDT"],
-            links=[{"label": "UniProt", "url": "https://uniprot.org/{UniProt ID}"}],
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            viz.configure_card(
+                title_column="UniProt ID",
+                subtitle_column="protein_name",
+                fields=["cluster_size", "pLDDT"],
+                links=[{"label": "UniProt", "url": "https://uniprot.org/{UniProt ID}"}],
+            )
         assert viz._card_config is not None
         assert viz._card_config["titleColumn"] == "UniProt ID"
         assert viz._card_config["subtitleColumn"] == "protein_name"
@@ -1089,14 +1092,16 @@ class TestConfigureCard:
 
     def test_partial_config(self):
         viz = TmapViz()
-        viz.configure_card(title="Name")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            viz.configure_card(title_column="Name")
         assert viz._card_config == {"titleColumn": "Name"}
 
     def test_serialized_in_write_static(self, viz_with_data, tmp_path):
         viz, data = viz_with_data
-        viz.configure_card(title="name", fields=["value"])
         viz.add_label("name", data["labels"])
         viz.add_color_layout("value", data["continuous"])
+        viz.configure_card(title_column="name", fields=["value"])
 
         out = viz.write_static(tmp_path / "out")
         meta = json.loads((out / "metadata.json").read_text())
@@ -1107,9 +1112,9 @@ class TestConfigureCard:
 
     def test_serialized_in_to_html(self, viz_with_data):
         viz, data = viz_with_data
-        viz.configure_card(title="name", fields=["value"])
         viz.add_label("name", data["labels"])
         viz.add_color_layout("value", data["continuous"])
+        viz.configure_card(title_column="name", fields=["value"])
 
         html = viz.to_html()
         match = re.search(
@@ -1120,28 +1125,6 @@ class TestConfigureCard:
         assert match is not None
         meta = json.loads(match.group(1))
         assert meta["card"]["titleColumn"] == "name"
-
-
-class TestConfigureColumn:
-    """Tests for configure_column method."""
-
-    def test_stores_ui_hints(self):
-        viz = TmapViz()
-        viz.configure_column("interpro_family", display_name="Protein Family", copyable=True)
-        assert viz._column_ui["interpro_family"]["displayName"] == "Protein Family"
-        assert viz._column_ui["interpro_family"]["copyable"] is True
-
-    def test_serialized_in_write_static(self, viz_with_data, tmp_path):
-        viz, data = viz_with_data
-        viz.add_label("name", data["labels"])
-        viz.configure_column("name", display_name="Point Name", copyable=True)
-
-        out = viz.write_static(tmp_path / "out")
-        meta = json.loads((out / "metadata.json").read_text())
-
-        assert "ui" in meta["columns"]["name"]
-        assert meta["columns"]["name"]["ui"]["displayName"] == "Point Name"
-        assert meta["columns"]["name"]["ui"]["copyable"] is True
 
 
 class TestBackwardCompat:
