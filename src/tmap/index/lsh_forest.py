@@ -231,7 +231,7 @@ class LSHForest:
             self._hash_bands = compute_hash_bands(self._signatures, self._l, self._k)
 
         # Build sorted hash tables for each band
-        # flatten all bands into single arrays 
+        # flatten all bands into single arrays
         sorted_hashes_list = []
         sorted_indices_list = []
         band_sizes = []
@@ -328,7 +328,7 @@ class LSHForest:
 
         return self.query(self._signatures[id], k)
 
-    # Linear scan methods 
+    # Linear scan methods
 
     def linear_scan(
         self,
@@ -574,7 +574,7 @@ class LSHForest:
             max_candidates,
         )
 
-        # Batch linear scan with exclude_self=False 
+        # Batch linear scan with exclude_self=False
         if self._weighted:
             indices, distances = linear_scan_batch_weighted(
                 signatures,
@@ -689,7 +689,6 @@ class LSHForest:
                 NDArray[np.float32], compute_distances_to_candidates(signature, self._signatures)
             )
 
-
     def get_hash(self, id: int) -> NDArray[np.uint64]:
         """
         Retrieve the MinHash signature of an indexed entry.
@@ -712,7 +711,6 @@ class LSHForest:
             raise IndexError(f"ID {id} out of range [0, {self._n_indexed})")
 
         return cast(NDArray[np.uint64], self._signatures[id].copy())
-
 
     def save(self, path: str) -> None:
         """

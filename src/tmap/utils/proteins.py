@@ -100,18 +100,18 @@ _KD_HYDROPHOBICITY: dict[str, float] = {
 # Format: (pKa, charge_when_protonated)
 # Positive residues gain +1 when protonated (below pKa)
 # Negative residues/groups lose -1 when deprotonated (above pKa)
-_PKA_NTERM = 9.69   # alpha-amino (positive when protonated)
-_PKA_CTERM = 2.34   # alpha-carboxyl (negative when deprotonated)
+_PKA_NTERM = 9.69  # alpha-amino (positive when protonated)
+_PKA_CTERM = 2.34  # alpha-carboxyl (negative when deprotonated)
 
 # Side-chain pKa values and charge contribution
 _PKA_SIDECHAINS: dict[str, tuple[float, int]] = {
-    "D": (3.65, -1),   # Asp — negative when deprotonated
-    "E": (4.25, -1),   # Glu
-    "C": (8.18, -1),   # Cys
+    "D": (3.65, -1),  # Asp — negative when deprotonated
+    "E": (4.25, -1),  # Glu
+    "C": (8.18, -1),  # Cys
     "Y": (10.07, -1),  # Tyr
-    "H": (6.00, 1),    # His — positive when protonated
-    "K": (10.54, 1),   # Lys
-    "R": (12.48, 1),   # Arg
+    "H": (6.00, 1),  # His — positive when protonated
+    "K": (10.54, 1),  # Lys
+    "R": (12.48, 1),  # Arg
 }
 
 AVAILABLE_SEQUENCE_PROPERTIES: list[str] = [
@@ -132,10 +132,26 @@ AVAILABLE_SEQUENCE_PROPERTIES: list[str] = [
 
 # Three-letter to one-letter amino acid code mapping (for PDB parsing)
 _AA3_TO_1: dict[str, str] = {
-    "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
-    "GLU": "E", "GLN": "Q", "GLY": "G", "HIS": "H", "ILE": "I",
-    "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
-    "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLU": "E",
+    "GLN": "Q",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
 }
 
 
@@ -165,6 +181,7 @@ _NUMERIC_FIELDS: frozenset[str] = frozenset({"annotation_score", "length"})
 # ---------------------------------------------------------------------------
 # Internal helpers — sequence properties
 # ---------------------------------------------------------------------------
+
 
 def _is_valid_sequence(seq: str) -> bool:
     """Check if a sequence contains only standard amino acid characters."""
@@ -253,6 +270,7 @@ def _compute_prop(name: str, seq: str) -> float:
         return float(seq.count("C"))
     raise ValueError(f"Unknown property: {name!r}")
 
+
 def _fetch_uniprot_chunk(
     ids: list[str],
     fields: tuple[str, ...],
@@ -260,12 +278,14 @@ def _fetch_uniprot_chunk(
     """Fetch a single chunk of UniProt IDs. Returns list of row dicts."""
     query = " OR ".join(f"accession:{uid}" for uid in ids)
     fields_str = ",".join(fields)
-    params = urllib.parse.urlencode({
-        "query": query,
-        "fields": fields_str,
-        "format": "tsv",
-        "size": str(len(ids)),
-    })
+    params = urllib.parse.urlencode(
+        {
+            "query": query,
+            "fields": fields_str,
+            "format": "tsv",
+            "size": str(len(ids)),
+        }
+    )
     url = f"{_UNIPROT_BASE_URL}?{params}"
 
     req = urllib.request.Request(url, headers={"User-Agent": "tmap2/0.1"})
@@ -283,6 +303,7 @@ def _fetch_uniprot_chunk(
         row = dict(zip(headers, values))
         rows.append(row)
     return rows
+
 
 def read_fasta(
     path: str | Path,
@@ -410,6 +431,7 @@ def read_id_list(
     if n_invalid:
         logger.warning("read_id_list: %d/%d IDs don't match UniProt format", n_invalid, len(ids))
     return ids
+
 
 def read_pdb(
     path: str | Path,
@@ -559,6 +581,7 @@ def read_pdb_dir(
 
     return ids, sequences, props
 
+
 # PUblic API
 def parse_alignment(
     path: str | Path,
@@ -679,6 +702,7 @@ def parse_alignment(
 
 # Public API for sequence analysis
 
+
 def sequence_properties(
     sequences: Sequence[str],
     properties: list[str] | None = None,
@@ -710,8 +734,7 @@ def sequence_properties(
         bad = [p for p in properties if p not in AVAILABLE_SEQUENCE_PROPERTIES]
         if bad:
             raise ValueError(
-                f"Unknown properties: {bad}. "
-                f"Available: {AVAILABLE_SEQUENCE_PROPERTIES}"
+                f"Unknown properties: {bad}. Available: {AVAILABLE_SEQUENCE_PROPERTIES}"
             )
 
     n = len(sequences)
@@ -734,7 +757,9 @@ def sequence_properties(
             n_invalid += 1
 
     if n_invalid > 0:
-        logger.warning("sequence_properties: %d/%d sequences invalid (non-standard AAs or empty)", n_invalid, n)
+        logger.warning(
+            "sequence_properties: %d/%d sequences invalid (non-standard AAs or empty)", n_invalid, n
+        )
 
     return {k: out[:, j] for j, k in enumerate(properties)}
 
@@ -768,7 +793,9 @@ def fetch_uniprot(
     """
     n = len(uniprot_ids)
     if n == 0:
-        return {f: np.empty(0, dtype=np.float64 if f in _NUMERIC_FIELDS else object) for f in fields}
+        return {
+            f: np.empty(0, dtype=np.float64 if f in _NUMERIC_FIELDS else object) for f in fields
+        }
 
     # Validate IDs
     valid_ids: list[str] = []
@@ -782,7 +809,9 @@ def fetch_uniprot(
 
     if not valid_ids:
         logger.warning("fetch_uniprot: no valid UniProt IDs provided")
-        return {f: np.empty(0, dtype=np.float64 if f in _NUMERIC_FIELDS else object) for f in fields}
+        return {
+            f: np.empty(0, dtype=np.float64 if f in _NUMERIC_FIELDS else object) for f in fields
+        }
 
     # Chunk the valid IDs
     chunks = [valid_ids[i : i + chunk_size] for i in range(0, len(valid_ids), chunk_size)]
@@ -805,13 +834,17 @@ def fetch_uniprot(
                 n_failed += 1
                 logger.warning(
                     "fetch_uniprot: chunk %d/%d failed: %s",
-                    chunk_idx + 1, n_chunks, exc,
+                    chunk_idx + 1,
+                    n_chunks,
+                    exc,
                 )
 
     if n_failed:
         logger.warning("fetch_uniprot: %d/%d chunks failed", n_failed, n_chunks)
 
-    print(f"  [UniProt] fetched {len(all_rows):,}/{len(valid_ids):,} entries ({n_failed} chunk failures)")
+    print(
+        f"  [UniProt] fetched {len(all_rows):,}/{len(valid_ids):,} entries ({n_failed} chunk failures)"
+    )
 
     # Build accession → row lookup from TSV headers
     # UniProt TSV uses human-readable column names; map them back
@@ -922,10 +955,7 @@ def fetch_alphafold(
 
     n_ok = 0
     with ThreadPoolExecutor(max_workers=min(max_workers, n)) as executor:
-        futures = {
-            executor.submit(_fetch_one_alphafold, uid): uid
-            for uid in uniprot_ids
-        }
+        futures = {executor.submit(_fetch_one_alphafold, uid): uid for uid in uniprot_ids}
         for future in as_completed(futures):
             uid, result = future.result()
             if result is not None:

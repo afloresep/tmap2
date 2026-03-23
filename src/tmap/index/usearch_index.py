@@ -104,8 +104,7 @@ class USearchIndex:
             raise ValueError("Need at least 2 vectors to build index")
         if metric not in _METRIC_MAP:
             raise ValueError(
-                f"USearchIndex does not support metric={metric!r}. "
-                f"Supported: {list(_METRIC_MAP)}"
+                f"USearchIndex does not support metric={metric!r}. Supported: {list(_METRIC_MAP)}"
             )
 
         from usearch.index import Index
@@ -160,9 +159,7 @@ class USearchIndex:
         if vectors.ndim != 2:
             raise ValueError(f"vectors must be 2D, got shape {vectors.shape}")
         if vectors.shape[1] != self._ndim:
-            raise ValueError(
-                f"vectors must have {self._ndim} features, got {vectors.shape[1]}"
-            )
+            raise ValueError(f"vectors must have {self._ndim} features, got {vectors.shape[1]}")
         if vectors.shape[0] == 0:
             return np.empty(0, dtype=np.int64)
 
@@ -370,7 +367,8 @@ class USearchIndex:
                 self._vectors,
                 queries,
                 actual_count,
-                metric=us_metric, exact=True,
+                metric=us_metric,
+                exact=True,
             )
         else:
             if self._usearch_index is None:
@@ -405,9 +403,7 @@ class USearchIndex:
             out_dists[i] = dists[i][mask][:k]
         return out_keys, out_dists
 
-    def _convert_distances(
-        self, dists: NDArray[np.float32]
-    ) -> NDArray[np.float32]:
+    def _convert_distances(self, dists: NDArray[np.float32]) -> NDArray[np.float32]:
         """Convert raw USearch distances to user-facing metric."""
         # Cosine: USearch 'cos' already returns cosine distance. No conversion.
         if self._metric == "euclidean":
@@ -421,8 +417,7 @@ class USearchIndex:
         """Cast int64 keys to int32 with overflow guard."""
         if keys.size > 0 and keys.max() > np.iinfo(np.int32).max:
             raise OverflowError(
-                f"Index key {keys.max()} exceeds int32 range. "
-                f"KNNGraph requires int32 indices."
+                f"Index key {keys.max()} exceeds int32 range. KNNGraph requires int32 indices."
             )
         return keys.astype(np.int32)
 

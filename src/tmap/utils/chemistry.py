@@ -47,15 +47,14 @@ AVAILABLE_REACTION_PROPERTIES: list[str] = [
     "delta_logp",
 ]
 
+
 def _init_fp_worker(radius: int, n_bits: int) -> None:
     global _FP_RADIUS, _FP_NBITS
     _FP_RADIUS = radius
     _FP_NBITS = n_bits
 
 
-def _init_drfp_worker(
-    n_folded_length: int, radius: int, min_radius: int, rings: bool
-) -> None:
+def _init_drfp_worker(n_folded_length: int, radius: int, min_radius: int, rings: bool) -> None:
     global _DRFP_PARAMS
     _DRFP_PARAMS = {
         "n_folded_length": n_folded_length,
@@ -71,6 +70,7 @@ def _init_props_worker(prop_names: list[str]) -> None:
 
 
 # Fingerprint batch functions (called inside Pool workers)
+
 
 def _morgan_fp_batch(smiles_batch: list[str]) -> NDArray[np.uint8]:
     """Process a batch of SMILES, return fps array for valid entries."""
@@ -140,6 +140,7 @@ def _drfp_fp_batch(smiles_batch: list[str]) -> NDArray[np.uint8]:
 
 
 # Property batch functions (called inside Pool workers)
+
 
 def _mol_props_batch(smiles_batch: list[str]) -> NDArray[np.float64]:
     """Process a batch, return (len(batch), n_props) array. Invalid rows are NaN."""
@@ -221,10 +222,7 @@ def _rxn_props_batch(rxn_smiles_batch: list[str]) -> NDArray[np.float64]:
                 - _sum(r_mols, rdMolDescriptors.CalcNumAromaticRings)
             ),
             "atom_economy": (p_mw / r_mw * 100.0) if r_mw > 0 else np.nan,
-            "delta_logp": (
-                _sum(p_mols, Descriptors.MolLogP)
-                - _sum(r_mols, Descriptors.MolLogP)
-            ),
+            "delta_logp": (_sum(p_mols, Descriptors.MolLogP) - _sum(r_mols, Descriptors.MolLogP)),
         }
 
         for j, name in enumerate(props):
@@ -234,6 +232,7 @@ def _rxn_props_batch(rxn_smiles_batch: list[str]) -> NDArray[np.float64]:
 
 
 # Utilities
+
 
 def _get_mp_context() -> multiprocessing.context.BaseContext:  # type:ignore
     if sys.platform == "darwin":
@@ -253,9 +252,8 @@ def _split_into_chunks(lst: list[Any], n_chunks: int) -> list[list[Any]]:
 
 # Fingerprint helpers with built-in parallelization (no Pool wrapper)
 
-def _map4_fingerprints(
-    smiles: list[str], n_workers: int, **kwargs: Any
-) -> NDArray[np.uint8]:
+
+def _map4_fingerprints(smiles: list[str], n_workers: int, **kwargs: Any) -> NDArray[np.uint8]:
     """Compute MAP4 fingerprints using the map4 package.
 
     MAP4 (MinHashed Atom-Pair fingerprint of radius 2) encodes molecules
@@ -277,7 +275,9 @@ def _map4_fingerprints(
     radius = kwargs.get("radius", 2)
     is_counted = kwargs.get("is_counted", False)
 
-    calc = MAP4Calculator(dimensions=dimensions, radius=radius, is_folded=True, is_counted=is_counted)
+    calc = MAP4Calculator(
+        dimensions=dimensions, radius=radius, is_folded=True, is_counted=is_counted
+    )
 
     mols = []
     for smi in smiles:
@@ -293,7 +293,8 @@ def _map4_fingerprints(
     if n_valid < len(smiles):
         logger.warning(
             "%d/%d SMILES could not be parsed and were skipped.",
-            len(smiles) - n_valid, len(smiles),
+            len(smiles) - n_valid,
+            len(smiles),
         )
 
     fps = calc.calculate_many(mols)
@@ -301,6 +302,7 @@ def _map4_fingerprints(
 
 
 # fingerprints_from_smiles
+
 
 def fingerprints_from_smiles(
     smiles: list[str],
@@ -394,16 +396,12 @@ def fingerprints_from_smiles(
             batch_results = pool.map(_mqn_fp_batch, chunks)
     elif fp_type == "mxfp":
         if importlib.util.find_spec("mxfp") is None:
-            raise ImportError(
-                "mxfp is required for fp_type='mxfp'. Install with: pip install mxfp"
-            )
+            raise ImportError("mxfp is required for fp_type='mxfp'. Install with: pip install mxfp")
         with ctx.Pool(n_workers) as pool:
             batch_results = pool.map(_mxfp_fp_batch, chunks)
     elif fp_type == "drfp":
         if importlib.util.find_spec("drfp") is None:
-            raise ImportError(
-                "drfp is required for fp_type='drfp'. Install with: pip install drfp"
-            )
+            raise ImportError("drfp is required for fp_type='drfp'. Install with: pip install drfp")
         n_folded_length = kwargs.get("n_folded_length", 2048)
         drfp_radius = kwargs.get("radius", 3)
         min_radius = kwargs.get("min_radius", 0)
@@ -416,8 +414,7 @@ def fingerprints_from_smiles(
             batch_results = pool.map(_drfp_fp_batch, chunks)
     else:
         raise ValueError(
-            f"Unsupported fp_type={fp_type!r}. "
-            "Use 'morgan', 'mqn', 'mxfp', 'map4', or 'drfp'."
+            f"Unsupported fp_type={fp_type!r}. Use 'morgan', 'mqn', 'mxfp', 'map4', or 'drfp'."
         )
 
     fps_parts = [r for r in batch_results if len(r) > 0]
@@ -428,13 +425,12 @@ def fingerprints_from_smiles(
     fps = np.concatenate(fps_parts)
     n_valid = len(fps)
     if n_valid < n:
-        logger.warning(
-            "%d/%d SMILES could not be parsed and were skipped.", n - n_valid, n
-        )
+        logger.warning("%d/%d SMILES could not be parsed and were skipped.", n - n_valid, n)
     return fps
 
 
 # Scaffolds
+
 
 def _scaffolds_batch(smiles_batch: list[str]) -> list[str]:
     """Return Murcko scaffold SMILES for a batch. Invalid SMILES -> empty string."""
@@ -505,6 +501,7 @@ def murcko_scaffolds(
 
 # Molecular properties
 
+
 def molecular_properties(
     smiles: list[str],
     properties: list[str] | None = None,
@@ -537,10 +534,7 @@ def molecular_properties(
     else:
         bad = [p for p in properties if p not in AVAILABLE_PROPERTIES]
         if bad:
-            raise ValueError(
-                f"Unknown properties: {bad}. "
-                f"Available: {AVAILABLE_PROPERTIES}"
-            )
+            raise ValueError(f"Unknown properties: {bad}. Available: {AVAILABLE_PROPERTIES}")
 
     n = len(smiles)
     if n == 0:
@@ -553,9 +547,7 @@ def molecular_properties(
     ctx = _get_mp_context()
     chunks = _split_into_chunks(smiles, n_workers)
 
-    with ctx.Pool(
-        n_workers, initializer=_init_props_worker, initargs=(properties,)
-    ) as pool:
+    with ctx.Pool(n_workers, initializer=_init_props_worker, initargs=(properties,)) as pool:
         batch_results = pool.map(_mol_props_batch, chunks)
 
     props = np.concatenate(batch_results)  # (n, len(properties))
@@ -565,6 +557,7 @@ def molecular_properties(
 
 
 # Reaction properties
+
 
 def reaction_properties(
     rxn_smiles: list[str],
@@ -616,8 +609,7 @@ def reaction_properties(
         bad = [p for p in properties if p not in AVAILABLE_REACTION_PROPERTIES]
         if bad:
             raise ValueError(
-                f"Unknown reaction properties: {bad}. "
-                f"Available: {AVAILABLE_REACTION_PROPERTIES}"
+                f"Unknown reaction properties: {bad}. Available: {AVAILABLE_REACTION_PROPERTIES}"
             )
 
     n = len(rxn_smiles)
@@ -631,16 +623,12 @@ def reaction_properties(
     ctx = _get_mp_context()
     chunks = _split_into_chunks(rxn_smiles, n_workers)
 
-    with ctx.Pool(
-        n_workers, initializer=_init_props_worker, initargs=(properties,)
-    ) as pool:
+    with ctx.Pool(n_workers, initializer=_init_props_worker, initargs=(properties,)) as pool:
         batch_results = pool.map(_rxn_props_batch, chunks)
 
     props = np.concatenate(batch_results)  # (n, len(properties))
     n_invalid = np.isnan(props[:, 0]).sum()
     if n_invalid > 0:
-        logger.warning(
-            "%d/%d reaction SMILES could not be parsed.", int(n_invalid), n
-        )
+        logger.warning("%d/%d reaction SMILES could not be parsed.", int(n_invalid), n)
 
     return {name: props[:, j] for j, name in enumerate(properties)}

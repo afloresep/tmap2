@@ -32,9 +32,7 @@ def boundary_edges(tree: Tree, labels: NDArray) -> NDArray[np.intp]:
     """
     labels = np.asarray(labels)
     if len(labels) < tree.n_nodes:
-        raise ValueError(
-            f"labels has {len(labels)} elements but tree has {tree.n_nodes} nodes."
-        )
+        raise ValueError(f"labels has {len(labels)} elements but tree has {tree.n_nodes} nodes.")
     mask = labels[tree.edges[:, 0]] != labels[tree.edges[:, 1]]
     return np.where(mask)[0]
 
@@ -93,9 +91,7 @@ def edge_delta(tree: Tree, values: NDArray) -> NDArray[np.float64]:
     """
     values = np.asarray(values, dtype=np.float64)
     if len(values) < tree.n_nodes:
-        raise ValueError(
-            f"values has {len(values)} elements but tree has {tree.n_nodes} nodes."
-        )
+        raise ValueError(f"values has {len(values)} elements but tree has {tree.n_nodes} nodes.")
     return np.abs(values[tree.edges[:, 0]] - values[tree.edges[:, 1]])
 
 

@@ -172,9 +172,7 @@ class TestUSearchIndex:
             for j_pos in range(3):
                 nb = knn.indices[i, j_pos]
                 expected = np.sqrt(np.sum((data[i] - data[nb]) ** 2))
-                np.testing.assert_allclose(
-                    knn.distances[i, j_pos], expected, rtol=1e-4
-                )
+                np.testing.assert_allclose(knn.distances[i, j_pos], expected, rtol=1e-4)
 
     def test_duplicate_vectors_self_exclusion(self) -> None:
         """When vectors are duplicated, self-exclusion still works."""

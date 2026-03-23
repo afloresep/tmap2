@@ -92,7 +92,8 @@ def from_anndata(
         else:
             logger.info(
                 "from_anndata: only %d HVGs found (requested %d), using all",
-                n_hvg, n_top_genes,
+                n_hvg,
+                n_top_genes,
             )
 
     X = _to_dense(raw)
@@ -179,8 +180,9 @@ def marker_scores(
             missing.append(g)
 
     if missing:
-        logger.warning("marker_scores: %d/%d genes not found: %s",
-                        len(missing), len(gene_list), missing[:5])
+        logger.warning(
+            "marker_scores: %d/%d genes not found: %s", len(missing), len(gene_list), missing[:5]
+        )
 
     if not indices:
         raise ValueError("None of the requested genes found in adata.var_names")

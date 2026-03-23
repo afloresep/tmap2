@@ -91,7 +91,7 @@ class MinHash:
         >>> sig = mh.from_binary_array(fp)
         >>> # From sparse indices (uses Numba)
         >>> sig = mh.from_sparse_binary_array([0, 2, 3, 6])
-        >>> # From strings 
+        >>> # From strings
         >>> sig = mh.from_string_array(["hello", "world"])
         >>> # Batch processing (very fast with Numba!)
         >>> fps = np.random.randint(0, 2, size=(10000, 2048), dtype=np.uint8)
@@ -274,8 +274,7 @@ class MinHash:
         indices_arr = np.array(indices, dtype=np.int64)
         if indices_arr.size > 0 and indices_arr.min() < 0:
             raise ValueError(
-                "Indices must be non-negative. "
-                f"Got minimum index {indices_arr.min()}."
+                f"Indices must be non-negative. Got minimum index {indices_arr.min()}."
             )
         offsets = np.array([0, len(indices)], dtype=np.int64)
         return cast(
@@ -294,7 +293,7 @@ class MinHash:
         """Encode batches of string tokens through the sparse MinHash path."""
         xxhash = _get_xxhash()
         cache: dict[str, int] = {}
-        #CSR
+        # CSR
         indices_flat: list[int] = []
         offsets = [0]
         n_tokens = 0
@@ -304,8 +303,8 @@ class MinHash:
                 n_tokens += 1
                 if token not in cache:
                     # xxhas64 could be up to 2^64 but numpy int64 holds up to  2^63 -1
-                    # so mask to 63 bits ANDing the number 
-                    
+                    # so mask to 63 bits ANDing the number
+
                     cache[token] = xxhash.xxh64_intdigest(token) & 0x7FFFFFFFFFFFFFFF
                 indices_flat.append(cache[token])
             offsets.append(n_tokens)
@@ -347,9 +346,7 @@ class MinHash:
 
     # Batch methods
     def batch_from_binary_array(
-        self,
-        arrays: Sequence[NDArray[np.uint8]] | NDArray[np.uint8]
-
+        self, arrays: Sequence[NDArray[np.uint8]] | NDArray[np.uint8]
     ) -> NDArray[np.uint64]:
         """
         Create MinHash signatures from multiple binary vectors.
@@ -372,8 +369,7 @@ class MinHash:
         return self._encode_binary_numba(data)
 
     def batch_from_sparse_binary_array(
-        self,
-        indices_list: Sequence[Sequence[int]]
+        self, indices_list: Sequence[Sequence[int]]
     ) -> NDArray[np.uint64]:
         """
         Create MinHash signatures from multiple sparse representations.
@@ -401,8 +397,7 @@ class MinHash:
         if total_nnz > 0:
             if indices_flat.min() < 0:
                 raise ValueError(
-                    "Indices must be non-negative. "
-                    f"Got minimum index {indices_flat.min()}."
+                    f"Indices must be non-negative. Got minimum index {indices_flat.min()}."
                 )
             # Check original values for float truncation
             for seq in indices_list:
@@ -439,6 +434,7 @@ class MinHash:
             2D array of shape (n_samples, num_perm) containing MinHash signatures
         """
         return self._encode_strings([set(s) for s in string_lists])
+
 
 # for integer/float data
 class WeightedMinHash:

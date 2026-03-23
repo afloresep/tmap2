@@ -71,6 +71,7 @@ def _minhash_single_sample(
 
     return signature
 
+
 @numba.njit(parallel=True, cache=True)
 def minhash_batch_from_sparse(
     indices_flat: NDArray[np.int64],
@@ -114,6 +115,7 @@ def minhash_batch_from_sparse(
 
     return signatures
 
+
 @numba.njit(parallel=True, cache=True)
 def minhash_batch_from_dense(
     data: NDArray[np.uint8],
@@ -150,6 +152,7 @@ def minhash_batch_from_dense(
             signatures[i, p] = min_hash
 
     return signatures
+
 
 def binary_to_sparse(data: NDArray[np.uint8]) -> tuple[NDArray[np.int64], NDArray[np.int64]]:
     """

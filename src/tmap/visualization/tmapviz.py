@@ -26,7 +26,6 @@ COLORMAPS = list(colormaps)
 VENDOR_DIR = Path(__file__).parent / "vendor"
 
 
-
 def _project_root() -> Path:
     """Return repository root (assumes src/tmap/visualization/...)."""
     return Path(__file__).resolve().parents[3]
@@ -110,6 +109,7 @@ def _sanitize_filename(name: str, seen: set[str] | None = None) -> str:
     The sanitized name is added to *seen* in place.
     """
     import re
+
     # Replace spaces, parens, and other non-alphanumeric chars with underscores
     safe = re.sub(r"[^a-zA-Z0-9_\-.]", "_", name)
     # Collapse multiple underscores
@@ -247,6 +247,7 @@ def _coerce_json_safe(v: Any) -> Any:
     # pandas NA-like sentinels
     try:
         import pandas as pd
+
         if isinstance(v, type(pd.NA)) or (isinstance(v, float) and pd.isna(v)):
             return None
     except ImportError:
@@ -464,6 +465,7 @@ class TmapViz:
                 # pandas NA-like sentinels
                 try:
                     import pandas as _pd
+
                     if isinstance(v, type(_pd.NA)):
                         continue
                 except ImportError:
@@ -578,7 +580,7 @@ class TmapViz:
                 )
             color = hex_list  # fall through to list handling
 
-        # list of hex strings -> store as custom colormap 
+        # list of hex strings -> store as custom colormap
         if isinstance(color, list):
             if not categorical:
                 raise ValueError(
@@ -587,9 +589,7 @@ class TmapViz:
                 )
             hex_colors = [_normalize_hex_color(c) for c in color]
             if not hex_colors:
-                raise ValueError(
-                    "color list must not be empty. Provide at least one hex color."
-                )
+                raise ValueError("color list must not be empty. Provide at least one hex color.")
 
             unique_count = len(set(str(v) for v in values))
             if len(hex_colors) < unique_count:
@@ -606,7 +606,7 @@ class TmapViz:
             self._custom_colormaps[key] = hex_colors
             return key
 
-        # string: matplotlib colormap name 
+        # string: matplotlib colormap name
         if color not in COLORMAPS:
             raise ValueError(f"Color option not found. Choose from {list(matplotlib.colormaps)}")
 
@@ -966,7 +966,7 @@ class TmapViz:
         Returns:
             ``pandas.DataFrame`` with one row per point.
         """
-        import pandas as pd  
+        import pandas as pd
 
         n_rows = len(self._points_array) if self._points_array is not None else 0
         if n_rows == 0 and self._columns:
@@ -1093,8 +1093,7 @@ class TmapViz:
             )
         if not np.all(np.isfinite(x_arr)) or not np.all(np.isfinite(y_arr)):
             raise ValueError(
-                "Coordinates contain NaN or Inf values. "
-                "All x and y values must be finite."
+                "Coordinates contain NaN or Inf values. All x and y values must be finite."
             )
 
         normalized_coords = _normalize_coords(x_arr, y_arr)
@@ -1104,8 +1103,7 @@ class TmapViz:
         for col in self._columns.values():
             if len(col.values) != n:
                 raise ValueError(
-                    f"Column '{col.name}' has {len(col.values)} values but there are "
-                    f"{n} points"
+                    f"Column '{col.name}' has {len(col.values)} values but there are {n} points"
                 )
 
         # Re-validate edges against the new point count
@@ -1113,8 +1111,7 @@ class TmapViz:
             max_idx = max(int(self._edges_s.max()), int(self._edges_t.max()))
             if max_idx >= n:
                 raise ValueError(
-                    f"Edge indices must be < n_points ({n}). "
-                    f"Got max edge index {max_idx}."
+                    f"Edge indices must be < n_points ({n}). Got max edge index {max_idx}."
                 )
 
     def to_widget(
@@ -1373,9 +1370,7 @@ class TmapViz:
         # Every label key must have a column
         for name in self._labels_keys:
             if name not in self._columns:
-                raise ValueError(
-                    f"Label '{name}' is registered but has no column data."
-                )
+                raise ValueError(f"Label '{name}' is registered but has no column data.")
 
     def to_html(self, template_name: str = "base.html.j2") -> str:
         """Return a self-contained HTML document as a string.
@@ -1659,7 +1654,6 @@ class TmapViz:
         for col_name, ui in self._column_ui.items():
             if col_name in columns_meta:
                 columns_meta[col_name]["ui"] = ui
-
 
         # Auto-scale point size
         effective_point_size = self.point_size

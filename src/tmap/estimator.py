@@ -647,9 +647,7 @@ class TMAP:
             if self._index is None:
                 raise RuntimeError(
                     "No ANN index stored. Reconstruct with store_index=True "
-                    "to use transform() or add_points() with metric={!r}.".format(
-                        self.metric
-                    )
+                    "to use transform() or add_points() with metric={!r}.".format(self.metric)
                 )
             X_dense = self._coerce_dense_matrix(X, min_samples=0)
             # Check that the new data has the same number of features as fit().
@@ -686,9 +684,7 @@ class TMAP:
         elif self.metric == "precomputed":
             dist_matrix = np.asarray(X, dtype=np.float32)
             if not np.all(np.isfinite(dist_matrix)):
-                raise ValueError(
-                    "Distance matrix contains NaN or Inf values."
-                )
+                raise ValueError("Distance matrix contains NaN or Inf values.")
             if dist_matrix.ndim != 2:
                 raise ValueError(
                     "metric='precomputed' expects a 2D distance matrix (m_new, n_existing)."
@@ -958,9 +954,7 @@ class TMAP:
             csr = sp.csr_matrix(X)
             n_samples, n_features = csr.shape
             if self.n_neighbors >= n_samples:
-                raise ValueError(
-                    f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
-                )
+                raise ValueError(f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}")
             # Enforce binary values (same as dense path)
             if csr.nnz > 0 and not np.all(csr.data == 1):
                 raise ValueError(
@@ -969,8 +963,7 @@ class TMAP:
                 )
             # Extract per-row nonzero column indices
             indices_list = [
-                csr.indices[csr.indptr[i] : csr.indptr[i + 1]].tolist()
-                for i in range(n_samples)
+                csr.indices[csr.indptr[i] : csr.indptr[i + 1]].tolist() for i in range(n_samples)
             ]
             signatures = encoder.batch_from_sparse_binary_array(indices_list)
             self._jaccard_mode = "binary"
@@ -986,9 +979,7 @@ class TMAP:
             n_samples = binary_matrix.shape[0]
             n_features = binary_matrix.shape[1]
             if self.n_neighbors >= n_samples:
-                raise ValueError(
-                    f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
-                )
+                raise ValueError(f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}")
             signatures = encoder.batch_from_binary_array(binary_matrix)
             del binary_matrix
             self._jaccard_mode = "binary"
@@ -1010,9 +1001,7 @@ class TMAP:
 
         n_samples = len(X)
         if self.n_neighbors >= n_samples:
-            raise ValueError(
-                f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
-            )
+            raise ValueError(f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}")
 
         # first non-empty element to decide string vs integer
         first_elem = None

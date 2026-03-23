@@ -560,8 +560,6 @@ class TestNotebookAPI:
         assert color_dd.value == "mw"
 
 
-
-
 # =============================================================================
 # to_html Tests
 # =============================================================================
@@ -885,7 +883,7 @@ class TestSetEdges:
         assert "inline_edges" in html or "const metadata =" in html
         # Extract inline metadata JSON from the JS
         match = re.search(
-            r'const metadata = ({.*?});',
+            r"const metadata = ({.*?});",
             html,
             re.DOTALL,
         )
@@ -904,7 +902,7 @@ class TestSetEdges:
         html = viz.to_html()
 
         match = re.search(
-            r'const metadata = ({.*?});',
+            r"const metadata = ({.*?});",
             html,
             re.DOTALL,
         )
@@ -943,7 +941,6 @@ class TestEdgeStyle:
         viz = TmapViz()
         with pytest.raises(ValueError, match="must be in \\[0, 1\\]"):
             viz.set_edge_style(opacity=1.2)
-
 
 
 # =============================================================================
@@ -1118,7 +1115,7 @@ class TestConfigureCard:
 
         html = viz.to_html()
         match = re.search(
-            r'const metadata = ({.*?});',
+            r"const metadata = ({.*?});",
             html,
             re.DOTALL,
         )

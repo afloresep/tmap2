@@ -73,4 +73,5 @@ class TestNodeDiversity:
 
     def test_export(self):
         from tmap.graph import node_diversity as nd
+
         assert callable(nd)

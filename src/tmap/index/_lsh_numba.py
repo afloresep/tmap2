@@ -38,6 +38,7 @@ def jaccard_distance(sig_a: NDArray[np.uint64], sig_b: NDArray[np.uint64]) -> fl
             matches += 1
     return 1.0 - matches / d
 
+
 @numba.njit(cache=True)
 def weighted_jaccard_distance(sig_a: NDArray[np.uint64], sig_b: NDArray[np.uint64]) -> float:
     """
@@ -59,6 +60,7 @@ def weighted_jaccard_distance(sig_a: NDArray[np.uint64], sig_b: NDArray[np.uint6
         if sig_a[i, 0] == sig_b[i, 0] and sig_a[i, 1] == sig_b[i, 1]:
             matches += 1
     return 1.0 - matches / d
+
 
 @numba.njit(parallel=True, cache=True)
 def compute_distances_to_candidates(
@@ -88,6 +90,7 @@ def compute_distances_to_candidates(
 
     return distances
 
+
 @numba.njit(parallel=True, cache=True)
 def compute_weighted_distances_to_candidates(
     query: NDArray[np.uint64],
@@ -116,6 +119,7 @@ def compute_weighted_distances_to_candidates(
 
     return distances
 
+
 @numba.njit(cache=True)
 def _argsort_topk(arr: NDArray[np.float32], k: int) -> NDArray[np.int32]:
     """Get indices of k smallest elements (partial sort)."""
@@ -136,6 +140,7 @@ def _argsort_topk(arr: NDArray[np.float32], k: int) -> NDArray[np.int32]:
         indices[i], indices[min_idx] = indices[min_idx], indices[i]
 
     return indices[:k]
+
 
 @numba.njit(parallel=True, cache=True)
 def linear_scan_batch(
@@ -208,6 +213,7 @@ def linear_scan_batch(
 
     return result_indices, result_distances
 
+
 @numba.njit(parallel=True, cache=True)
 def linear_scan_batch_weighted(
     queries: NDArray[np.uint64],
@@ -272,6 +278,7 @@ def linear_scan_batch_weighted(
 
     return result_indices, result_distances
 
+
 @numba.njit(parallel=True, cache=True)
 def compute_hash_bands(
     signatures: NDArray[np.uint64],
@@ -313,6 +320,7 @@ def compute_hash_bands(
 
     return hash_bands
 
+
 @numba.njit(parallel=True, cache=True)
 def compute_hash_bands_weighted(
     signatures: NDArray[np.uint64],
@@ -352,6 +360,7 @@ def compute_hash_bands_weighted(
 
     return hash_bands
 
+
 @numba.njit(cache=True)
 def _binary_search_left(arr: NDArray[np.uint64], value: np.uint64) -> int:
     """Binary search for leftmost position where arr[i] >= value."""
@@ -364,6 +373,7 @@ def _binary_search_left(arr: NDArray[np.uint64], value: np.uint64) -> int:
             hi = mid
     return lo
 
+
 @numba.njit(cache=True)
 def _binary_search_right(arr: NDArray[np.uint64], value: np.uint64) -> int:
     """Binary search for leftmost position where arr[i] > value."""
@@ -375,6 +385,7 @@ def _binary_search_right(arr: NDArray[np.uint64], value: np.uint64) -> int:
         else:
             hi = mid
     return lo
+
 
 @numba.njit(cache=True)
 def query_single_band(
@@ -404,6 +415,7 @@ def query_single_band(
         return np.empty(0, dtype=np.int32)
 
     return sorted_indices[left:right].copy()
+
 
 @numba.njit(cache=True)
 def query_lsh_forest_single(
@@ -467,6 +479,7 @@ def query_lsh_forest_single(
                     return candidates[:n_candidates]
 
     return candidates[:n_candidates]
+
 
 @numba.njit(parallel=True, cache=True)
 def query_lsh_forest_batch(

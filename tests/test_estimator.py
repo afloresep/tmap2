@@ -6,7 +6,6 @@ from tmap.index.types import KNNGraph
 from tmap.layout import OGDF_AVAILABLE
 
 
-
 def _clustered_binary_data(
     n_samples: int = 40,
     n_features: int = 128,

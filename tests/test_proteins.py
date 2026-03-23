@@ -35,10 +35,7 @@ from tmap.utils.proteins import (
 INSULIN_B = "FVNQHLCGSHLVEALYLVCGERGFFYTPKT"
 
 # Human ubiquitin (76 residues) — well-characterized protein
-UBIQUITIN = (
-    "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQ"
-    "KESTLHLVLRLRGG"
-)
+UBIQUITIN = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
 
 
 class TestIsValidSequence:
@@ -159,10 +156,12 @@ class TestSequenceProperties:
 class TestSequencePropertiesExport:
     def test_import_from_utils(self):
         from tmap.utils import sequence_properties as sp
+
         assert callable(sp)
 
     def test_import_from_top_level(self):
         from tmap import sequence_properties as sp
+
         assert callable(sp)
 
 
@@ -246,7 +245,10 @@ class TestFetchUniprot:
             return mock_resp
 
         import urllib.error
-        with patch("tmap.utils.proteins.urllib.request.urlopen", side_effect=mock_urlopen_side_effect):
+
+        with patch(
+            "tmap.utils.proteins.urllib.request.urlopen", side_effect=mock_urlopen_side_effect
+        ):
             # Two chunks of 1 each — first fails, second succeeds
             result = fetch_uniprot(["P12345", "Q9NZC2"], chunk_size=1)
             # Should have partial results
@@ -254,10 +256,12 @@ class TestFetchUniprot:
 
     def test_export_from_utils(self):
         from tmap.utils import fetch_uniprot as fu
+
         assert callable(fu)
 
     def test_export_from_top_level(self):
         from tmap import fetch_uniprot as fu
+
         assert callable(fu)
 
 
@@ -265,12 +269,16 @@ class TestFetchUniprot:
 # fetch_alphafold tests (mocked)
 # ---------------------------------------------------------------------------
 
-_MOCK_ALPHAFOLD_JSON = json.dumps([{
-    "sequenceEnd": 350,
-    "globalMetricValue": 92.5,
-    "fractionPlddtVeryLow": 0.03,
-    "fractionPlddtVeryHigh": 0.78,
-}])
+_MOCK_ALPHAFOLD_JSON = json.dumps(
+    [
+        {
+            "sequenceEnd": 350,
+            "globalMetricValue": 92.5,
+            "fractionPlddtVeryLow": 0.03,
+            "fractionPlddtVeryHigh": 0.78,
+        }
+    ]
+)
 
 
 class TestFetchOneAlphafold:
@@ -307,12 +315,15 @@ class TestFetchAlphafold:
 
     def test_output_dtypes(self):
         with patch("tmap.utils.proteins._fetch_one_alphafold") as mock_fetch:
-            mock_fetch.return_value = ("P12345", {
-                "length": 350.0,
-                "plddt": 92.5,
-                "frac_disordered": 0.03,
-                "frac_confident": 0.78,
-            })
+            mock_fetch.return_value = (
+                "P12345",
+                {
+                    "length": 350.0,
+                    "plddt": 92.5,
+                    "frac_disordered": 0.03,
+                    "frac_confident": 0.78,
+                },
+            )
             result = fetch_alphafold(["P12345"])
             for v in result.values():
                 assert v.dtype == np.float32
@@ -329,8 +340,10 @@ class TestFetchAlphafold:
         def mock_side_effect(uid):
             if uid == "P12345":
                 return uid, {
-                    "length": 200.0, "plddt": 85.0,
-                    "frac_disordered": 0.1, "frac_confident": 0.6,
+                    "length": 200.0,
+                    "plddt": 85.0,
+                    "frac_disordered": 0.1,
+                    "frac_confident": 0.6,
                 }
             return uid, None
 
@@ -341,16 +354,19 @@ class TestFetchAlphafold:
 
     def test_export_from_utils(self):
         from tmap.utils import fetch_alphafold as fa
+
         assert callable(fa)
 
     def test_export_from_top_level(self):
         from tmap import fetch_alphafold as fa
+
         assert callable(fa)
 
 
 # ---------------------------------------------------------------------------
 # File reader tests
 # ---------------------------------------------------------------------------
+
 
 class TestReadFasta:
     def test_basic(self, tmp_path):
@@ -389,8 +405,10 @@ class TestReadFasta:
 
     def test_export(self):
         from tmap.utils import read_fasta as rf
+
         assert callable(rf)
         from tmap import read_fasta as rf2
+
         assert callable(rf2)
 
 
@@ -423,8 +441,10 @@ class TestReadProteinCsv:
 
     def test_export(self):
         from tmap.utils import read_protein_csv as rc
+
         assert callable(rc)
         from tmap import read_protein_csv as rc2
+
         assert callable(rc2)
 
 
@@ -461,8 +481,10 @@ class TestReadIdList:
 
     def test_export(self):
         from tmap.utils import read_id_list as rl
+
         assert callable(rl)
         from tmap import read_id_list as rl2
+
         assert callable(rl2)
 
 
@@ -567,16 +589,22 @@ class TestReadPdb:
 
     def test_export(self):
         from tmap.utils import read_pdb as rp
+
         assert callable(rp)
         from tmap import read_pdb as rp2
+
         assert callable(rp2)
 
 
 class TestReadPdbDir:
     def test_basic(self, tmp_path):
-        for i, (seq_line, bf) in enumerate([
-            ("ALA", "80.00"), ("GLY", "95.00"), ("VAL", "30.00"),
-        ]):
+        for i, (seq_line, bf) in enumerate(
+            [
+                ("ALA", "80.00"),
+                ("GLY", "95.00"),
+                ("VAL", "30.00"),
+            ]
+        ):
             content = f"ATOM      1  CA  {seq_line} A   1       1.0   2.0   3.0  1.00 {bf}\nEND\n"
             (tmp_path / f"prot{i}.pdb").write_text(content)
 
@@ -593,16 +621,22 @@ class TestReadPdbDir:
         assert props["mean_bfactor"].shape == (0,)
 
     def test_pattern_filter(self, tmp_path):
-        (tmp_path / "a.pdb").write_text("ATOM      1  CA  ALA A   1       1.0   2.0   3.0  1.00 80.00\nEND\n")
-        (tmp_path / "b.ent").write_text("ATOM      1  CA  GLY A   1       1.0   2.0   3.0  1.00 90.00\nEND\n")
+        (tmp_path / "a.pdb").write_text(
+            "ATOM      1  CA  ALA A   1       1.0   2.0   3.0  1.00 80.00\nEND\n"
+        )
+        (tmp_path / "b.ent").write_text(
+            "ATOM      1  CA  GLY A   1       1.0   2.0   3.0  1.00 90.00\nEND\n"
+        )
         ids, seqs, props = read_pdb_dir(tmp_path, pattern="*.ent")
         assert len(ids) == 1
         assert seqs[0] == "G"
 
     def test_export(self):
         from tmap.utils import read_pdb_dir as rpd
+
         assert callable(rpd)
         from tmap import read_pdb_dir as rpd2
+
         assert callable(rpd2)
 
 
@@ -610,13 +644,28 @@ class TestReadPdbDir:
 # parse_alignment
 # ---------------------------------------------------------------------------
 
-def _make_m8_line(qid, sid, pident, length, mismatch, gapopen,
-                  qstart, qend, sstart, send, evalue, bitscore):
+
+def _make_m8_line(
+    qid, sid, pident, length, mismatch, gapopen, qstart, qend, sstart, send, evalue, bitscore
+):
     """Build a single BLAST6 m8 line."""
-    return "\t".join(str(x) for x in [
-        qid, sid, pident, length, mismatch, gapopen,
-        qstart, qend, sstart, send, evalue, bitscore,
-    ])
+    return "\t".join(
+        str(x)
+        for x in [
+            qid,
+            sid,
+            pident,
+            length,
+            mismatch,
+            gapopen,
+            qstart,
+            qend,
+            sstart,
+            send,
+            evalue,
+            bitscore,
+        ]
+    )
 
 
 class TestParseAlignment:
@@ -732,6 +781,8 @@ class TestParseAlignment:
 
     def test_export(self):
         from tmap.utils import parse_alignment as pa
+
         assert callable(pa)
         from tmap import parse_alignment as pa2
+
         assert callable(pa2)
