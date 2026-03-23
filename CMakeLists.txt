@@ -12,31 +12,35 @@ option(TMAP_BUILD_LAYOUT "Build OGDF-backed layout extension." ON)
 
 if(TMAP_BUILD_LAYOUT)
     # ---------------------------------------------------------------------------
-    # Build OGDF from bundled submodule (single supported path)
+    # Locate OGDF: prefer bundled submodule, fall back to FetchContent download
     # ---------------------------------------------------------------------------
     set(TMAP_OGDF_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/ogdf")
 
-    if(NOT EXISTS "${TMAP_OGDF_SOURCE_DIR}/CMakeLists.txt")
-        message(FATAL_ERROR
-            "Bundled OGDF source was not found at extern/ogdf.\n"
-            "Initialize submodules and reinstall:\n"
-            "  git submodule update --init --recursive extern/ogdf\n"
-            "  pip install -e .\n"
-            "For core-only installs without layout:\n"
-            "  pip install -e . --config-settings=cmake.define.TMAP_BUILD_LAYOUT=OFF"
+    if(EXISTS "${TMAP_OGDF_SOURCE_DIR}/CMakeLists.txt")
+        message(STATUS "Building OGDF from bundled source: ${TMAP_OGDF_SOURCE_DIR}")
+    else()
+        message(STATUS "Bundled OGDF not found — downloading via FetchContent...")
+        include(FetchContent)
+        FetchContent_Declare(
+            ogdf
+            GIT_REPOSITORY https://github.com/ogdf/ogdf.git
+            GIT_TAG        403b4df616227f096c42465cf53bdc918a2f63bb
+            GIT_SHALLOW    FALSE
         )
+        FetchContent_MakeAvailable(ogdf)
+        set(TMAP_OGDF_SOURCE_DIR "${ogdf_SOURCE_DIR}")
     endif()
-
-    message(STATUS "Building OGDF from bundled source: ${TMAP_OGDF_SOURCE_DIR}")
 
     # Keep OGDF static and avoid enabling docs by accident.
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     set(DOC_INSTALL OFF CACHE BOOL "" FORCE)
 
-    add_subdirectory(extern/ogdf EXCLUDE_FROM_ALL)
+    if(NOT TARGET OGDF)
+        add_subdirectory("${TMAP_OGDF_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ogdf" EXCLUDE_FROM_ALL)
+    endif()
 
     if(NOT TARGET OGDF)
-        message(FATAL_ERROR "OGDF target was not created by extern/ogdf.")
+        message(FATAL_ERROR "OGDF target was not created.")
     endif()
 
     add_subdirectory(cpp)

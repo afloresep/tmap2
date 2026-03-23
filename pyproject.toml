@@ -27,16 +27,16 @@ dependencies = [
     "scipy>=1.11",
     "datasketch>=1.6.0",
     "numba>=0.59",
+    "xxhash>=3.0",
     "jinja2>=3.1",
     "matplotlib>=3.7",
     "pandas>=2.2",
+    "usearch>=2.16,<3",
 ]
 
 [project.optional-dependencies]
-faiss = ["faiss-cpu>=1.7"]
 notebook = ["jupyter-scatter>=0.22.2"]
 all = [
-    "faiss-cpu>=1.7",
     "jupyter-scatter>=0.22.2",
 ]
 dev = [

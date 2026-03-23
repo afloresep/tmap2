@@ -409,7 +409,7 @@ print(f"Laid out {len(x)} points with {len(s)} edges")
 
 - [MinHash Guide](minhash_guide.md) - Data encoding with MinHash signatures
 - [LSHForest Guide](lshforest_guide.md) - Building the LSH index and k-NN graphs
-- [Graph Guide](graph_guide.md) - MST construction and the `bias_factor` parameter
+- [Graph Guide](graph_guide.md) - MST extraction and Tree traversal
 - [API Reference](api_reference.md) - Quick reference for all functions
 
 Happy mapping!

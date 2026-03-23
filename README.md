@@ -1,24 +1,99 @@
 [![Tests](https://github.com/afloresep/TMAP/actions/workflows/tests.yml/badge.svg)](https://github.com/afloresep/TMAP/actions/workflows/tests.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-# TMAP 
+# TMAP
 
 > **🚧 UNDER ACTIVE DEVELOPMENT 🚧**
 >
 > This is a modernized reimplementation of the original TMAP library. Core features are working, but the API may change before v1.0.
-> Production users should continue using the [original TMAP](https://github.com/reymond-group/tmap) until this project reaches stability.
 >
-> **Status (2026-02-14):**
-> - `layout="tree"` is the supported layout mode.
-> - `layout="graph"` is alpha and not supported for production use.
+> **Current scope:**
+>
+> - Tree layout only
+> - `jaccard`, `cosine`, `euclidean`, and `precomputed` metrics
+> - `transform()` and `add_points()` are available
 
 **TMAP** creates beautiful, interactive visualizations of high-dimensional data by organizing similar items into tree structures. Perfect for chemical space, embeddings, or any high-dimensional dataset.
 
 ```text
-Your Data → MinHash → LSHForest → k-NN Graph → MST → OGDF Layout → Interactive Visualization
+Your Data → [MinHash → LSHForest] (jaccard) → k-NN Graph → MST → OGDF Layout → Interactive Visualization
+            [USearch] (cosine / euclidean)    
 ```
 
-## What's New
+## Installation
+
+### Recommended
+
+```bash
+git clone https://github.com/afloresep/TMAP.git
+cd TMAP
+python -m pip install .
+```
+
+Optional extras for common workflows:
+
+```bash
+python -m pip install rdkit jupyter-scatter
+```
+
+- `rdkit` is needed for chemistry helpers such as `fingerprints_from_smiles` and `molecular_properties`.
+- `jupyter-scatter` is only needed for notebook widgets.
+- `usearch` is installed automatically and provides the dense nearest-neighbor backend for `cosine` and `euclidean`.
+
+### Build Notes
+
+- Python **3.12+**
+- A C++ compiler is still needed because the OGDF extension is built during install.
+- On macOS, install the Xcode command-line tools first with `xcode-select --install`.
+
+## Two API Styles
+
+TMAP now has two main ways to work:
+
+### 1. Recommended: sklearn-style estimator
+
+Use this when you want the shortest path from data to map:
+
+```python
+from tmap import TMAP
+
+model = TMAP(metric="jaccard", n_neighbors=20, kc=50, seed=42).fit(X)
+viz = model.to_tmapviz()
+viz.write_html("map.html")
+```
+
+This is the right path for most users.
+
+### 2. Lower-level legacy-compatible pipeline
+
+Use this when you want direct control over MinHash, LSH, or the layout stages:
+
+```python
+from tmap import LSHForest, MinHash
+from tmap.layout import LayoutConfig, layout_from_lsh_forest
+
+mh = MinHash(num_perm=128, seed=42)
+signatures = mh.batch_from_binary_array(X)
+
+lsh = LSHForest(d=128, l=64)
+lsh.batch_add(signatures)
+lsh.index()
+
+cfg = LayoutConfig(k=20, kc=50, deterministic=True, seed=42)
+x, y, s, t = layout_from_lsh_forest(lsh, cfg)
+```
+
+This path is useful if you are coming from the original TMAP workflow or if you want to tune the hashing and indexing stages directly.
+
+Related pieces in the lower-level API:
+
+- `MinHash.from_binary_array`, `batch_from_binary_array`
+- `MinHash.from_sparse_binary_array`, `batch_from_sparse_binary_array`
+- `MinHash.from_string_array`, `batch_from_string_array`
+- `LSHForest`, `get_knn_graph`
+- `layout_from_lsh_forest`, `layout_from_knn_graph`, `tree_from_knn_graph`
+
+## Visualization Features
 
 ### Notebook Controls for Color + Filter
 
@@ -66,58 +141,52 @@ viz.show(width=1000, height=620, controls=True)
 
 ![Interactive HTML features](docs/images/image.png)
 
+The HTML viewer supports:
+
+- `Shift + drag` to lasso-select points
+- light and dark theme toggle
+- filter and search side panels
+- pinned cards for metadata, structures, and links
+
+The screenshots and gifs in this section can be refreshed later without changing the API.
+
 ### Also Improved
 
 - Handles large datasets (binary mode for compact HTML payloads)
 - Better notebook interactivity via `jupyter-scatter`
 - High-level sklearn-style estimator (`TMAP`) plus lower-level modular pipeline
 
-**In Progress**
-
-- `layout="graph"` stabilization and quality tuning
-- Incremental/add-points workflows
-
-## 📦 Installation
-
-### Requirements
-
-- Python **3.12+**
-- A C++ compiler (for OGDF layout extension build)
-
-### Quick Install
-
-```bash
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # macOS/Linux
-# .\.venv\Scripts\Activate.ps1  # Windows (PowerShell)
-
-# Install
-python -m pip install -U pip
-python -m pip install -e .
-
-# Optional: development tools
-python -m pip install -e ".[dev]"
-```
-
 **Notes:**
 
 - The import name is `tmap`. If you need the original C++ `tmap` package, use a separate virtualenv to avoid conflicts.
-- `pip install -e .` installs the full stack (OGDF layout + HTML visualization + notebook widget support).
+- OGDF layout is required. There is currently no pure-Python layout fallback.
 - OGDF is built from the bundled `extern/ogdf` submodule during install.
-- Optional extras: `.[faiss]`, `.[annoy]`, or `.[all]` (see `pyproject.toml`).
-
-### Core-Only Install (LSH + MinHash only)
-
-```bash
-# Skip OGDF build and skip full dependency set
-python -m pip install -e . --no-deps --config-settings=cmake.define.TMAP_BUILD_LAYOUT=OFF
-
-# Install only core runtime dependencies
-python -m pip install -r requirements-core.txt
-```
+- `datasketch` and `xxhash` are part of the core install so weighted and string-token MinHash workflows work out of the box.
 
 ## 🚀 Quick Start
+
+### Fastest Way: Use The Estimator
+
+```python
+import numpy as np
+from tmap import TMAP
+
+# Binary fingerprints
+X = np.random.randint(0, 2, (1000, 2048), dtype=np.uint8)
+model = TMAP(metric="jaccard", n_neighbors=20).fit(X)
+coords = model.embedding_
+model.to_html("tmap.html")
+```
+
+```python
+import numpy as np
+from tmap import TMAP
+
+# Dense embeddings
+X = np.random.random((1000, 128)).astype(np.float32)
+model = TMAP(metric="cosine", n_neighbors=20, store_index=True).fit(X)
+new_coords = model.transform(X[:10])
+```
 
 ### Complete Example: Molecular Visualization
 
@@ -188,26 +257,24 @@ x, y, s, t = layout_from_lsh_forest(lsh, cfg)
 # s, t = tree edges (source, target indices)
 ```
 
-## 📚 Examples & Tutorials
+## Tutorials
 
-Check out the [`examples/`](examples/) directory for complete, runnable examples:
+Recommended tutorials and examples:
 
-- **[`smiles_tmap.py`](examples/smiles_tmap.py)** - Full pipeline: SMILES → Fingerprints → TMAP visualization with molecular properties
-- **[`visualization_demo.py`](examples/visualization_demo.py)** - Visualization API examples with different configurations
-
-Run the molecular example:
-
-```bash
-pip install rdkit tqdm  # Additional dependencies
-python examples/smiles_tmap.py
-```
-
-This creates an interactive HTML file with:
-
-- Pan & zoom navigation
-- Hover to see molecule structures (via SMILES rendering)
-- Multiple color schemes (molecular weight, LogP, ring count)
-- Responsive design
+- [`examples/cluster_65053_tmap.py`](examples/cluster_65053_tmap.py)
+  Canonical molecule example with SMILES, properties, HTML export, and `serve()`.
+- [`notebooks/01_quickstart.ipynb`](notebooks/01_quickstart.ipynb)
+  Fastest estimator-based workflow.
+- [`notebooks/02_minhash_deep_dive.ipynb`](notebooks/02_minhash_deep_dive.ipynb)
+  MinHash methods and the different `from_*` and `batch_from_*` entry points.
+- [`notebooks/03_legacy_lsh_pipeline.ipynb`](notebooks/03_legacy_lsh_pipeline.ipynb)
+  Lower-level `MinHash` + `LSHForest` + `layout_from_lsh_forest` workflow.
+- [`notebooks/06_metric_guide.ipynb`](notebooks/06_metric_guide.ipynb)
+  When to use `jaccard`, `cosine`, `euclidean`, and `precomputed`.
+- [`notebooks/08_cheminformatics.ipynb`](notebooks/08_cheminformatics.ipynb)
+  Estimator-first chemistry workflow on `cluster_65053.csv`.
+- [`notebooks/11_card_configuration.ipynb`](notebooks/11_card_configuration.ipynb)
+  How to build useful pinned cards for molecule maps.
 
 ## 📖 Documentation
 
@@ -221,7 +288,6 @@ Comprehensive guides are available in the [`docs/`](docs/) directory:
 | [Graph Guide](docs/graph_guide.md) | MST construction, tree traversal, bias factor tuning |
 | [Layout Guide](docs/layout_guide.md) | OGDF layout configuration, parameter tuning, determinism |
 | [Visualization Guide](docs/visualization_guide.md) | Creating interactive visualizations with TmapViz |
-| [Incremental Workflow Plan](docs/incremental_workflow_plan.md) | Concrete v1 plan for `transform(new_X)` and add-points workflows |
 | [API Reference](docs/api_reference.md) | Complete API documentation |
 
 ## 🧪 Development

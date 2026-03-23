@@ -697,16 +697,10 @@ class TestLSHForestSinglePoint:
 
 
 class TestKNNGraphMethods:
-    """Test KNNGraph class methods.
-
-    Covers: KNNGraph.to_edge_list() and properties.
-    """
+    """Test KNNGraph class methods."""
 
     def test_knn_graph_properties(self):
-        """Test KNNGraph n_nodes and k properties.
-
-        Covers: Basic property access.
-        """
+        """Test KNNGraph n_nodes and k properties."""
         rng = np.random.default_rng(42)
         signatures = rng.integers(0, 2**63, size=(20, 128), dtype=np.uint64)
 
@@ -718,63 +712,6 @@ class TestKNNGraphMethods:
 
         assert knn.n_nodes == 20
         assert knn.k == 5
-
-    def test_knn_graph_to_edge_list(self):
-        """Test KNNGraph.to_edge_list() conversion.
-
-        Covers: Converting k-NN graph to edge list format.
-        """
-        rng = np.random.default_rng(42)
-
-        # Create similar signatures so LSH can find neighbors
-        # Start with a base and create variations
-        base = rng.integers(0, 2**63, size=(128,), dtype=np.uint64)
-        signatures = []
-        for i in range(10):
-            sig = base.copy()
-            # Only modify 20% of values - keeps them similar
-            mask = rng.choice(128, size=25, replace=False)
-            sig[mask] = rng.integers(0, 2**63, size=25, dtype=np.uint64)
-            signatures.append(sig)
-        signatures = np.array(signatures, dtype=np.uint64)
-
-        lsh = LSHForest(d=128, l=8)
-        lsh.batch_add(signatures)
-        lsh.index()
-
-        knn = lsh.get_knn_graph(k=3, kc=20)
-        edge_list = knn.to_edge_list()
-
-        assert edge_list.n_nodes == 10
-        # With similar signatures, should have some edges
-        assert len(edge_list.edges) > 0
-
-        # Check edge format
-        for edge in edge_list.edges:
-            assert 0 <= edge.source < 10
-            assert 0 <= edge.target < 10
-            assert 0.0 <= edge.weight <= 1.0
-
-    def test_knn_graph_to_edge_list_excludes_invalid(self):
-        """to_edge_list() should exclude invalid (-1) neighbors.
-
-        Covers: Sparse k-NN graphs where some neighbors are missing.
-        """
-        rng = np.random.default_rng(42)
-        # Small dataset where some points may not find all k neighbors
-        signatures = rng.integers(0, 2**63, size=(5, 64), dtype=np.uint64)
-
-        lsh = LSHForest(d=64, l=4)
-        lsh.batch_add(signatures)
-        lsh.index()
-
-        knn = lsh.get_knn_graph(k=10, kc=5)  # k > n_nodes-1, so some invalid
-        edge_list = knn.to_edge_list()
-
-        # No edge should have -1 as source or target
-        for edge in edge_list.edges:
-            assert edge.source >= 0
-            assert edge.target >= 0
 
 
 class TestLSHForestWeightedPersistence:

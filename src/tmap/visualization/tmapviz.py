@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import math
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -22,11 +23,7 @@ except ImportError:
     _JINJA_AVAILABLE = False
 
 COLORMAPS = list(colormaps)
-TEMPLATES_DIR = Path(__file__).parent / "templates"
 VENDOR_DIR = Path(__file__).parent / "vendor"
-
-# Default threshold for switching to binary mode (number of points)
-BINARY_THRESHOLD = 500_000
 
 
 def _project_root() -> Path:
@@ -105,6 +102,28 @@ def _get_jinja_env() -> Environment:
     )
 
 
+def _sanitize_filename(name: str, seen: set[str] | None = None) -> str:
+    """Sanitize a column name for use as a filename (URL-safe).
+
+    When *seen* is provided, appends a numeric suffix to avoid collisions.
+    The sanitized name is added to *seen* in place.
+    """
+    import re
+
+    # Replace spaces, parens, and other non-alphanumeric chars with underscores
+    safe = re.sub(r"[^a-zA-Z0-9_\-.]", "_", name)
+    # Collapse multiple underscores
+    safe = re.sub(r"_+", "_", safe).strip("_")
+    if seen is not None:
+        base = safe
+        counter = 2
+        while safe in seen:
+            safe = f"{base}_{counter}"
+            counter += 1
+        seen.add(safe)
+    return safe
+
+
 def _normalize_coords(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """
     Normalize coordinates to [-1, 1] preserving aspect ratio.
@@ -181,6 +200,23 @@ def _colormap_to_hex(name: str) -> list[str]:
     return hex_colors
 
 
+def _cycle_colormaps(
+    colormaps_payload: dict[str, list[str]],
+    columns: dict[str, Any],
+) -> None:
+    """Extend colormap hex lists by cycling to cover all categorical values."""
+    max_cats: dict[str, int] = {}
+    for col in columns.values():
+        cmap_name = col.color if col.role in ("layout", "layout+label") else None
+        if cmap_name and col.dtype == "categorical":
+            n = len(set(col.values))
+            max_cats[cmap_name] = max(max_cats.get(cmap_name, 0), n)
+    for cmap_name, needed in max_cats.items():
+        if cmap_name in colormaps_payload and needed > len(colormaps_payload[cmap_name]):
+            base = colormaps_payload[cmap_name]
+            colormaps_payload[cmap_name] = [base[i % len(base)] for i in range(needed)]
+
+
 def _contains_nan(values: Sequence[Any]) -> bool:
     """Return True when values contain at least one NaN."""
     try:
@@ -188,6 +224,48 @@ def _contains_nan(values: Sequence[Any]) -> bool:
     except (TypeError, ValueError):
         return False
     return bool(np.isnan(arr).any())
+
+
+def _safe_float(v: Any) -> float:
+    """Convert a value to float, treating None/empty/NA-like as NaN."""
+    if v is None or (isinstance(v, str) and v == ""):
+        return float("nan")
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return float("nan")
+
+
+def _coerce_json_safe(v: Any) -> Any:
+    """Coerce a single value to a JSON-serializable type.
+
+    Handles numpy scalars, pandas NA, non-finite floats, etc.
+    """
+    # numpy scalar -> Python scalar
+    if isinstance(v, np.generic):
+        v = v.item()
+    # pandas NA-like sentinels
+    try:
+        import pandas as pd
+
+        if isinstance(v, type(pd.NA)) or (isinstance(v, float) and pd.isna(v)):
+            return None
+    except ImportError:
+        pass
+    # Non-finite Python float -> None (renders as null in JSON)
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return v
+
+
+def _encode_string_column(values: list[Any], name: str) -> bytes:
+    """Encode label/string column values as JSON bytes.
+
+    Handles numpy scalars, pandas NA, non-finite floats, and other
+    non-JSON-native types by coercing them to JSON-safe equivalents.
+    """
+    safe = [_coerce_json_safe(v) for v in values]
+    return json.dumps(safe, separators=(",", ":"), allow_nan=False).encode()
 
 
 def _to_json_safe(value: Any) -> Any:
@@ -225,8 +303,8 @@ def _to_json_safe(value: Any) -> Any:
 class Column:
     name: str
     values: Sequence[int | np.floating | str]
-    role: Literal["layout", "label", "layout+label", "smiles"]
-    dtype: Literal["continuous", "categorical", "label", "smiles"]
+    role: Literal["layout", "label", "layout+label", "smiles", "images"]
+    dtype: Literal["continuous", "categorical", "label", "smiles", "images"]
     color: str | None = None
 
 
@@ -275,8 +353,8 @@ class TmapViz:
     """Interactive scatter-plot visualization backed by regl-scatterplot.
 
     Supports continuous and categorical color layouts, label tooltips,
-    and optional SMILES molecule rendering. Supports both HTML export
-    (``to_html()``, ``write_html()``) and notebook widgets (``to_widget()``, ``show()``).
+    and optional SMILES molecule rendering. Export via ``to_html()`` /
+    ``write_html()`` or notebook widgets via ``to_widget()`` / ``show()``.
 
     Attributes:
         title: Page title and default filename stem.
@@ -293,7 +371,7 @@ class TmapViz:
         self.title: str = "MyTMAP"
         self.background_color: str = "#FFFFFF"
         self.point_color: str = "#4a9eff"
-        self.point_size: float = 4.0
+        self._point_size: float = 4.0
         self.opacity: float = 0.85
 
         self.edge_color: str = "#000000"
@@ -306,7 +384,31 @@ class TmapViz:
         self._layout_keys: list[str] = []
         self._labels_keys: list[str] = []
         self._smiles_column: str | None = None
+        self._images_column: str | None = None
+        self._images_tooltip_size: int = 128
+        self._protein_column: str | None = None
+        self._structures_column: str | None = None
+        self._structures_format: str = "pdb"
         self._columns: dict[str, Column] = {}
+
+        # Custom hex colormaps registered via add_color_layout(color=[...] or color={...})
+        self._custom_colormaps: dict[str, list[str]] = {}
+
+        # UI configuration (new declarative API)
+        self._filterable: list[str] = []
+        self._searchable: list[str] = []
+        self._card_config: dict[str, Any] | None = None
+        self._column_ui: dict[str, dict[str, Any]] = {}
+
+    @property
+    def point_size(self) -> float:
+        return self._point_size
+
+    @point_size.setter
+    def point_size(self, value: float) -> None:
+        if value <= 0:
+            raise ValueError(f"point_size must be > 0, got {value}")
+        self._point_size = float(value)
 
     def add_color_layout(
         self,
@@ -314,13 +416,39 @@ class TmapViz:
         values: list[Any] | NDArray,
         categorical: bool = False,
         add_as_label: bool = True,
-        color: str | None = None,
+        color: str | list[str] | dict[str, str] | None = None,
     ) -> None:
+        """Add a color layout column (continuous or categorical).
 
-        import matplotlib
+        Parameters
+        ----------
+        name : str
+            Column name shown in the layout selector and tooltip.
+        values : list or ndarray
+            One value per point. For categorical layouts these become the
+            legend labels, so you can pass human-readable strings directly
+            (e.g. ``["Bacteria", "Fungi", "Virus", ...]``).
+        categorical : bool, default False
+            If True, treat values as discrete categories.
+        add_as_label : bool, default True
+            Also show values in the hover tooltip.
+        color : str, list of str, dict, or None
+            How to color the points. Accepts three formats:
 
+            - **str** (default): a matplotlib colormap name like ``"tab10"``
+              or ``"viridis"``.
+            - **list of hex strings**: one color per unique category, assigned
+              in the order the categories first appear in *values*.
+              Example: ``["#e41a1c", "#377eb8", "#4daf4a"]``.
+            - **dict mapping value to hex color**: explicit color per category.
+              Example: ``{"Bacteria": "#e41a1c", "Fungi": "#377eb8"}``.
+              Categories not in the dict fall back to gray (``#888888``).
+
+            Custom hex lists and dicts are only supported for categorical
+            layouts. If None, defaults to ``"tab10"`` for categorical and
+            ``"viridis"`` for continuous.
+        """
         if isinstance(values, np.ndarray) and not categorical:
-            # Keep numeric arrays as numpy — avoid costly .tolist()
             values = np.asarray(values, dtype=np.float32)
         elif isinstance(values, np.ndarray):
             values = values.tolist()
@@ -329,14 +457,156 @@ class TmapViz:
 
         # Default to continuous because it will give less issues and having to pass
         # always the type can be annoying...
+        # Validate continuous values are actually numeric
+        if not categorical:
+            for v in values:
+                if v is None or (isinstance(v, str) and v == ""):
+                    continue
+                # pandas NA-like sentinels
+                try:
+                    import pandas as _pd
+
+                    if isinstance(v, type(_pd.NA)):
+                        continue
+                except ImportError:
+                    pass
+                try:
+                    float(v)
+                except (ValueError, TypeError):
+                    raise ValueError(
+                        f"Continuous layout '{name}' contains non-numeric value "
+                        f"{v!r}. Use categorical=True for string values."
+                    ) from None
+
         _column_dtype: Literal["categorical", "continuous"] = (
             "categorical" if categorical else "continuous"
         )
 
-        # Default colors
+        # Resolve the color parameter into a colormap name (str) that
+        # we can look up later in colormaps_payload.
+        color_key = self._resolve_color(name, color, values, categorical)
+
+        if not categorical and _contains_nan(values):
+            warnings.warn(
+                f"Continuous layout '{name}' contains NaN values. "
+                "NaN points will be rendered in black (#000000).",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        if name not in self._layout_keys:
+            self._layout_keys.append(name)
+
+        if add_as_label:
+            if name not in self._labels_keys:
+                self._labels_keys.append(name)
+            role: Literal["layout", "layout+label"] = "layout+label"
+        else:
+            if name in self._labels_keys:
+                self._labels_keys.remove(name)
+            role = "layout"
+
+        self._columns[name] = Column(name, values, role, _column_dtype, color=color_key)
+
+    def _resolve_color(
+        self,
+        column_name: str,
+        color: str | list[str] | dict[str, str] | None,
+        values: list[Any] | NDArray,
+        categorical: bool,
+    ) -> str:
+        """Turn the user-supplied color argument into a colormap key.
+
+        For matplotlib colormap names the key is the name itself.
+        For custom hex lists or dicts we store the colors under a
+        synthetic key in self._custom_colormaps and return that key.
+        """
+        import matplotlib
+
+        # Default
         if color is None:
             color = "tab10" if categorical else "viridis"
 
+        # dict {value: hex} -> convert to ordered hex list
+        if isinstance(color, dict):
+            if not categorical:
+                raise ValueError(
+                    "A color dict mapping values to hex colors is only "
+                    "supported for categorical layouts (categorical=True)."
+                )
+            # Collect unique categories as str (matches _pack_categorical_binary)
+            categories = list(dict.fromkeys(str(v) for v in values))
+
+            # Sort numerically if ALL categories parse as finite numbers.
+            # This must mirror the JS sort: unique.every(v => !isNaN(Number(v)))
+            try:
+                parsed = [float(c) for c in categories]
+                if all(p == p for p in parsed):  # exclude NaN
+                    categories.sort(key=float)
+            except (ValueError, TypeError):
+                pass  # keep insertion order for non-numeric categories
+
+            # Normalize dict keys to strings for lookup
+            str_color: dict[str, str] = {str(k): v for k, v in color.items()}
+
+            # Build hex list, trying numeric-equivalent key forms
+            hex_list: list[str] = []
+            unmatched: list[str] = []
+            for cat in categories:
+                hex_val = str_color.get(cat)
+                if hex_val is None:
+                    # Try numeric normalization: "2.0" <-> "2", "3" <->"3.0"
+                    try:
+                        num = float(cat)
+                        if num == int(num):
+                            hex_val = str_color.get(str(int(num)))
+                        if hex_val is None:
+                            hex_val = str_color.get(str(num))
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+                if hex_val is None:
+                    unmatched.append(cat)
+                    hex_val = "#888888"
+                hex_list.append(_normalize_hex_color(hex_val))
+
+            if unmatched:
+                warnings.warn(
+                    f"Categorical layout '{column_name}': {len(unmatched)} of "
+                    f"{len(categories)} categories had no matching key in the "
+                    f"color dict and will use fallback gray (#888888): "
+                    f"{unmatched[:5]}{'...' if len(unmatched) > 5 else ''}",
+                    UserWarning,
+                    stacklevel=3,
+                )
+            color = hex_list  # fall through to list handling
+
+        # list of hex strings -> store as custom colormap
+        if isinstance(color, list):
+            if not categorical:
+                raise ValueError(
+                    "A list of hex colors is only supported for "
+                    "categorical layouts (categorical=True)."
+                )
+            hex_colors = [_normalize_hex_color(c) for c in color]
+            if not hex_colors:
+                raise ValueError("color list must not be empty. Provide at least one hex color.")
+
+            unique_count = len(set(str(v) for v in values))
+            if len(hex_colors) < unique_count:
+                warnings.warn(
+                    f"Categorical layout '{column_name}' has {unique_count} "
+                    f"unique values but only {len(hex_colors)} custom colors "
+                    f"were provided. Colors will cycle.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                hex_colors = [hex_colors[i % len(hex_colors)] for i in range(unique_count)]
+
+            key = f"_custom_{column_name}"
+            self._custom_colormaps[key] = hex_colors
+            return key
+
+        # string: matplotlib colormap name
         if color not in COLORMAPS:
             raise ValueError(f"Color option not found. Choose from {list(matplotlib.colormaps)}")
 
@@ -365,32 +635,15 @@ class TmapViz:
 
             cmap_size = matplotlib.colormaps[color].N
             if unique_count > cmap_size:
-                raise ValueError(
-                    f"Categorical layout '{name}' has {unique_count} unique values but "
-                    f"colormap '{color}' only provides {cmap_size} colors."
+                warnings.warn(
+                    f"Categorical layout '{column_name}' has {unique_count} unique values but "
+                    f"colormap '{color}' only provides {cmap_size} colors. "
+                    f"Colors will cycle.",
+                    UserWarning,
+                    stacklevel=2,
                 )
 
-        if not categorical and _contains_nan(values):
-            warnings.warn(
-                f"Continuous layout '{name}' contains NaN values. "
-                "NaN points will be rendered in black (#000000).",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        if name not in self._layout_keys:
-            self._layout_keys.append(name)
-
-        if add_as_label:
-            if name not in self._labels_keys:
-                self._labels_keys.append(name)
-            role: Literal["layout", "layout+label"] = "layout+label"
-        else:
-            if name in self._labels_keys:
-                self._labels_keys.remove(name)
-            role = "layout"
-
-        self._columns[name] = Column(name, values, role, _column_dtype, color=color)
+        return color
 
     def add_label(
         self,
@@ -401,8 +654,19 @@ class TmapViz:
 
         Args:
             name: Column name displayed in the tooltip header.
-            values: One value per point. Non-string values are converted via ``str()``.
+
+        Raises:
+            ValueError: If *name* already exists as a color-layout column.
+                Overwriting a layout column with a label would corrupt the
+                binary data (JS expects float32/uint32 but gets JSON string).
         """
+        if name in self._layout_keys:
+            raise ValueError(
+                f"Cannot add label '{name}': it already exists as a color layout. "
+                f"Layout columns with add_as_label=True already appear in tooltips. "
+                f"Use a different name if you need a separate label."
+            )
+
         if isinstance(values, np.ndarray):
             values = values.tolist()
         else:
@@ -419,8 +683,7 @@ class TmapViz:
     ) -> None:
         """Add a SMILES column for molecular structure visualization.
 
-        When using the SMILES template (smiles.html.j2), molecules will be
-        rendered in the tooltip when hovering over points.
+        Molecules are rendered in the HTML tooltip when hovering over points.
 
         Args:
             name: Column name (displayed in tooltip)
@@ -441,6 +704,232 @@ class TmapViz:
         if name not in self._labels_keys:
             self._labels_keys.append(name)
         self._columns[name] = Column(name, values, "smiles", "smiles")
+
+    def add_images(
+        self,
+        values: list[str],
+        name: str = "image",
+        tooltip_size: int = 128,
+    ) -> None:
+        """Add an image column for thumbnail rendering in tooltips.
+
+        Each value should be a data URI (e.g. ``"data:image/jpeg;base64,..."``).
+        When hovering over a point the image is rendered in the tooltip.
+
+        Args:
+            values: List of data-URI strings, one per point.
+            name: Column name (displayed in tooltip header).
+            tooltip_size: Display size in pixels for the tooltip thumbnail.
+                Images are scaled to this size with nearest-neighbor
+                interpolation (crisp pixel art).  Default 128.
+        """
+        if isinstance(values, np.ndarray):
+            values = values.tolist()
+        else:
+            values = list(values)
+
+        if self._images_column is not None:
+            raise ValueError(
+                f"Only one images column is supported. "
+                f"Already have '{self._images_column}', cannot add '{name}'."
+            )
+
+        self._images_column = name
+        self._images_tooltip_size = int(tooltip_size)
+        # Don't add to _labels_keys we don't want the raw data URI shown as
+        # text in the tooltip rows; the template renders it visually instead.
+        self._columns[name] = Column(name, values, "images", "images")
+
+    def add_protein_ids(
+        self,
+        values: list[str],
+        name: str = "UniProt ID",
+    ) -> None:
+        """Add a protein ID column for structure visualization.
+
+        Pinned cards show a Mol* 3D structure viewer (lazy-loaded from
+        AlphaFold DB) and on-demand UniProt metadata. IDs also appear as
+        clickable links.
+
+        Args:
+            values: List of UniProt accessions (e.g. ``"E4ZVF8"``), one per point.
+            name: Column name (displayed in tooltip).
+        """
+        if isinstance(values, np.ndarray):
+            values = values.tolist()
+        else:
+            values = list(values)
+
+        if self._protein_column is not None:
+            raise ValueError(
+                f"Only one protein column is supported. "
+                f"Already have '{self._protein_column}', cannot add '{name}'."
+            )
+
+        self._protein_column = name
+        if name not in self._labels_keys:
+            self._labels_keys.append(name)
+        self._columns[name] = Column(name, values, "label", "label")
+
+    def add_structures(
+        self,
+        values: list[str],
+        name: str = "structure",
+        fmt: str = "pdb",
+    ) -> None:
+        """Add inline 3D structure data for rendering in pinned cards.
+
+        Each value should be the full text content of a PDB or mmCIF file.
+        Structures are rendered using 3Dmol.js (loaded from CDN on demand).
+
+        Args:
+            values: List of structure file contents (PDB/mmCIF text), one per point.
+                Use ``""`` or ``None`` for points without structures.
+            name: Column name.
+            fmt: Structure format — ``"pdb"`` (default) or ``"mmcif"``/``"cif"``.
+        """
+        if isinstance(values, np.ndarray):
+            values = values.tolist()
+        else:
+            values = list(values)
+
+        fmt = fmt.lower()
+        if fmt in ("cif", "mmcif"):
+            fmt = "cif"
+        elif fmt != "pdb":
+            raise ValueError(f"Unsupported structure format '{fmt}'. Use 'pdb' or 'cif'.")
+
+        if self._structures_column is not None:
+            raise ValueError(
+                f"Only one structures column is supported. "
+                f"Already have '{self._structures_column}', cannot add '{name}'."
+            )
+
+        self._structures_column = name
+        self._structures_format = fmt
+        self._columns[name] = Column(name, values, "label", "label")
+
+    @property
+    def filterable(self) -> list[str]:
+        """Column names shown in the filter panel."""
+        return list(self._filterable)
+
+    @filterable.setter
+    def filterable(self, names: list[str]) -> None:
+        if not isinstance(names, (list, tuple)):
+            raise TypeError("filterable must be a list of column names")
+        self._filterable = list(names)
+
+    @property
+    def searchable(self) -> list[str]:
+        """Column names available for text search."""
+        return list(self._searchable)
+
+    @searchable.setter
+    def searchable(self, names: list[str]) -> None:
+        if not isinstance(names, (list, tuple)):
+            raise TypeError("searchable must be a list of column names")
+        self._searchable = list(names)
+
+    def configure_column(
+        self,
+        name: str,
+        *,
+        display_name: str | None = None,
+        link_template: str | None = None,
+        copyable: bool | None = None,
+        format: str | None = None,
+    ) -> None:
+        """Set per-column UI hints for the HTML visualization.
+
+        Args:
+            name: Column name (must match a previously added column).
+            display_name: Override the label shown in cards/tooltips.
+            link_template: URL template with ``{column_name}`` placeholders.
+            copyable: If True, add a copy button for this value.
+            format: Display format hint (e.g. ``"stars:5"``).
+        """
+        ui: dict[str, Any] = {}
+        if display_name is not None:
+            ui["displayName"] = display_name
+        if link_template is not None:
+            ui["linkTemplate"] = link_template
+        if copyable is not None:
+            ui["copyable"] = copyable
+        if format is not None:
+            ui["format"] = format
+        self._column_ui[name] = ui
+
+    def configure_card(
+        self,
+        *,
+        title_column: str | None = None,
+        subtitle_column: str | None = None,
+        fields: list[str] | None = None,
+        links: list[dict[str, str]] | None = None,
+    ) -> None:
+        """Configure the pinned-card panel shown when clicking a point.
+
+        By default the card shows every label column as key-value rows.
+        Use this method to pick a title, add a subtitle, restrict which
+        fields appear, or add clickable links with per-point URLs.
+
+        Parameters
+        ----------
+        title_column : str, optional
+            Name of an existing column whose value becomes the card
+            heading for each point.  Example: ``"Gene Name"``.
+        subtitle_column : str, optional
+            Name of an existing column shown as an italic line below
+            the title.  Example: ``"Organism"``.
+        fields : list of str, optional
+            Column names to display as key-value rows in the card body.
+            If omitted, all label columns are shown.
+        links : list of dict, optional
+            Clickable buttons rendered below the subtitle.  Each dict
+            needs ``"label"`` (button text) and ``"url"`` (URL template).
+            Column placeholders like ``{col_name}`` are replaced with the
+            point's value for that column.
+
+            Example::
+
+                [{"label": "UniProt",
+                  "url": "https://uniprot.org/uniprot/{UniProt ID}"}]
+
+        Examples
+        --------
+        >>> viz.configure_card(
+        ...     title_column="Name",
+        ...     subtitle_column="Category",
+        ...     fields=["Name", "Score", "Source"],
+        ...     links=[{"label": "PubChem",
+        ...             "url": "https://pubchem.ncbi.nlm.nih.gov/#query={SMILES}"}],
+        ... )
+        """
+        config: dict[str, Any] = {}
+        # Validate referenced columns exist
+        known = set(self._columns.keys())
+        refs: list[str] = []
+        if title_column is not None:
+            config["titleColumn"] = title_column
+            refs.append(title_column)
+        if subtitle_column is not None:
+            config["subtitleColumn"] = subtitle_column
+            refs.append(subtitle_column)
+        if fields is not None:
+            config["fields"] = list(fields)
+            refs.extend(fields)
+        missing = [r for r in refs if r not in known]
+        if missing:
+            warnings.warn(
+                f"configure_card references columns not yet added: {missing}. "
+                f"Add them before calling to_html() or the card will be incomplete.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if links is not None:
+            config["links"] = [dict(lnk) for lnk in links]
+        self._card_config = config
 
     @property
     def n_points(self) -> int:
@@ -477,7 +966,7 @@ class TmapViz:
         Returns:
             ``pandas.DataFrame`` with one row per point.
         """
-        import pandas as pd  # type: ignore[import-untyped]
+        import pandas as pd
 
         n_rows = len(self._points_array) if self._points_array is not None else 0
         if n_rows == 0 and self._columns:
@@ -591,7 +1080,9 @@ class TmapViz:
         """
         x_arr = np.asarray(x, dtype=np.float64)
         y_arr = np.asarray(y, dtype=np.float64)
-        # TODO(ISS-015): Profile list→ndarray→list round-trip cost for large inputs
+
+        if x_arr.size == 0:
+            raise ValueError("Cannot set empty coordinates. Provide at least one point.")
 
         if x_arr.shape != y_arr.shape:
             raise ValueError("x and y must have the same shape")
@@ -600,15 +1091,27 @@ class TmapViz:
                 f"Both x and y should be 1 dimensional arrays,\
                 Got x: {x_arr.ndim}D and y: {y_arr.ndim}D"
             )
+        if not np.all(np.isfinite(x_arr)) or not np.all(np.isfinite(y_arr)):
+            raise ValueError(
+                "Coordinates contain NaN or Inf values. All x and y values must be finite."
+            )
 
         normalized_coords = _normalize_coords(x_arr, y_arr)
         self._points_array = normalized_coords
+        n = len(normalized_coords)
 
         for col in self._columns.values():
-            if len(col.values) != len(self._points_array):
+            if len(col.values) != n:
                 raise ValueError(
-                    f"Column '{col.name}' has {len(col.values)} values but there are "
-                    f"{len(self._points_array)} points"
+                    f"Column '{col.name}' has {len(col.values)} values but there are {n} points"
+                )
+
+        # Re-validate edges against the new point count
+        if self._edges_s is not None and self._edges_s.size > 0:
+            max_idx = max(int(self._edges_s.max()), int(self._edges_t.max()))
+            if max_idx >= n:
+                raise ValueError(
+                    f"Edge indices must be < n_points ({n}). Got max edge index {max_idx}."
                 )
 
     def to_widget(
@@ -831,60 +1334,14 @@ class TmapViz:
         _display_scatter(scatter, controls=controls)
         return scatter
 
-    def to_html(
-        self,
-        *,
-        mode: Literal["auto", "json", "binary"] = "auto",
-        binary_threshold: int = BINARY_THRESHOLD,
-    ) -> str:
-        """Return HTML string for the current visualization state.
+    def _validate(self) -> None:
+        """Pre-flight checks before rendering HTML or writing static files.
 
-        Args:
-            mode: HTML encoding mode:
-                - ``"auto"``: choose based on ``binary_threshold``.
-                - ``"json"``: force JSON mode.
-                - ``"binary"``: force binary mode.
-            binary_threshold: Point count above which binary mode is used
-                when ``mode="auto"``.
-
-        Returns:
-            Full HTML document as a string.
-        """
-        if mode not in {"auto", "json", "binary"}:
-            raise ValueError("mode must be one of {'auto', 'json', 'binary'}.")
-
-        if mode == "json":
-            return self.render()
-        if mode == "binary":
-            return self.render_binary()
-
-        n_points = len(self._points_array) if self._points_array is not None else 0
-        use_binary = n_points > binary_threshold
-        if use_binary:
-            return self.render_binary()
-        return self.render()
-
-    def render(self, template_name: str = "base.html.j2") -> str:
-        """Return the full HTML string in JSON mode.
-
-        This method is intended for advanced use cases where a specific template
-        is required.
-
-        Args:
-            template_name: Name of the Jinja2 template to use.
-                           Default is "base.html.j2". Other options include
-                           future templates like "smiles.html.j2".
-
-        Returns:
-            HTML string ready to be written to a file or served.
+        Catches Python-side mistakes that would otherwise surface as
+        cryptic JS console errors (ArrayBuffer mismatches, missing columns).
         """
         if self._points_array is None:
             raise ValueError("Call set_points() before rendering.")
-
-        # Auto-switch to the SMILES template when a SMILES column is present
-        # and the caller didn't request a custom template.
-        if template_name == "base.html.j2" and self._smiles_column:
-            template_name = "smiles.html.j2"
 
         n_points = len(self._points_array)
         for col in self._columns.values():
@@ -894,115 +1351,43 @@ class TmapViz:
                     f"{n_points} points"
                 )
 
-        columns_payload: dict[str, dict[str, Any]] = {}
-        colormaps_payload: dict[str, list[str]] = {}
+        # Every layout key must have a numeric column (float32 or uint32)
+        for name in self._layout_keys:
+            if name not in self._columns:
+                raise ValueError(
+                    f"Layout '{name}' is registered but has no column data. "
+                    f"This would cause a JS fetch error."
+                )
+            col = self._columns[name]
+            if col.dtype == "label":
+                raise ValueError(
+                    f"Layout '{name}' has dtype 'label' (string) but layouts "
+                    f"require numeric data (float32/uint32). "
+                    f"This happens when add_label() overwrites a color layout. "
+                    f"Use a different name for the label."
+                )
 
-        for name, col in self._columns.items():
-            colormap_name = col.color if col.role in ("layout", "layout+label") else None
+        # Every label key must have a column
+        for name in self._labels_keys:
+            if name not in self._columns:
+                raise ValueError(f"Label '{name}' is registered but has no column data.")
 
-            columns_payload[name] = {
-                "values": col.values,
-                "dtype": col.dtype,
-                "role": col.role,
-                "colormap": colormap_name,
-            }
+    def to_html(self, template_name: str = "base.html.j2") -> str:
+        """Return a self-contained HTML document as a string.
 
-            if colormap_name and colormap_name not in colormaps_payload:
-                colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
-
-        layout_options = list(self._layout_keys)
-        label_options = [name for name in self._labels_keys if name in self._columns]
-        initial_color = layout_options[0] if layout_options else None
-
-        edges_payload: dict[str, Any] = {}
-        if self._edges_s is not None and self._edges_t is not None:
-            edges_payload = {
-                "s": self._edges_s.tolist(),
-                "t": self._edges_t.tolist(),
-            }
-
-        # Auto-scale point size for large datasets (only override default)
-        effective_point_size = self.point_size
-        if self.point_size == 4.0:
-            if n_points > 2_000_000:
-                effective_point_size = 0.5
-            elif n_points > 500_000:
-                effective_point_size = 1.0
-            elif n_points > 100_000:
-                effective_point_size = 2.0
-
-        payload = {
-            "title": self.title,
-            "points": self._points_array,
-            "pointColor": self.point_color,
-            "pointSize": effective_point_size,
-            "opacity": self.opacity,
-            "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
-            "edgeWidth": self.edge_width,
-            "backgroundColor": _hex_to_rgba(self.background_color),
-            "columns": columns_payload,
-            "layoutOptions": layout_options,
-            "labelOptions": label_options,
-            "initialColor": initial_color,
-            "colormaps": colormaps_payload,
-            "smilesColumn": self._smiles_column,
-            "edges": edges_payload,
-        }
-
-        runtime = _runtime_base64()
-        payload_json = json.dumps(
-            _to_json_safe(payload),
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-
-        # Render using Jinja2 template
-        env = _get_jinja_env()
-        template = env.get_template(template_name)
-
-        return template.render(
-            title=self.title,
-            background_color=self.background_color,
-            payload_json=payload_json,
-            n_points=n_points,
-            runtime_regl=runtime["regl"],
-            runtime_pubsub=runtime["pubsub"],
-            runtime_scatterplot=runtime["scatterplot"],
-        )
-
-    def render_binary(self, template_name: str = "binary.html.j2") -> str:
-        """Return HTML string using binary encoding for large datasets.
-
-        This method is for advanced use cases where a specific template
-        is required.
-
-        This method uses:
-        - Uint16 quantized coordinates (4x smaller than JSON)
-        - Gzip-compressed typed arrays
-        - WebWorker decoding (non-blocking)
-
-        Recommended for datasets with >500K points.
+        Uses the same template as ``write_static`` (toolbar, side panels,
+        theme toggle, etc.) but with all data inlined as base64 so the
+        resulting HTML file works without a server.
 
         Args:
-            template_name: Name of the Jinja2 template to use.
+            template_name: Jinja2 template to use.
 
         Returns:
-            HTML string with binary-encoded data.
+            Full HTML document string.
         """
-        if self._points_array is None:
-            raise ValueError("Call set_points() before rendering.")
-
-        # Auto-switch to SMILES-aware binary template when needed.
-        if template_name == "binary.html.j2" and self._smiles_column:
-            template_name = "smiles_binary.html.j2"
+        self._validate()
 
         n_points = len(self._points_array)
-        for col in self._columns.values():
-            if len(col.values) != n_points:
-                raise ValueError(
-                    f"Column '{col.name}' has {len(col.values)} values but there are "
-                    f"{n_points} points"
-                )
 
         # Pack coordinates as binary
         coords_compressed = _pack_coords_binary(self._points_array, bits=16)
@@ -1011,7 +1396,8 @@ class TmapViz:
         # Pack columns
         columns_b64: dict[str, str] = {}
         columns_meta: dict[str, dict[str, Any]] = {}
-        colormaps_payload: dict[str, list[str]] = {}
+        # Seed with custom hex colormaps so _colormap_to_hex is not called for them
+        colormaps_payload: dict[str, list[str]] = dict(self._custom_colormaps)
 
         for name, col in self._columns.items():
             colormap_name = col.color if col.role in ("layout", "layout+label") else None
@@ -1026,7 +1412,10 @@ class TmapViz:
                     "dictionary": dictionary,
                 }
             elif col.dtype == "continuous":
-                arr = np.array(col.values, dtype=np.float32)
+                arr = np.array(
+                    [_safe_float(v) for v in col.values],
+                    dtype=np.float32,
+                )
                 compressed = _pack_numeric_binary(arr, "float32")
                 columns_b64[name] = base64.b64encode(compressed).decode("ascii")
                 columns_meta[name] = {
@@ -1035,17 +1424,20 @@ class TmapViz:
                     "colormap": colormap_name,
                 }
             else:
-                # Labels and SMILES - keep as strings for now (will be optimized later)
-                # For now, we skip binary encoding for string columns
-                # They'll be included in metadata
+                # String columns (labels, SMILES, images) — gzip-compress as JSON
+                json_bytes = _encode_string_column(col.values, name)
+                compressed = gzip.compress(json_bytes, compresslevel=6)
+                columns_b64[name] = base64.b64encode(compressed).decode("ascii")
                 columns_meta[name] = {
                     "dtype": "string",
                     "role": col.role,
-                    "values": col.values,  # Include directly in metadata for now
+                    "colormap": None,
                 }
 
             if colormap_name and colormap_name not in colormaps_payload:
                 colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
+
+        _cycle_colormaps(colormaps_payload, self._columns)
 
         # Pack edges if present
         edges_b64 = ""
@@ -1056,11 +1448,10 @@ class TmapViz:
             edges_compressed = gzip.compress(edges_combined.tobytes(), compresslevel=6)
             edges_b64 = base64.b64encode(edges_compressed).decode("ascii")
 
-        # Build header/metadata
+        # Build metadata (same flat structure as write_static)
         layout_options = list(self._layout_keys)
         label_options = [name for name in self._labels_keys if name in self._columns]
 
-        # Auto-scale point size for large datasets (only override default)
         effective_point_size = self.point_size
         if self.point_size == 4.0:
             if n_points > 2_000_000:
@@ -1070,77 +1461,74 @@ class TmapViz:
             elif n_points > 100_000:
                 effective_point_size = 2.0
 
-        header = {
-            "version": 1,
+        # Attach per-column UI hints
+        for col_name, ui in self._column_ui.items():
+            if col_name in columns_meta:
+                columns_meta[col_name]["ui"] = ui
+
+        inline_metadata = {
+            "title": self.title,
             "nPoints": n_points,
             "coordDtype": "uint16",
+            "pointColor": self.point_color,
+            "pointSize": effective_point_size,
+            "opacity": self.opacity,
+            "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
+            "edgeWidth": self.edge_width,
+            "backgroundColor": _hex_to_rgba(self.background_color),
+            "layoutOptions": layout_options,
+            "labelOptions": label_options,
+            "colormaps": colormaps_payload,
+            "smilesColumn": self._smiles_column,
+            "imagesColumn": self._images_column,
+            "imagesTooltipSize": self._images_tooltip_size,
+            "proteinColumn": self._protein_column,
+            "structuresColumn": self._structures_column,
+            "structuresFormat": self._structures_format,
+            "nEdges": n_edges,
             "columns": columns_meta,
-            "metadata": {
-                "title": self.title,
-                "pointColor": self.point_color,
-                "pointSize": effective_point_size,
-                "opacity": self.opacity,
-                "edgeStrokeStyle": _hex_to_css_rgba(self.edge_color, self.edge_opacity),
-                "edgeWidth": self.edge_width,
-                "backgroundColor": _hex_to_rgba(self.background_color),
-                "layoutOptions": layout_options,
-                "labelOptions": label_options,
-                "colormaps": colormaps_payload,
-                "smilesColumn": self._smiles_column,
-                "nEdges": n_edges,
-            },
+            "card": self._card_config,
+            "filters": self._filterable if self._filterable else (layout_options or None),
+            "search": self._searchable if self._searchable else (label_options or None),
         }
 
-        runtime = _runtime_base64()
-        header_json = json.dumps(
-            _to_json_safe(header),
+        metadata_json_str = json.dumps(
+            _to_json_safe(inline_metadata),
             separators=(",", ":"),
             allow_nan=False,
         )
 
-        # Filter out string columns from binary data (they're in header)
-        columns_b64_filtered = {
-            k: v for k, v in columns_b64.items() if columns_meta[k]["dtype"] != "string"
-        }
-
+        runtime = _runtime_base64()
         env = _get_jinja_env()
         template = env.get_template(template_name)
 
         return template.render(
             title=self.title,
             background_color=self.background_color,
-            header_json=header_json,
-            coords_b64=coords_b64,
-            columns_b64=columns_b64_filtered,
-            edges_b64=edges_b64,
             n_points=n_points,
             runtime_regl=runtime["regl"],
             runtime_pubsub=runtime["pubsub"],
             runtime_scatterplot=runtime["scatterplot"],
+            # Inline data flags
+            inline_data=True,
+            inline_metadata=metadata_json_str,
+            inline_coords=coords_b64,
+            inline_columns=columns_b64,
+            inline_edges=edges_b64,
         )
 
     def write_html(
         self,
         path: str | Path,
-        *,
-        mode: Literal["auto", "json", "binary"] = "auto",
-        binary_threshold: int = BINARY_THRESHOLD,
+        template_name: str = "base.html.j2",
     ) -> Path:
         """Write HTML to disk and return the path.
-
-        This is the primary method for exporting visualizations. It automatically
-        selects binary mode for large datasets (>500k points by default).
 
         Args:
             path: Either a full file path (ending in .html) or a directory path.
                   - If a file path: saves to that exact location
                   - If a directory: uses self.title as the filename
-            mode: HTML encoding mode:
-                - ``"auto"``: choose based on ``binary_threshold``.
-                - ``"json"``: force JSON mode.
-                - ``"binary"``: force binary mode.
-            binary_threshold: Point count above which binary mode is used.
-                              Only used when ``mode="auto"``.
+            template_name: Jinja2 template to use for rendering.
 
         Returns:
             Path to the saved file
@@ -1170,44 +1558,40 @@ class TmapViz:
         # Create parent directory if needed
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        html = self.to_html(mode=mode, binary_threshold=binary_threshold)
+        html = self.to_html(template_name=template_name)
 
         output_path.write_text(html, encoding="utf-8")
         return output_path
 
-    def serve(self, port: int = 8050, open_browser: bool = True) -> None:
-        """Serve the visualization on a local HTTP server.
+    def write_static(
+        self,
+        output_dir: str | Path,
+        template_name: str = "base.html.j2",
+    ) -> Path:
+        """Write all visualization files to a directory for static hosting.
 
-        For datasets beyond what a single HTML file handles well (>1M points),
-        this avoids embedding all data as base64 in one file.  Binary data
-        files are served separately and color columns are loaded lazily.
+        Writes binary data files (coords, edges, columns), metadata JSON,
+        and a rendered HTML shell. The output directory can be served by
+        any HTTP server (nginx, python -m http.server, S3, etc.).
 
         Args:
-            port: TCP port for the local HTTP server.
-            open_browser: If True, open the default browser automatically.
-        """
-        import http.server
-        import tempfile
-        import threading
-        import webbrowser
+            output_dir: Directory to write files into (created if needed).
+            template_name: Jinja2 template to render as index.html.
 
-        if self._points_array is None:
-            raise ValueError("Call set_points() before serving.")
+        Returns:
+            Path to the output directory.
+        """
+        self._validate()
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         n_points = len(self._points_array)
-        for col in self._columns.values():
-            if len(col.values) != n_points:
-                raise ValueError(
-                    f"Column '{col.name}' has {len(col.values)} values but there are "
-                    f"{n_points} points"
-                )
-
-        tmpdir = Path(tempfile.mkdtemp(prefix="tmap_serve_"))
 
         # --- Write binary data files ---
         # Coordinates
         coords_compressed = _pack_coords_binary(self._points_array, bits=16)
-        (tmpdir / "coords.bin").write_bytes(coords_compressed)
+        (output_dir / "coords.bin").write_bytes(coords_compressed)
 
         # Edges
         n_edges = 0
@@ -1215,43 +1599,61 @@ class TmapViz:
             n_edges = len(self._edges_s)
             edges_combined = np.concatenate([self._edges_s, self._edges_t]).astype(np.uint32)
             edges_compressed = gzip.compress(edges_combined.tobytes(), compresslevel=6)
-            (tmpdir / "edges.bin").write_bytes(edges_compressed)
+            (output_dir / "edges.bin").write_bytes(edges_compressed)
 
         # Columns
         columns_meta: dict[str, dict[str, Any]] = {}
-        colormaps_payload: dict[str, list[str]] = {}
+        colormaps_payload: dict[str, list[str]] = dict(self._custom_colormaps)
 
+        _seen_filenames: set[str] = set()
         for name, col in self._columns.items():
             colormap_name = col.color if col.role in ("layout", "layout+label") else None
+            safe_name = _sanitize_filename(name, _seen_filenames)
 
             if col.dtype == "categorical":
                 compressed, dictionary = _pack_categorical_binary(col.values)
-                (tmpdir / f"col_{name}.bin").write_bytes(compressed)
+                (output_dir / f"col_{safe_name}.bin").write_bytes(compressed)
                 columns_meta[name] = {
                     "dtype": "uint32",
                     "role": col.role,
                     "colormap": colormap_name,
                     "dictionary": dictionary,
+                    "file": safe_name,
                 }
             elif col.dtype == "continuous":
-                arr = np.array(col.values, dtype=np.float32)
+                arr = np.array(
+                    [_safe_float(v) for v in col.values],
+                    dtype=np.float32,
+                )
                 compressed = _pack_numeric_binary(arr, "float32")
-                (tmpdir / f"col_{name}.bin").write_bytes(compressed)
+                (output_dir / f"col_{safe_name}.bin").write_bytes(compressed)
                 columns_meta[name] = {
                     "dtype": "float32",
                     "role": col.role,
                     "colormap": colormap_name,
+                    "file": safe_name,
                 }
             else:
-                # String columns (labels, SMILES) — embed in metadata
+                # String columns (labels, SMILES, images) — gzip-compress as JSON
+                json_bytes = _encode_string_column(col.values, name)
+                compressed = gzip.compress(json_bytes, compresslevel=6)
+                (output_dir / f"col_{safe_name}.bin").write_bytes(compressed)
                 columns_meta[name] = {
                     "dtype": "string",
                     "role": col.role,
-                    "values": col.values,
+                    "colormap": None,
+                    "file": safe_name,
                 }
 
             if colormap_name and colormap_name not in colormaps_payload:
                 colormaps_payload[colormap_name] = _colormap_to_hex(colormap_name)
+
+        _cycle_colormaps(colormaps_payload, self._columns)
+
+        # Attach per-column UI hints
+        for col_name, ui in self._column_ui.items():
+            if col_name in columns_meta:
+                columns_meta[col_name]["ui"] = ui
 
         # Auto-scale point size
         effective_point_size = self.point_size
@@ -1280,8 +1682,16 @@ class TmapViz:
             "labelOptions": label_options,
             "colormaps": colormaps_payload,
             "smilesColumn": self._smiles_column,
+            "imagesColumn": self._images_column,
+            "imagesTooltipSize": self._images_tooltip_size,
+            "proteinColumn": self._protein_column,
+            "structuresColumn": self._structures_column,
+            "structuresFormat": self._structures_format,
             "nEdges": n_edges,
             "columns": columns_meta,
+            "card": self._card_config,
+            "filters": self._filterable if self._filterable else (layout_options or None),
+            "search": self._searchable if self._searchable else (label_options or None),
         }
 
         metadata_json = json.dumps(
@@ -1289,12 +1699,13 @@ class TmapViz:
             separators=(",", ":"),
             allow_nan=False,
         )
-        (tmpdir / "metadata.json").write_text(metadata_json, encoding="utf-8")
+        (output_dir / "metadata.json").write_text(metadata_json, encoding="utf-8")
 
-        # --- Render the HTML shell ---
+        # --- Render the HTML shell in fetch mode ---
+        # Data is served from files written above (metadata.json, coords.bin, etc.).
         runtime = _runtime_base64()
         env = _get_jinja_env()
-        template = env.get_template("server.html.j2")
+        template = env.get_template(template_name)
         html = template.render(
             title=self.title,
             background_color=self.background_color,
@@ -1302,8 +1713,38 @@ class TmapViz:
             runtime_regl=runtime["regl"],
             runtime_pubsub=runtime["pubsub"],
             runtime_scatterplot=runtime["scatterplot"],
+            inline_data=False,
+            inline_metadata="{}",
+            inline_coords="",
+            inline_columns={},
+            inline_edges="",
         )
-        (tmpdir / "index.html").write_text(html, encoding="utf-8")
+        (output_dir / "index.html").write_text(html, encoding="utf-8")
+
+        return output_dir
+
+    def serve(self, port: int = 8050, open_browser: bool = True) -> None:
+        """Serve the visualization on a local HTTP server.
+
+        For datasets beyond what a single HTML file handles well (>1M points),
+        this avoids embedding all data as base64 in one file.  Binary data
+        files are served separately and color columns are loaded lazily.
+
+        Args:
+            port: TCP port for the local HTTP server.
+            open_browser: If True, open the default browser automatically.
+        """
+        import http.server
+        import tempfile
+        import threading
+        import webbrowser
+
+        tmpdir = self.write_static(
+            Path(tempfile.mkdtemp(prefix="tmap_serve_")),
+        )
+
+        n_points = len(self._points_array)  # type: ignore[arg-type]
+        n_edges = len(self._edges_s) if self._edges_s is not None else 0
 
         # --- Start HTTP server ---
         class Handler(http.server.SimpleHTTPRequestHandler):

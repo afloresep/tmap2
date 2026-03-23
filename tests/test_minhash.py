@@ -2,18 +2,21 @@
 Test suite for MinHash and WeightedMinHash encoders.
 
 Tests verify:
-- Consistency with datasketch library
 - Correct output shapes and dtypes
 - Deterministic behavior with fixed seeds
+- Jaccard estimate quality (statistical properties)
 - Error handling for invalid inputs
 - API compatibility (from_* methods)
 """
 
+import builtins
+import sys
+
 import numpy as np
 import pytest
-from datasketch import MinHash as DatasketchMinHash
 from datasketch.weighted_minhash import WeightedMinHashGenerator
 
+import tmap.index.encoders.minhash as minhash_module
 from tmap.index.encoders.minhash import MinHash, WeightedMinHash
 
 # =============================================================================
@@ -101,42 +104,36 @@ class TestMinHashDeterminism:
         assert not np.array_equal(sig1, sig2)
 
 
-class TestMinHashDatasketchConsistency:
-    """Test that our MinHash produces identical results to datasketch."""
+class TestMinHashJaccardQuality:
+    """Test that MinHash produces accurate Jaccard estimates for sets."""
 
-    def test_consistency_with_datasketch(self):
-        """Our implementation should produce identical hashes to datasketch."""
-        num_perm = 64
-        seed = 42
-        test_set = {1, 5, 10, 50, 100}
+    def test_integer_sets_jaccard_quality(self):
+        """Integer sets should give accurate Jaccard estimates."""
+        mh = MinHash(num_perm=512, seed=42)
+        set1 = {1, 2, 3, 4, 5, 6, 7, 8}
+        set2 = {5, 6, 7, 8, 9, 10, 11, 12}
 
-        # Our implementation
-        mh = MinHash(num_perm=num_perm, seed=seed)
-        our_sig = mh.encode([test_set])[0]
+        sig1 = mh.encode([set1])[0]
+        sig2 = mh.encode([set2])[0]
 
-        # Datasketch implementation
-        ds_mh = DatasketchMinHash(num_perm=num_perm, seed=seed)
-        for item in test_set:
-            ds_mh.update(str(item).encode("utf-8"))
-        ds_sig = ds_mh.hashvalues
+        estimated = 1 - mh.get_distance(sig1, sig2)
+        true_jaccard = len(set1 & set2) / len(set1 | set2)  # 4/12 = 0.333
 
-        np.testing.assert_array_equal(our_sig, ds_sig)
+        assert abs(estimated - true_jaccard) < 0.1
 
-    def test_consistency_with_strings(self):
-        """Test consistency with string elements."""
-        num_perm = 64
-        seed = 1
-        test_set = {"apple", "banana", "cherry"}
+    def test_string_sets_jaccard_quality(self):
+        """String sets should give accurate Jaccard estimates."""
+        mh = MinHash(num_perm=512, seed=42)
+        set1 = {"apple", "banana", "cherry", "date", "elderberry"}
+        set2 = {"cherry", "date", "elderberry", "fig", "grape"}
 
-        mh = MinHash(num_perm=num_perm, seed=seed)
-        our_sig = mh.encode([test_set])[0]
+        sig1 = mh.encode([set1])[0]
+        sig2 = mh.encode([set2])[0]
 
-        ds_mh = DatasketchMinHash(num_perm=num_perm, seed=seed)
-        for item in test_set:
-            ds_mh.update(str(item).encode("utf-8"))
-        ds_sig = ds_mh.hashvalues
+        estimated = 1 - mh.get_distance(sig1, sig2)
+        true_jaccard = len(set1 & set2) / len(set1 | set2)  # 3/7 ≈ 0.429
 
-        np.testing.assert_array_equal(our_sig, ds_sig)
+        assert abs(estimated - true_jaccard) < 0.1
 
 
 class TestMinHashDistance:
@@ -269,6 +266,56 @@ class TestMinHashFromMethods:
         sig2 = mh.encode([set(strings)])[0]
 
         np.testing.assert_array_equal(sig1, sig2)
+
+
+class TestMinHashOptionalDependencies:
+    """Test that optional dependencies are only loaded on relevant paths."""
+
+    def test_binary_and_integer_set_paths_skip_optional_deps(self, monkeypatch):
+        def _unexpected() -> None:
+            raise AssertionError("Optional dependency loader should not be called")
+
+        monkeypatch.setattr(minhash_module, "_get_xxhash", _unexpected)
+        monkeypatch.setattr(minhash_module, "_get_weighted_minhash_generator", _unexpected)
+
+        mh = MinHash(num_perm=16, seed=42)
+
+        binary = np.array([[1, 0, 1], [0, 1, 1]], dtype=np.uint8)
+        sigs_binary = mh.encode(binary)
+        assert sigs_binary.shape == (2, 16)
+
+        sigs_sets = mh.encode([{1, 2, 3}, {2, 3, 4}])  # type: ignore[arg-type]
+        assert sigs_sets.shape == (2, 16)
+
+    def test_string_path_missing_xxhash_raises_clear_error(self, monkeypatch):
+        real_import = builtins.__import__
+
+        def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "xxhash":
+                raise ModuleNotFoundError("No module named 'xxhash'")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.delitem(sys.modules, "xxhash", raising=False)
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+        mh = MinHash(num_perm=16, seed=42)
+        with pytest.raises(ModuleNotFoundError, match="optional dependency 'xxhash'"):
+            mh.from_string_array(["hello", "world"])
+
+    def test_weighted_path_missing_datasketch_raises_clear_error(self, monkeypatch):
+        real_import = builtins.__import__
+
+        def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "datasketch.weighted_minhash":
+                raise ModuleNotFoundError("No module named 'datasketch'")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.delitem(sys.modules, "datasketch.weighted_minhash", raising=False)
+        monkeypatch.delitem(sys.modules, "datasketch", raising=False)
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+        with pytest.raises(ModuleNotFoundError, match="optional dependency 'datasketch'"):
+            WeightedMinHash(dim=4, num_perm=16, seed=42)
 
 
 # =============================================================================
@@ -536,20 +583,8 @@ class TestWeightedMinHashIntegration:
 class TestMinHashNumbaBackend:
     """Test MinHash with Numba JIT backend."""
 
-    def test_numba_available_property(self):
-        """Test that numba_available property reflects actual state."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        mh = MinHash(num_perm=32)
-        assert mh.numba_available == NUMBA_AVAILABLE
-
     def test_numba_encode_shape(self):
         """Test that Numba backend produces correct output shape."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=64, seed=42)
         data = np.array([[1, 0, 1, 1, 0], [0, 1, 1, 0, 1]], dtype=np.uint8)
         sigs = mh.encode(data)
@@ -559,11 +594,6 @@ class TestMinHashNumbaBackend:
 
     def test_numba_determinism(self):
         """Test that Numba backend is deterministic with same seed."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh1 = MinHash(num_perm=64, seed=42)
         mh2 = MinHash(num_perm=64, seed=42)
 
@@ -576,11 +606,6 @@ class TestMinHashNumbaBackend:
 
     def test_numba_distance_accuracy(self):
         """Test that Numba backend produces accurate Jaccard estimates."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=512, seed=42)
 
         # Create two fingerprints with known overlap
@@ -604,11 +629,6 @@ class TestMinHashNumbaBackend:
 
     def test_numba_sparse_consistency(self):
         """Test that sparse and dense paths produce consistent results."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=128, seed=42)
 
         # Create same data in sparse and dense format
@@ -623,11 +643,6 @@ class TestMinHashNumbaBackend:
 
     def test_numba_batch_consistency(self):
         """Test that batch and single encoding produce same results."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=64, seed=42)
 
         # Single fingerprints
@@ -646,11 +661,6 @@ class TestMinHashNumbaBackend:
 
     def test_numba_large_batch(self):
         """Test Numba backend with large batch (performance sanity check)."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=128, seed=42)
 
         # 10k fingerprints, 2048 bits each
@@ -667,11 +677,6 @@ class TestMinHashNumbaBackend:
 
     def test_identical_inputs_zero_distance_numba(self):
         """Test that identical inputs produce zero distance with Numba."""
-        from tmap.index.encoders._minhash_numba import NUMBA_AVAILABLE
-
-        if not NUMBA_AVAILABLE:
-            pytest.skip("Numba not available")
-
         mh = MinHash(num_perm=128, seed=42)
 
         fp = np.array([1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1], dtype=np.uint8)
@@ -764,20 +769,15 @@ class TestMinHashInputValidation:
 class TestMinHashBinaryStringIncompatibility:
     """Test and document that binary and string signatures are NOT comparable.
 
-    This is a critical user pitfall - binary encoding uses a different hash
-    function than string encoding (which uses SHA1 via datasketch).
+    Binary encoding uses column indices as element IDs. String encoding uses
+    xxhash64 outputs as element IDs. Different ID spaces, incomparable signatures.
     """
 
     def test_binary_vs_string_produce_different_signatures(self):
         """Binary and string encoding produce different signatures for same data.
 
-        Covers: Critical warning - binary and string signatures use different
-        hash functions and should NOT be compared with each other.
-
-        This test documents that:
-        - Binary encoding uses universal hash: (a*x + b) mod prime
-        - String encoding uses SHA1 (via datasketch)
-        - Same conceptual data produces DIFFERENT signatures
+        Binary uses column indices as element IDs, strings use xxhash64 outputs.
+        Same conceptual data produces DIFFERENT signatures.
         """
         mh = MinHash(num_perm=64, seed=42)
 
@@ -800,8 +800,7 @@ class TestMinHashBinaryStringIncompatibility:
     def test_binary_string_distance_is_meaningless(self):
         """Distance between binary and string signatures is not meaningful.
 
-        Covers: Warning that comparing mixed-type signatures is invalid.
-        While get_distance() won't error (same shape), the result is meaningless.
+        get_distance() won't error (same shape), but the result is meaningless.
         """
         mh = MinHash(num_perm=64, seed=42)
 
@@ -818,10 +817,9 @@ class TestMinHashBinaryStringIncompatibility:
 
 
 class TestMinHashBatchMethods:
-    """Test batch method behavior and n_jobs parameter.
+    """Test batch method behavior.
 
-    These tests verify that batch methods work correctly with different
-    parallelization settings.
+    These tests verify that batch methods work correctly.
     """
 
     def test_batch_from_binary_array_accepts_list_of_arrays(self):
@@ -836,24 +834,6 @@ class TestMinHashBatchMethods:
         ]
         sigs = mh.batch_from_binary_array(arrays)
         assert sigs.shape == (2, 32)
-
-    def test_batch_from_string_n_jobs_parameter(self):
-        """batch_from_string_array respects n_jobs parameter.
-
-        Covers: Parallel processing for string encoding (datasketch backend).
-        n_jobs=1 forces sequential processing.
-        """
-        mh = MinHash(num_perm=32, seed=42)
-        data = [["a", "b", "c"], ["b", "c", "d"], ["c", "d", "e"]]
-
-        # Sequential
-        sig_seq = mh.batch_from_string_array(data, n_jobs=1)
-
-        # Parallel (if available)
-        sig_par = mh.batch_from_string_array(data, n_jobs=2)
-
-        # Results should be identical regardless of parallelization
-        np.testing.assert_array_equal(sig_seq, sig_par)
 
     def test_batch_from_sparse_with_varied_lengths(self):
         """batch_from_sparse_binary_array handles varied-length index lists.

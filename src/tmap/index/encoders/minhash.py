@@ -6,10 +6,8 @@ This module provides two MinHash implementations:
 - WeightedMinHash: For weighted/float vectors (e.g., count vectors)
 
 Performance Notes:
-    For binary data, the Numba backend provides 50-100x speedup over datasketch.
-    The backend is auto-selected based on input type:
-    - Binary arrays → Numba (if available)
-    - String data → datasketch (SHA1 hasH compatibility). NOTE: Probably to be replaced for faster alternatives
+    Binary data uses the Numba backend (50-100x faster than datasketch).
+    String data uses xxhash64 for token hashing, then the same Numba backend.
 
 API Compatibility:
     All public methods maintain backward compatibility with the original TMAP API.
@@ -17,24 +15,18 @@ API Compatibility:
 
 import os
 from collections.abc import Collection, Sequence
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from typing import Any, cast
 
-import datasketch.minhash as _datasketch_minhash  # type: ignore[import-untyped]
 import numpy as np
-from datasketch.weighted_minhash import (  # type: ignore[import-untyped]
-    WeightedMinHashGenerator as _WeightedMinHashGenerator,
-)
 from numpy.typing import NDArray
 
 from ._minhash_numba import (
-    NUMBA_AVAILABLE,
     binary_to_sparse,
     init_permutations,
     minhash_batch_from_dense,
     minhash_batch_from_sparse,
 )
-from .base import Encoder
 
 __all__ = [
     "MinHash",
@@ -42,14 +34,28 @@ __all__ = [
 ]
 
 
-# Module-level helper functions for parallel processing (must be picklable)
-def _encode_single_set(args: tuple[set[Any], int, int]) -> NDArray[np.uint64]:
-    """Encode a single set into a MinHash signature using datasketch."""
-    s, num_perm, seed = args
-    mh = _datasketch_minhash.MinHash(num_perm=num_perm, seed=seed)
-    for item in s:
-        mh.update(str(item).encode("utf-8"))
-    return np.asarray(mh.hashvalues, dtype=np.uint64)
+def _get_weighted_minhash_generator() -> Any:
+    """Load datasketch's weighted MinHash generator on demand."""
+    try:
+        from datasketch.weighted_minhash import WeightedMinHashGenerator
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "WeightedMinHash requires optional dependency 'datasketch'. "
+            "Install it with `pip install datasketch`."
+        ) from exc
+    return WeightedMinHashGenerator
+
+
+def _get_xxhash() -> Any:
+    """Load xxhash only when string token hashing is requested."""
+    try:
+        import xxhash
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "String MinHash encoding requires optional dependency 'xxhash'. "
+            "Install it with `pip install xxhash`."
+        ) from exc
+    return xxhash
 
 
 def _encode_weighted_chunk(
@@ -57,7 +63,8 @@ def _encode_weighted_chunk(
 ) -> NDArray[np.uint64]:
     """Encode a chunk of weighted vectors (creates its own generator)."""
     data, dim, num_perm, seed = args
-    generator = _WeightedMinHashGenerator(dim=dim, sample_size=num_perm, seed=seed)
+    generator_cls = _get_weighted_minhash_generator()
+    generator = generator_cls(dim=dim, sample_size=num_perm, seed=seed)
     n_samples = data.shape[0]
     signatures = np.zeros((n_samples, num_perm, 2), dtype=np.uint64)
     for i in range(n_samples):
@@ -65,20 +72,17 @@ def _encode_weighted_chunk(
     return signatures
 
 
-class MinHash(Encoder):
-    """
-    MinHash encoder for binary/set data (e.g., molecular fingerprints).
+class MinHash:
+    """MinHash encoder for binary/set data (e.g., molecular fingerprints).
 
-    This implementation automatically selects the optimal backend:
-    - Binary arrays → Numba JIT (50-100x faster) if available
-    - String data → datasketch (SHA1 hash for compatibility)
+    Automatically selects the optimal backend:
+    - Binary arrays -> Numba JIT
+    - String data -> xxhash64 token IDs -> Numba JIT
 
     Args:
         num_perm: Number of permutation functions (hash functions). Higher values
             give more accurate Jaccard similarity estimates but use more memory.
-            Default is 128.
-        seed: Random seed for reproducibility. Using the same seed produces
-            identical signatures for identical inputs.
+        seed: Random seed for reproducibility.
 
     Example:
         >>> mh = MinHash(num_perm=128, seed=42)
@@ -87,21 +91,18 @@ class MinHash(Encoder):
         >>> sig = mh.from_binary_array(fp)
         >>> # From sparse indices (uses Numba)
         >>> sig = mh.from_sparse_binary_array([0, 2, 3, 6])
-        >>> # From strings (uses datasketch for SHA1 compatibility)
+        >>> # From strings
         >>> sig = mh.from_string_array(["hello", "world"])
         >>> # Batch processing (very fast with Numba!)
         >>> fps = np.random.randint(0, 2, size=(10000, 2048), dtype=np.uint8)
         >>> sigs = mh.batch_from_binary_array(fps)
 
-    Performance:
-        With Numba: ~150,000 fingerprints/second (2048-bit, 128 permutations)
-        1M fingerprints in ~6.6 seconds
-
     Notes:
         - Binary data uses universal hash function (a*x + b) mod prime
-        - String data uses SHA1 hash via datasketch
+        - String data is hashed to int64 IDs via xxhash64, then uses the same
+          universal hash
         - Signatures from binary and string inputs are NOT comparable
-          (different hash functions)!
+          (binary uses column indices as element IDs, strings use xxhash outputs)
     """
 
     def __init__(self, num_perm: int = 128, seed: int = 1):
@@ -111,11 +112,6 @@ class MinHash(Encoder):
         # Pre-compute permutation parameters (same formula as datasketch)
         self._a, self._b = init_permutations(num_perm, seed)
 
-    @property
-    def numba_available(self) -> bool:
-        """Whether Numba JIT compilation is available for binary data."""
-        return NUMBA_AVAILABLE
-
     def encode(
         self, data: NDArray[np.uint8] | Sequence[Collection[int | str]]
     ) -> NDArray[np.uint64]:
@@ -123,8 +119,8 @@ class MinHash(Encoder):
         Encode data into MinHash signatures.
 
         Automatically selects the optimal backend based on input type:
-        - NumPy array → Numba (if available)
-        - Sequence of sets/lists → datasketch
+        - NumPy array -> Numba JIT
+        - Sequence of sets/lists -> xxhash64 + Numba JIT
 
         Args:
             data: EITHER
@@ -136,20 +132,49 @@ class MinHash(Encoder):
         """
         # Fast path: binary numpy array with Numba
         if isinstance(data, np.ndarray):
-            if NUMBA_AVAILABLE:
-                return self._encode_binary_numba(data)
-            else:
-                # Fallback: convert to sets and use datasketch
-                sets = [set(np.nonzero(row)[0].tolist()) for row in data]
-                return self._encode_sets_datasketch(sets)
+            if data.ndim == 1:
+                raise ValueError(
+                    "encode() received a 1D array. If this is a single binary "
+                    "vector, reshape to (1, n_features). If these are element "
+                    "IDs, use from_sparse_binary_array() instead."
+                )
+            return self._encode_binary_numba(data)
 
-        # Sequence input: convert to sets and use datasketch
         if isinstance(data, list) and all(isinstance(s, set) for s in data):
             sets = data
         else:
             sets = [set(s) for s in data]
 
-        return self._encode_sets_datasketch(sets)
+        # Peek at first non-empty set to determine element type
+        first_elem = None
+        for s in sets:
+            if s:
+                first_elem = next(iter(s))
+                break
+
+        if first_elem is not None and isinstance(first_elem, str):
+            # Validate all elements are strings
+            for s in sets:
+                bad = [e for e in s if not isinstance(e, str)]
+                if bad:
+                    raise TypeError(
+                        f"Sets contain mixed types. First non-string element: "
+                        f"{bad[0]!r} ({type(bad[0]).__name__}). "
+                        f"All elements must be the same type (all str or all int)."
+                    )
+            return self._encode_strings(sets)
+
+        # Validate all elements are numeric (not strings mixed in)
+        for s in sets:
+            for e in s:
+                if isinstance(e, str):
+                    raise TypeError(
+                        f"Sets contain mixed types: found str {e!r} in an "
+                        f"integer set. All elements must be the same type."
+                    )
+
+        # Integer sets -> sparse numba path (integers are already valid IDs)
+        return self.batch_from_sparse_binary_array([list(s) for s in sets])
 
     def _encode_binary_numba(self, data: NDArray[np.uint8]) -> NDArray[np.uint64]:
         """Fast binary array encoding using Numba JIT."""
@@ -188,18 +213,6 @@ class MinHash(Encoder):
                 ),
             )
 
-    def _encode_sets_datasketch(self, sets: list[set[Any]]) -> NDArray[np.uint64]:
-        """Encode sets using datasketch (for string data compatibility)."""
-        signatures = np.zeros((len(sets), self._num_perm), dtype=np.uint64)
-
-        for i, s in enumerate(sets):
-            mh = _datasketch_minhash.MinHash(num_perm=self._num_perm, seed=self._seed)
-            for item in s:
-                mh.update(str(item).encode("utf-8"))
-            signatures[i] = mh.hashvalues
-
-        return signatures
-
     @staticmethod
     def get_distance(vec_a: NDArray[np.uint64], vec_b: NDArray[np.uint64]) -> float:
         """
@@ -224,15 +237,9 @@ class MinHash(Encoder):
     # Alias for backward compatibility
     jaccard_distance = get_distance
 
-    def _binary_to_sets(self, vectors: NDArray[Any]) -> list[set[int]]:
-        """Convert binary vectors to sets of 'on' indices."""
-        return [set(np.where(row)[0]) for row in vectors]
-
     def from_binary_array(self, arr: NDArray[np.uint8] | list[int]) -> NDArray[np.uint64]:
         """
         Create a MinHash signature from a single binary vector.
-
-        Uses Numba backend if available (fast).
 
         Args:
             arr: 1D binary array (0/1 values) where 1s indicate set membership
@@ -250,8 +257,6 @@ class MinHash(Encoder):
         """
         Create a MinHash signature from sparse representation (list of indices).
 
-        Uses Numba backend if available (fast).
-
         Args:
             indices: 1D sequence of integers representing positions of 1s
 
@@ -266,29 +271,59 @@ class MinHash(Encoder):
             if any(isinstance(x, (list, tuple, set, dict, np.ndarray)) for x in indices):
                 raise ValueError("indices must be a 1D sequence of ints, not a nested sequence")
 
-        # Fast path with Numba
-        if NUMBA_AVAILABLE:
-            indices_arr = np.array(indices, dtype=np.int64)
-            offsets = np.array([0, len(indices)], dtype=np.int64)
-            return cast(
-                NDArray[np.uint64],
-                minhash_batch_from_sparse(
-                    indices_arr,
-                    offsets,
-                    self._a,
-                    self._b,
-                    self._num_perm,
-                    1,
-                )[0],
+        indices_arr = np.array(indices, dtype=np.int64)
+        if indices_arr.size > 0 and indices_arr.min() < 0:
+            raise ValueError(
+                f"Indices must be non-negative. Got minimum index {indices_arr.min()}."
             )
+        offsets = np.array([0, len(indices)], dtype=np.int64)
+        return cast(
+            NDArray[np.uint64],
+            minhash_batch_from_sparse(
+                indices_arr,
+                offsets,
+                self._a,
+                self._b,
+                self._num_perm,
+                1,
+            )[0],
+        )
 
-        return cast(NDArray[np.uint64], self._encode_sets_datasketch([set(indices)])[0])
+    def _encode_strings(self, sets: list[set[str]]) -> NDArray[np.uint64]:
+        """Encode batches of string tokens through the sparse MinHash path."""
+        xxhash = _get_xxhash()
+        cache: dict[str, int] = {}
+        # CSR
+        indices_flat: list[int] = []
+        offsets = [0]
+        n_tokens = 0
+
+        for token_set in sets:
+            for token in token_set:
+                n_tokens += 1
+                if token not in cache:
+                    # xxhas64 could be up to 2^64 but numpy int64 holds up to  2^63 -1
+                    # so mask to 63 bits ANDing the number
+
+                    cache[token] = xxhash.xxh64_intdigest(token) & 0x7FFFFFFFFFFFFFFF
+                indices_flat.append(cache[token])
+            offsets.append(n_tokens)
+
+        return cast(
+            NDArray[np.uint64],
+            minhash_batch_from_sparse(
+                np.array(indices_flat, dtype=np.int64),
+                np.array(offsets, dtype=np.int64),
+                self._a,
+                self._b,
+                self._num_perm,
+                len(sets),
+            ),
+        )
 
     def from_string_array(self, strings: Sequence[str]) -> NDArray[np.uint64]:
         """
         Create a MinHash signature from a list of strings.
-
-        Always uses datasketch backend for SHA1 hash compatibility.
 
         Args:
             strings: 1D sequence of strings to be treated as set elements
@@ -307,29 +342,20 @@ class MinHash(Encoder):
         if not all(isinstance(x, str) for x in strings):
             raise ValueError("All elements must be strings")
 
-        # Always use datasketch for strings to maintain SHA1 hash compatibility
-        return cast(NDArray[np.uint64], self._encode_sets_datasketch([set(strings)])[0])
+        return cast(NDArray[np.uint64], self._encode_strings([set(strings)])[0])
 
-    # -------------------------------------------------------------------------
     # Batch methods
-    # -------------------------------------------------------------------------
-
     def batch_from_binary_array(
-        self,
-        arrays: Sequence[NDArray[np.uint8]] | NDArray[np.uint8],
-        n_jobs: int | None = None,
+        self, arrays: Sequence[NDArray[np.uint8]] | NDArray[np.uint8]
     ) -> NDArray[np.uint64]:
         """
         Create MinHash signatures from multiple binary vectors.
 
-        This is the fastest method for encoding many fingerprints. Uses Numba
-        parallel processing when available.
+        This is the fastest method for encoding many fingerprints.
 
         Args:
             arrays: Either a 2D array of shape (n_samples, n_features) or
                     a sequence of 1D binary arrays
-            n_jobs: Number of parallel workers (ignored with Numba backend,
-                    which uses its own parallelization).
 
         Returns:
             2D array of shape (n_samples, num_perm) containing MinHash signatures
@@ -340,132 +366,79 @@ class MinHash(Encoder):
         else:
             data = np.stack([np.asarray(arr, dtype=np.uint8) for arr in arrays])
 
-        # Use Numba fast path if available
-        if NUMBA_AVAILABLE:
-            return self._encode_binary_numba(data)
-
-        # Fallback to parallel datasketch
-        sets = [set(np.nonzero(row)[0].tolist()) for row in data]
-        return self._parallel_encode_sets(sets, n_jobs=n_jobs)
+        return self._encode_binary_numba(data)
 
     def batch_from_sparse_binary_array(
-        self,
-        indices_list: Sequence[Sequence[int]],
-        n_jobs: int | None = None,
+        self, indices_list: Sequence[Sequence[int]]
     ) -> NDArray[np.uint64]:
         """
         Create MinHash signatures from multiple sparse representations.
 
-        Uses Numba parallel processing when available.
-
         Args:
             indices_list: Sequence of sequences, where each inner sequence contains
                           the indices of 1s in a sparse binary vector
-            n_jobs: Number of parallel workers (ignored with Numba backend).
 
         Returns:
             2D array of shape (n_samples, num_perm) containing MinHash signatures
         """
         n_samples = len(indices_list)
 
-        # Fast path with Numba: build CSR-like structure
-        if NUMBA_AVAILABLE:
-            # Compute offsets
-            lengths = [len(indices) for indices in indices_list]
-            offsets = np.zeros(n_samples + 1, dtype=np.int64)
-            offsets[1:] = np.cumsum(lengths)
+        # Build CSR-like structure for Numba kernel
+        lengths = [len(indices) for indices in indices_list]
+        offsets = np.zeros(n_samples + 1, dtype=np.int64)
+        offsets[1:] = np.cumsum(lengths)
 
-            # Flatten all indices
-            total_nnz = offsets[-1]
-            indices_flat = np.empty(total_nnz, dtype=np.int64)
-            for i, indices in enumerate(indices_list):
-                indices_flat[offsets[i] : offsets[i + 1]] = indices
+        total_nnz = offsets[-1]
+        indices_flat = np.empty(total_nnz, dtype=np.int64)
+        for i, indices in enumerate(indices_list):
+            indices_flat[offsets[i] : offsets[i + 1]] = indices
 
-            return cast(
-                NDArray[np.uint64],
-                minhash_batch_from_sparse(
-                    indices_flat,
-                    offsets,
-                    self._a,
-                    self._b,
-                    self._num_perm,
-                    n_samples,
-                ),
-            )
+        # Validate: reject non-integer floats and negative indices
+        if total_nnz > 0:
+            if indices_flat.min() < 0:
+                raise ValueError(
+                    f"Indices must be non-negative. Got minimum index {indices_flat.min()}."
+                )
+            # Check original values for float truncation
+            for seq in indices_list:
+                for val in seq:
+                    if isinstance(val, float) and val != int(val):
+                        raise TypeError(
+                            f"Sparse indices must be integers, got float {val}. "
+                            f"Non-integer floats would be silently truncated."
+                        )
 
-        # Fallback to parallel datasketch
-        sets = [set(indices) for indices in indices_list]
-        return self._parallel_encode_sets(sets, n_jobs=n_jobs)
+        return cast(
+            NDArray[np.uint64],
+            minhash_batch_from_sparse(
+                indices_flat,
+                offsets,
+                self._a,
+                self._b,
+                self._num_perm,
+                n_samples,
+            ),
+        )
 
     def batch_from_string_array(
         self,
         string_lists: Sequence[Sequence[str]],
-        n_jobs: int | None = None,
     ) -> NDArray[np.uint64]:
         """
         Create MinHash signatures from multiple string lists.
 
-        Always uses datasketch backend for SHA1 hash compatibility.
-
         Args:
             string_lists: Sequence of string sequences, where each inner sequence
                           contains strings to be treated as set elements
-            n_jobs: Number of parallel workers. None = number of CPUs.
-
         Returns:
             2D array of shape (n_samples, num_perm) containing MinHash signatures
         """
-        sets = [set(strings) for strings in string_lists]
-        return self._parallel_encode_sets(sets, n_jobs=n_jobs)
-
-    def _parallel_encode_sets(
-        self,
-        sets: list[set[Any]],
-        n_jobs: int | None = None,
-    ) -> NDArray[np.uint64]:
-        """
-        Internal method to encode sets in parallel using ProcessPoolExecutor.
-
-        Used for string data and as fallback when Numba is unavailable.
-
-        Args:
-            sets: List of sets to encode
-            n_jobs: Number of parallel workers. None = number of CPUs.
-
-        Returns:
-            2D array of shape (n_samples, num_perm) containing MinHash signatures
-        """
-        if n_jobs is None:
-            n_jobs = os.cpu_count() or 1
-
-        n_samples = len(sets)
-
-        # For small inputs, sequential is faster due to process spawn overhead
-        if n_samples < 100 or n_jobs == 1:
-            return self._encode_sets_datasketch(sets)
-
-        # Prepare arguments for parallel processing
-        args = [(s, self._num_perm, self._seed) for s in sets]
-
-        signatures = np.zeros((n_samples, self._num_perm), dtype=np.uint64)
-
-        with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-            # Submit all tasks and track their original indices
-            future_to_idx = {
-                executor.submit(_encode_single_set, arg): i for i, arg in enumerate(args)
-            }
-
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                signatures[idx] = future.result()
-
-        return signatures
+        return self._encode_strings([set(s) for s in string_lists])
 
 
 # for integer/float data
-class WeightedMinHash(Encoder):
-    """
-    Weighted MinHash for float/integer vectors.
+class WeightedMinHash:
+    """Weighted MinHash for float/integer vectors.
 
     Uses consistent weighted sampling to create MinHash signatures that
     estimate weighted Jaccard similarity.
@@ -474,10 +447,6 @@ class WeightedMinHash(Encoder):
         dim: Number of features (must know upfront for generator)
         num_perm: Number of hash permutations
         seed: Random seed for reproducibility
-
-    Note:
-        The original TMAP supported ICWS and I2CWS methods. This implementation
-        uses datasketch's consistent weighted sampling which is similar to ICWS.
     """
 
     def __init__(self, dim: int, num_perm: int = 128, seed: int = 1):
@@ -486,7 +455,8 @@ class WeightedMinHash(Encoder):
         self._dim = dim
 
         # Generator must be created with known dimension
-        self._generator = _WeightedMinHashGenerator(dim=dim, sample_size=num_perm, seed=seed)
+        generator_cls = _get_weighted_minhash_generator()
+        self._generator = generator_cls(dim=dim, sample_size=num_perm, seed=seed)
 
     def encode(self, data: NDArray[np.float32]) -> NDArray[np.uint64]:
         """
@@ -500,7 +470,8 @@ class WeightedMinHash(Encoder):
                 Each signature has 2 values per hash (k, y_k from the algorithm)
         """
         n_samples, n_features = data.shape
-        self._validate_non_negative_vector(data)
+        if not np.all(data > 0):
+            raise ValueError("Vector must contain only positive values")
         if n_features != self._dim:
             raise ValueError(f"Expected {self._dim} features, got {n_features}")
 

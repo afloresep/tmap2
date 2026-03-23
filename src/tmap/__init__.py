@@ -21,7 +21,27 @@ if TYPE_CHECKING:
     from tmap.estimator import TMAP
     from tmap.index.encoders.minhash import MinHash, WeightedMinHash
     from tmap.index.lsh_forest import LSHForest
-    from tmap.utils.chemistry import fingerprints_from_smiles, molecular_properties
+    from tmap.utils.chemistry import (
+        AVAILABLE_PROPERTIES,
+        AVAILABLE_REACTION_PROPERTIES,
+        fingerprints_from_smiles,
+        molecular_properties,
+        murcko_scaffolds,
+        reaction_properties,
+    )
+    from tmap.utils.proteins import (
+        AVAILABLE_SEQUENCE_PROPERTIES,
+        fetch_alphafold,
+        fetch_uniprot,
+        parse_alignment,
+        read_fasta,
+        read_id_list,
+        read_pdb,
+        read_pdb_dir,
+        read_protein_csv,
+        sequence_properties,
+    )
+    from tmap.utils.singlecell import cell_metadata, from_anndata, marker_scores
 
 __version__ = "0.1.0"
 
@@ -31,8 +51,25 @@ __all__ = [
     "WeightedMinHash",
     "LSHForest",
     "TMAP",
+    "AVAILABLE_PROPERTIES",
+    "AVAILABLE_REACTION_PROPERTIES",
+    "AVAILABLE_SEQUENCE_PROPERTIES",
+    "cell_metadata",
     "fingerprints_from_smiles",
+    "from_anndata",
+    "marker_scores",
     "molecular_properties",
+    "murcko_scaffolds",
+    "reaction_properties",
+    "parse_alignment",
+    "sequence_properties",
+    "fetch_uniprot",
+    "fetch_alphafold",
+    "read_fasta",
+    "read_id_list",
+    "read_pdb",
+    "read_pdb_dir",
+    "read_protein_csv",
 ]
 
 _LAZY_IMPORTS: dict[str, str] = {
@@ -40,9 +77,25 @@ _LAZY_IMPORTS: dict[str, str] = {
     "LSHForest": "tmap.index.lsh_forest",
     "MinHash": "tmap.index.encoders.minhash",
     "WeightedMinHash": "tmap.index.encoders.minhash",
-    "FaissIndex": "tmap.index.faiss_index",
+    "AVAILABLE_PROPERTIES": "tmap.utils.chemistry",
+    "AVAILABLE_REACTION_PROPERTIES": "tmap.utils.chemistry",
+    "AVAILABLE_SEQUENCE_PROPERTIES": "tmap.utils.proteins",
     "fingerprints_from_smiles": "tmap.utils.chemistry",
+    "cell_metadata": "tmap.utils.singlecell",
+    "from_anndata": "tmap.utils.singlecell",
+    "marker_scores": "tmap.utils.singlecell",
     "molecular_properties": "tmap.utils.chemistry",
+    "murcko_scaffolds": "tmap.utils.chemistry",
+    "reaction_properties": "tmap.utils.chemistry",
+    "sequence_properties": "tmap.utils.proteins",
+    "fetch_uniprot": "tmap.utils.proteins",
+    "fetch_alphafold": "tmap.utils.proteins",
+    "parse_alignment": "tmap.utils.proteins",
+    "read_fasta": "tmap.utils.proteins",
+    "read_id_list": "tmap.utils.proteins",
+    "read_pdb": "tmap.utils.proteins",
+    "read_pdb_dir": "tmap.utils.proteins",
+    "read_protein_csv": "tmap.utils.proteins",
 }
 
 
@@ -54,10 +107,11 @@ def __getattr__(name: str) -> Any:
     try:
         module = import_module(module_path)
     except ModuleNotFoundError as exc:
-        if name in {"MinHash", "WeightedMinHash"} and exc.name == "datasketch":
+        if name in {"MinHash", "WeightedMinHash"} and exc.name in {"datasketch", "xxhash"}:
             raise ModuleNotFoundError(
-                f"Optional dependency 'datasketch' is required for `tmap.{name}`. "
-                "Install it with `pip install datasketch`."
+                f"Optional dependencies 'datasketch' and 'xxhash' are required "
+                f"for `tmap.{name}`. Install them with "
+                "`pip install datasketch xxhash`."
             ) from exc
         raise
 

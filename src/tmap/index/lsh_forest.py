@@ -37,11 +37,6 @@ class LSHForest:
     """
     LSH Forest data structure for approximate nearest neighbor search.
 
-    Uses a custom Numba-accelerated implementation:
-    - Parallel hash band computation (replaces datasketch's Python loops)
-    - Sorted arrays with binary search for efficient lookups
-    - Parallel linear scan for k-NN graph construction
-
     Args:
         d: Dimensionality of MinHash vectors (number of permutations). Default: 128
         l: Number of prefix trees (bands). Default: d // 2. Lower values increase
@@ -65,11 +60,6 @@ class LSHForest:
         >>>
         >>> # Build k-NN graph (Numba-accelerated linear scan)
         >>> knn_graph = lsh.get_knn_graph(k=20, kc=10)
-
-    Performance:
-        - 1M signatures batch_add: ~1s (vs 300s+ with datasketch)
-        - Linear scan uses Numba parallel processing
-        - Signature storage is contiguous for cache efficiency
     """
 
     def __init__(
@@ -112,10 +102,6 @@ class LSHForest:
         self._is_indexed: bool = False
         self._needs_reindex: bool = False
 
-    # =========================================================================
-    # Properties
-    # =========================================================================
-
     @property
     def size(self) -> int:
         """Number of indexed MinHash signatures."""
@@ -137,13 +123,11 @@ class LSHForest:
         return self._l
 
     @property
-    def is_indexed(self) -> int:
-        """Number of prefix trees."""
+    def is_indexed(self) -> bool:
+        """Whether the index has been built (index() called after adding)."""
         return self._is_indexed
 
-    # =========================================================================
     # Internal helpers
-    # =========================================================================
 
     def _validate_signature_shape(self, signature: NDArray[np.uint64], batch: bool = False) -> None:
         """Validate signature shape matches configuration."""
@@ -173,9 +157,7 @@ class LSHForest:
         else:
             return cast(float, jaccard_distance(sig_a, sig_b))
 
-    # =========================================================================
     # Add methods
-    # =========================================================================
 
     def add(self, signature: NDArray[np.uint64]) -> None:
         """
@@ -214,9 +196,7 @@ class LSHForest:
 
         self._needs_reindex = True
 
-    # =========================================================================
     # Index method
-    # =========================================================================
 
     def index(self) -> None:
         """
@@ -244,14 +224,14 @@ class LSHForest:
         self._signatures_list = []  # free intermediate copies
         n = self._signatures.shape[0]
 
-        # Compute hash bands for all signatures (Numba-parallel)
+        # Compute hash bands for all signatures
         if self._weighted:
             self._hash_bands = compute_hash_bands_weighted(self._signatures, self._l, self._k)
         else:
             self._hash_bands = compute_hash_bands(self._signatures, self._l, self._k)
 
         # Build sorted hash tables for each band
-        # We flatten all bands into single arrays with offsets for Numba compatibility
+        # flatten all bands into single arrays
         sorted_hashes_list = []
         sorted_indices_list = []
         band_sizes = []
@@ -276,9 +256,7 @@ class LSHForest:
         self._is_indexed = True
         self._needs_reindex = False
 
-    # =========================================================================
     # Query methods
-    # =========================================================================
 
     def query(self, signature: NDArray[np.uint64], k: int) -> NDArray[np.int32]:
         """
@@ -350,9 +328,7 @@ class LSHForest:
 
         return self.query(self._signatures[id], k)
 
-    # =========================================================================
-    # Linear scan methods (Numba-accelerated)
-    # =========================================================================
+    # Linear scan methods
 
     def linear_scan(
         self,
@@ -458,9 +434,7 @@ class LSHForest:
         # Exclude self from results
         return [(d, i) for d, i in results if i != id][:k]
 
-    # =========================================================================
     # k-NN Graph methods (main output for TMAP pipeline)
-    # =========================================================================
 
     def get_all_nearest_neighbors(
         self,
@@ -489,7 +463,7 @@ class LSHForest:
         """
         Construct the k-nearest neighbor graph of all indexed signatures.
 
-        This is the primary output method - produces input for OGDF layout
+        This is the primary output method becuase it produces input for OGDF layout
         and MST construction APIs.
 
         Args:
@@ -543,9 +517,89 @@ class LSHForest:
 
         return KNNGraph(indices=indices, distances=distances)
 
-    # =========================================================================
+    def query_external_batch(
+        self,
+        signatures: NDArray[np.uint64],
+        k: int,
+        kc: int = 10,
+    ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
+        """Query k-nearest stored neighbors for a batch of *external* signatures.
+
+        Uses the same Numba-parallel pipeline as :meth:`get_knn_graph`
+        (hash-band retrieval -> linear scan) but does **not** exclude
+        self-matches, since the query signatures are not part of the index.
+
+        Parameters
+        ----------
+        signatures : NDArray[np.uint64]
+            ``(m, d)`` array of MinHash signatures to query.
+        k : int
+            Number of nearest neighbors per query.
+        kc : int
+            Candidate multiplier for LSH retrieval (retrieves ``k * kc``
+            candidates, then refines with exact distances).
+
+        Returns
+        -------
+        indices : NDArray[np.int32]
+            ``(m, k)`` neighbor indices (padded with ``-1``).
+        distances : NDArray[np.float32]
+            ``(m, k)`` Jaccard distances (padded with ``inf``).
+        """
+        if not self._store:
+            raise ValueError("query_external_batch requires store=True")
+        if self._signatures is None or self._n_indexed == 0:
+            raise RuntimeError("Must add signatures and call index() first")
+        if (
+            self._sorted_hashes_flat is None
+            or self._sorted_indices_flat is None
+            or self._band_offsets is None
+        ):
+            raise RuntimeError("Index structures not initialized")
+
+        max_candidates = k * kc
+
+        # Compute hash bands for the external signatures
+        if self._weighted:
+            query_bands = compute_hash_bands_weighted(signatures, self._l, self._k)
+        else:
+            query_bands = compute_hash_bands(signatures, self._l, self._k)
+
+        # Batch LSH candidate retrieval (Numba-parallel)
+        all_candidates, candidate_counts = query_lsh_forest_batch(
+            query_bands,
+            self._sorted_hashes_flat,
+            self._sorted_indices_flat,
+            self._band_offsets,
+            max_candidates,
+        )
+
+        # Batch linear scan with exclude_self=False
+        if self._weighted:
+            indices, distances = linear_scan_batch_weighted(
+                signatures,
+                self._signatures,
+                all_candidates,
+                candidate_counts,
+                k,
+                False,
+            )
+        else:
+            indices, distances = linear_scan_batch(
+                signatures,
+                self._signatures,
+                all_candidates,
+                candidate_counts,
+                k,
+                False,
+            )
+
+        # Replace sentinel 2.0 distances with inf for consistency
+        distances[indices < 0] = np.inf
+
+        return indices, distances
+
     # Distance methods
-    # =========================================================================
 
     @staticmethod
     def get_distance(
@@ -635,10 +689,6 @@ class LSHForest:
                 NDArray[np.float32], compute_distances_to_candidates(signature, self._signatures)
             )
 
-    # =========================================================================
-    # Storage / Retrieval
-    # =========================================================================
-
     def get_hash(self, id: int) -> NDArray[np.uint64]:
         """
         Retrieve the MinHash signature of an indexed entry.
@@ -661,10 +711,6 @@ class LSHForest:
             raise IndexError(f"ID {id} out of range [0, {self._n_indexed})")
 
         return cast(NDArray[np.uint64], self._signatures[id].copy())
-
-    # =========================================================================
-    # Persistence
-    # =========================================================================
 
     def save(self, path: str) -> None:
         """
@@ -723,10 +769,6 @@ class LSHForest:
         instance._needs_reindex = False
 
         return instance
-
-    # =========================================================================
-    # State methods
-    # =========================================================================
 
     def clear(self) -> None:
         """Clear all added data and computed indices."""

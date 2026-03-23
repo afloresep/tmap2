@@ -5,43 +5,9 @@ Type definitions for the index module.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import NamedTuple
 
 import numpy as np
 from numpy.typing import NDArray
-
-
-class Edge(NamedTuple):
-    """Single edge: (source_node, target_node, weight/distance)."""
-
-    source: int
-    target: int
-    weight: float
-
-
-@dataclass(frozen=True, slots=True)
-class EdgeList:
-    """
-    Generic input format - just a list of weighted edges.
-
-    Example usage:
-        edges = EdgeList(
-            edges=[(0, 1, 0.9), (0, 2, 0.7), (1, 2, 0.5)],
-            n_nodes=3,
-        )
-    """
-
-    edges: list[Edge] | list[tuple[int, int, float]]
-    n_nodes: int
-    labels: list[str] | None = None  # Optional node labels
-
-    def __post_init__(self) -> None:
-        """Validate on construction. Fail fast, fail loud."""
-        if self.n_nodes <= 0:
-            raise ValueError(f"n_nodes must be positive, got {self.n_nodes}")
-        # Convert tuples to Edge namedtuples for consistency
-        if self.edges and isinstance(self.edges[0], tuple):
-            object.__setattr__(self, "edges", [Edge(*e) for e in self.edges])
 
 
 @dataclass(slots=True)
@@ -119,14 +85,3 @@ class KNNGraph:
     def k(self) -> int:
         """Return the number of neighbors per node."""
         return int(self.indices.shape[1])
-
-    def to_edge_list(self) -> EdgeList:
-        """Convert to EdgeList format (useful for debugging/export)."""
-        edges: list[Edge] = []
-        for i in range(self.n_nodes):
-            for j in range(self.k):
-                neighbor = self.indices[i, j]
-                dist = self.distances[i, j]
-                if neighbor != -1:  # -1 means no neighbor (sparse)
-                    edges.append(Edge(i, int(neighbor), float(dist)))
-        return EdgeList(edges=edges, n_nodes=self.n_nodes)

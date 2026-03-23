@@ -14,7 +14,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
-    from tmap.graph.types import Tree
     from tmap.index.lsh_forest import LSHForest
     from tmap.index.types import KNNGraph
 
@@ -182,49 +181,6 @@ def layout_from_edge_list(
     )
 
 
-# NOTE: This gives trash tmaps, specially when MST comes from scipy
-# probably not good idea to keep it
-def layout_from_tree(
-    tree: Tree,
-    config: Any | None = None,
-) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
-    """
-    Compute 2D layout from a Tree (MST).
-
-    Parameters
-    ----------
-    tree : Tree
-        Tree structure from MSTBuilder
-    config : LayoutConfig, optional
-        Layout configuration
-
-    Returns
-    -------
-    x, y : ndarrays
-        Coordinates
-    """
-    require_ogdf()
-
-    if config is None:
-        if LayoutConfig is None:
-            raise RuntimeError("LayoutConfig is unavailable")
-        config = LayoutConfig()
-    if _cpp_layout_from_edge_list is None:
-        raise RuntimeError("OGDF layout function is unavailable")
-
-    edges = [
-        (int(tree.edges[i, 0]), int(tree.edges[i, 1]), float(tree.weights[i]))
-        for i in range(len(tree.edges))
-    ]
-
-    result = _cpp_layout_from_edge_list(tree.n_nodes, edges, config, create_mst=False)
-
-    return (
-        np.array(result.x, dtype=np.float32),
-        np.array(result.y, dtype=np.float32),
-    )
-
-
 def layout_from_lsh_forest(
     lsh_forest: LSHForest,
     config: Any | None = None,
@@ -268,12 +224,6 @@ def layout_from_lsh_forest(
     >>> cfg.mmm_repeats = 2
     >>> x, y, s, t = layout_from_lsh_forest(lsh, cfg)
     """
-
-    """Probably the best way to generate the TMAP
-    relying on OGDF for MST and layout is a better 
-    approach than outsourcing MST to other library 
-    not sure why...
-    """
     require_ogdf()
 
     if config is None:
@@ -314,7 +264,7 @@ def layout_from_knn_graph(
     Parameters
     ----------
     knn : KNNGraph
-        k-NN graph from LSHForest.get_knn_graph()
+        k-NN graph from LSHForest, USearch, or another source.
     config : LayoutConfig, optional
         Layout configuration
     create_mst : bool, default True
@@ -353,8 +303,7 @@ def _knn_to_edge_list(knn: KNNGraph) -> list[tuple[int, int, float]]:
     Creates undirected edges from k-NN (which is directed: i -> neighbors[i]).
     Filters out self-loops and invalid entries.
     """
-    edges = []
-    seen = set()  # Avoid duplicate undirected edges
+    edge_weights: dict[tuple[int, int], float] = {}
 
     n = knn.n_nodes
     k = knn.k
@@ -364,17 +313,15 @@ def _knn_to_edge_list(knn: KNNGraph) -> list[tuple[int, int, float]]:
             j = int(knn.indices[i, j_idx])
             dist = float(knn.distances[i, j_idx])
 
-            # Skip invalid entries and self-loops
-            if j < 0 or j == i:
+            if j < 0 or j == i or not np.isfinite(dist):
                 continue
 
-            # Create canonical edge (smaller, larger) to avoid duplicates
             edge_key = (min(i, j), max(i, j))
-            if edge_key not in seen:
-                seen.add(edge_key)
-                edges.append((i, j, dist))
+            prev = edge_weights.get(edge_key)
+            if prev is None or dist < prev:
+                edge_weights[edge_key] = dist
 
-    return edges
+    return [(src, tgt, weight) for (src, tgt), weight in edge_weights.items()]
 
 
 __all__ = [
@@ -385,7 +332,6 @@ __all__ = [
     "Merger",
     "ScalingType",
     "layout_from_edge_list",
-    "layout_from_tree",
     "layout_from_lsh_forest",
     "layout_from_knn_graph",
 ]

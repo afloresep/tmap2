@@ -6,12 +6,13 @@ Tests cover:
 - Point coordinate setting and validation
 - Color layout (continuous and categorical)
 - Label and SMILES columns
-- HTML rendering (JSON and binary modes)
+- HTML rendering (binary mode)
 - Binary container format utilities
 """
 
 import json
 import re
+import warnings
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -24,7 +25,7 @@ matplotlib.use("Agg")
 
 # Check if visualization dependencies are available
 try:
-    from tmap.visualization import BINARY_THRESHOLD, TmapViz
+    from tmap.visualization import TmapViz
     from tmap.visualization.binary import (
         BinaryContainerWriter,
         dequantize_coords,
@@ -374,15 +375,15 @@ class TestAddSmiles:
 # =============================================================================
 
 
-class TestRender:
-    """Tests for render method (JSON mode)."""
+class TestToHtmlRendering:
+    """Tests for to_html rendering."""
 
     def test_render_basic(self, viz_with_data):
         """Should render to HTML string."""
         viz, data = viz_with_data
         viz.add_color_layout("value", data["continuous"])
 
-        html = viz.render()
+        html = viz.to_html()
 
         assert isinstance(html, str)
         assert "<html" in html.lower()
@@ -393,14 +394,14 @@ class TestRender:
         viz = TmapViz()
 
         with pytest.raises(ValueError, match="set_points"):
-            viz.render()
+            viz.to_html()
 
     def test_render_contains_title(self, viz_with_data):
         """HTML should contain title."""
         viz, data = viz_with_data
         viz.title = "Test Visualization"
 
-        html = viz.render()
+        html = viz.to_html()
 
         assert "Test Visualization" in html
 
@@ -409,7 +410,7 @@ class TestRender:
         viz, data = viz_with_data
         viz.add_smiles(data["smiles"], "structure")
 
-        html = viz.render()
+        html = viz.to_html()
 
         # Should render without error (smiles template used)
         assert isinstance(html, str)
@@ -560,97 +561,24 @@ class TestNotebookAPI:
 
 
 # =============================================================================
-# render_binary Tests
-# =============================================================================
-
-
-class TestRenderBinary:
-    """Tests for render_binary method."""
-
-    def test_render_binary_basic(self, viz_with_data):
-        """Should render binary HTML."""
-        viz, data = viz_with_data
-        viz.add_color_layout("value", data["continuous"])
-
-        html = viz.render_binary()
-
-        assert isinstance(html, str)
-        assert "<html" in html.lower()
-
-    def test_render_binary_without_points_raises(self):
-        """render_binary without set_points should raise."""
-        viz = TmapViz()
-
-        with pytest.raises(ValueError, match="set_points"):
-            viz.render_binary()
-
-    def test_render_binary_smaller_than_json(self, viz_with_data):
-        """Binary mode should generally produce smaller output."""
-        viz, data = viz_with_data
-        viz.add_color_layout("value", data["continuous"])
-
-        html_json = viz.render()
-        html_binary = viz.render_binary()
-
-        # For small datasets, binary might not be smaller due to overhead
-        # But both should be valid
-        assert len(html_json) > 0
-        assert len(html_binary) > 0
-
-
-# =============================================================================
 # to_html Tests
 # =============================================================================
 
 
 class TestToHtml:
-    """Tests for mode selection in to_html."""
+    """Tests for to_html."""
 
-    def test_to_html_default_uses_render(self, viz_with_data, monkeypatch: pytest.MonkeyPatch):
-        """Default mode should use JSON rendering for small datasets."""
-        viz, _ = viz_with_data
-        calls: list[str] = []
-
-        def _fake_render(template_name: str = "base.html.j2") -> str:
-            calls.append("render")
-            return "json-html"
-
-        def _fake_render_binary(template_name: str = "binary.html.j2") -> str:
-            calls.append("render_binary")
-            return "binary-html"
-
-        monkeypatch.setattr(viz, "render", _fake_render)
-        monkeypatch.setattr(viz, "render_binary", _fake_render_binary)
+    def test_to_html_returns_valid_html(self, viz_with_data):
+        """to_html should return a valid HTML string."""
+        viz, data = viz_with_data
+        viz.add_color_layout("value", data["continuous"])
 
         html = viz.to_html()
-        assert html == "json-html"
-        assert calls == ["render"]
 
-    def test_to_html_mode_binary(self, viz_with_data, monkeypatch: pytest.MonkeyPatch):
-        """mode='binary' should always select binary rendering."""
-        viz, _ = viz_with_data
-        calls: list[str] = []
-
-        def _fake_render(template_name: str = "base.html.j2") -> str:
-            calls.append("render")
-            return "json-html"
-
-        def _fake_render_binary(template_name: str = "binary.html.j2") -> str:
-            calls.append("render_binary")
-            return "binary-html"
-
-        monkeypatch.setattr(viz, "render", _fake_render)
-        monkeypatch.setattr(viz, "render_binary", _fake_render_binary)
-
-        html = viz.to_html(mode="binary")
-        assert html == "binary-html"
-        assert calls == ["render_binary"]
-
-    def test_to_html_invalid_mode_raises(self, viz_with_data):
-        """Invalid mode should raise ValueError."""
-        viz, _ = viz_with_data
-        with pytest.raises(ValueError, match="mode must be one of"):
-            viz.to_html(mode="invalid")  # type: ignore[arg-type]
+        assert isinstance(html, str)
+        assert "<html" in html.lower()
+        # Inline metadata rendered as JS object literal
+        assert "const metadata =" in html
 
 
 # =============================================================================
@@ -690,14 +618,16 @@ class TestWriteHtml:
         assert output_path.name == "my_viz.html"
         assert not output_path.name.endswith(".html.html")
 
-    def test_write_html_mode_binary(self, viz_with_data, tmp_path):
-        """mode='binary' should use binary mode."""
+    def test_write_html_binary_format(self, viz_with_data, tmp_path):
+        """write_html should produce binary format output."""
         viz, data = viz_with_data
         viz.title = "binary_output"
 
-        output_path = viz.write_html(tmp_path, mode="binary")
+        output_path = viz.write_html(tmp_path)
 
         assert output_path.exists()
+        content = output_path.read_text()
+        assert "const metadata =" in content
 
 
 # =============================================================================
@@ -818,7 +748,7 @@ class TestEdgeCases:
         viz.set_points([0.0], [0.0])
         viz.add_label("name", ["Only Point"])
 
-        html = viz.render()
+        html = viz.to_html()
 
         assert isinstance(html, str)
 
@@ -838,8 +768,11 @@ class TestEdgeCases:
 
         viz.add_label("name", unicode_labels)
 
-        html = viz.render()
-        assert "\u03b1" in html or "\\u03b1" in html  # Either direct or escaped
+        html = viz.to_html()
+        # Binary mode: labels are gzip-compressed and base64-encoded,
+        # so unicode won't appear directly. Just verify render succeeds.
+        assert isinstance(html, str)
+        assert "<html" in html.lower()
 
     def test_large_numeric_values(self, viz_with_data):
         """Should handle large numeric values."""
@@ -848,7 +781,7 @@ class TestEdgeCases:
 
         viz.add_color_layout("large", large_values)
 
-        html = viz.render()
+        html = viz.to_html()
         assert isinstance(html, str)
 
     def test_nan_values_in_continuous(self, viz_with_data):
@@ -860,18 +793,9 @@ class TestEdgeCases:
             viz.add_color_layout("with_nan", values)
 
         # Should not raise, NaN values are rendered in black client-side
-        html = viz.render()
+        html = viz.to_html()
         assert isinstance(html, str)
-
-        # Payload JSON in HTML should be valid JSON (NaN -> null)
-        match = re.search(
-            r'<script id="payload" type="application/json">(.*?)</script>',
-            html,
-            re.DOTALL,
-        )
-        assert match is not None
-        payload = json.loads(match.group(1))
-        assert payload["columns"]["with_nan"]["values"][1] is None
+        assert "<html" in html.lower()
 
 
 # =============================================================================
@@ -893,7 +817,7 @@ class TestColumnValidation:
         viz.add_label("name", ["A", "B"])  # Wrong length
 
         with pytest.raises(ValueError, match="values but there are"):
-            viz.render()
+            viz.to_html()
 
     def test_set_points_validates_existing_columns(self):
         """set_points should validate against existing columns."""
@@ -948,66 +872,44 @@ class TestSetEdges:
             viz.set_edges([0, n], [1, 0])
 
     def test_render_with_edges(self, viz_with_data):
-        """JSON payload should include edges."""
+        """Rendered HTML should include edge data."""
         viz, data = viz_with_data
         viz.add_color_layout("value", data["continuous"])
         viz.set_edges([0, 1, 2], [1, 2, 3])
 
-        html = viz.render()
+        html = viz.to_html()
 
-        # Extract payload from HTML
+        # Inline edges should be present
+        assert "inline_edges" in html or "const metadata =" in html
+        # Extract inline metadata JSON from the JS
         match = re.search(
-            r'<script id="payload" type="application/json">(.*?)</script>',
+            r"const metadata = ({.*?});",
             html,
             re.DOTALL,
         )
         assert match is not None
-        payload = json.loads(match.group(1))
-        assert "edges" in payload
-        assert payload["edges"]["s"] == [0, 1, 2]
-        assert payload["edges"]["t"] == [1, 2, 3]
-        assert payload["edgeStrokeStyle"] == "rgba(0, 0, 0, 0.5)"
-        assert payload["edgeWidth"] == 2.0
+        meta = json.loads(match.group(1))
+        assert meta["nEdges"] == 3
+        assert meta["edgeStrokeStyle"] == "rgba(0, 0, 0, 0.5)"
+        assert meta["edgeWidth"] == 2.0
 
-    def test_render_binary_with_edges(self, viz_with_data):
-        """Binary mode should include edge data."""
-        viz, data = viz_with_data
-        viz.add_color_layout("value", data["continuous"])
-        viz.set_edges([0, 1, 2], [1, 2, 3])
-
-        html = viz.render_binary()
-
-        # Should contain the edges script tag
-        assert 'id="tmap-edges"' in html
-        # Header should contain nEdges
-        match = re.search(
-            r'<script id="tmap-header" type="application/json">(.*?)</script>',
-            html,
-            re.DOTALL,
-        )
-        assert match is not None
-        header = json.loads(match.group(1))
-        assert header["metadata"]["nEdges"] == 3
-        assert header["metadata"]["edgeStrokeStyle"] == "rgba(0, 0, 0, 0.5)"
-        assert header["metadata"]["edgeWidth"] == 2.0
-
-    def test_custom_edge_style_in_payload(self, viz_with_data):
-        """Custom edge style should be serialized in JSON payload."""
+    def test_custom_edge_style_in_header(self, viz_with_data):
+        """Custom edge style should be serialized in header metadata."""
         viz, data = viz_with_data
         viz.set_edges([0, 1], [1, 2])
         viz.set_edge_style(color="#f03", width=4.5, opacity=0.35)
 
-        html = viz.render()
+        html = viz.to_html()
 
         match = re.search(
-            r'<script id="payload" type="application/json">(.*?)</script>',
+            r"const metadata = ({.*?});",
             html,
             re.DOTALL,
         )
         assert match is not None
-        payload = json.loads(match.group(1))
-        assert payload["edgeStrokeStyle"] == "rgba(255, 0, 51, 0.35)"
-        assert payload["edgeWidth"] == 4.5
+        meta = json.loads(match.group(1))
+        assert meta["edgeStrokeStyle"] == "rgba(255, 0, 51, 0.35)"
+        assert meta["edgeWidth"] == 4.5
 
 
 class TestEdgeStyle:
@@ -1039,33 +941,6 @@ class TestEdgeStyle:
         viz = TmapViz()
         with pytest.raises(ValueError, match="must be in \\[0, 1\\]"):
             viz.set_edge_style(opacity=1.2)
-
-
-# =============================================================================
-# BINARY_THRESHOLD Tests
-# =============================================================================
-
-
-class TestBinaryThreshold:
-    """Tests for BINARY_THRESHOLD constant."""
-
-    def test_threshold_value(self):
-        """BINARY_THRESHOLD should be 500,000."""
-        assert BINARY_THRESHOLD == 500_000
-
-    def test_write_html_uses_threshold(self, tmp_path):
-        """write_html should use threshold to choose mode."""
-        # Create small dataset
-        viz = TmapViz()
-        viz.title = "small"
-        viz.set_points([0.0, 1.0], [0.0, 1.0])
-
-        # Should use JSON mode (below threshold)
-        output = viz.write_html(tmp_path, binary_threshold=100)
-
-        content = output.read_text()
-        # JSON mode includes points as array
-        assert '"points"' in content or "points" in content
 
 
 # =============================================================================
@@ -1138,3 +1013,149 @@ class TestPlotStatic:
         bad = np.ones((10, 3), dtype=np.float32)
         with pytest.raises(ValueError, match="shape"):
             plot_static(bad)
+
+
+# =============================================================================
+# Declarative UI Configuration Tests
+# =============================================================================
+
+
+class TestFilterableProperty:
+    """Tests for the filterable property."""
+
+    def test_default_empty(self):
+        viz = TmapViz()
+        assert viz.filterable == []
+
+    def test_set_and_get(self):
+        viz = TmapViz()
+        viz.filterable = ["col_a", "col_b"]
+        assert viz.filterable == ["col_a", "col_b"]
+
+    def test_returns_copy(self):
+        viz = TmapViz()
+        viz.filterable = ["col_a"]
+        result = viz.filterable
+        result.append("col_b")
+        assert viz.filterable == ["col_a"]
+
+    def test_invalid_type_raises(self):
+        viz = TmapViz()
+        with pytest.raises(TypeError, match="list"):
+            viz.filterable = "not_a_list"
+
+    def test_accepts_tuple(self):
+        viz = TmapViz()
+        viz.filterable = ("col_a", "col_b")
+        assert viz.filterable == ["col_a", "col_b"]
+
+
+class TestSearchableProperty:
+    """Tests for the searchable property."""
+
+    def test_default_empty(self):
+        viz = TmapViz()
+        assert viz.searchable == []
+
+    def test_set_and_get(self):
+        viz = TmapViz()
+        viz.searchable = ["name", "id"]
+        assert viz.searchable == ["name", "id"]
+
+    def test_invalid_type_raises(self):
+        viz = TmapViz()
+        with pytest.raises(TypeError, match="list"):
+            viz.searchable = 42
+
+
+class TestConfigureCard:
+    """Tests for configure_card method."""
+
+    def test_stores_config(self):
+        viz = TmapViz()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            viz.configure_card(
+                title_column="UniProt ID",
+                subtitle_column="protein_name",
+                fields=["cluster_size", "pLDDT"],
+                links=[{"label": "UniProt", "url": "https://uniprot.org/{UniProt ID}"}],
+            )
+        assert viz._card_config is not None
+        assert viz._card_config["titleColumn"] == "UniProt ID"
+        assert viz._card_config["subtitleColumn"] == "protein_name"
+        assert viz._card_config["fields"] == ["cluster_size", "pLDDT"]
+        assert len(viz._card_config["links"]) == 1
+
+    def test_partial_config(self):
+        viz = TmapViz()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            viz.configure_card(title_column="Name")
+        assert viz._card_config == {"titleColumn": "Name"}
+
+    def test_serialized_in_write_static(self, viz_with_data, tmp_path):
+        viz, data = viz_with_data
+        viz.add_label("name", data["labels"])
+        viz.add_color_layout("value", data["continuous"])
+        viz.configure_card(title_column="name", fields=["value"])
+
+        out = viz.write_static(tmp_path / "out")
+        meta = json.loads((out / "metadata.json").read_text())
+
+        assert meta["card"] is not None
+        assert meta["card"]["titleColumn"] == "name"
+        assert meta["card"]["fields"] == ["value"]
+
+    def test_serialized_in_to_html(self, viz_with_data):
+        viz, data = viz_with_data
+        viz.add_label("name", data["labels"])
+        viz.add_color_layout("value", data["continuous"])
+        viz.configure_card(title_column="name", fields=["value"])
+
+        html = viz.to_html()
+        match = re.search(
+            r"const metadata = ({.*?});",
+            html,
+            re.DOTALL,
+        )
+        assert match is not None
+        meta = json.loads(match.group(1))
+        assert meta["card"]["titleColumn"] == "name"
+
+
+class TestBackwardCompat:
+    """No new config calls should produce same metadata shape as before."""
+
+    def test_no_config_no_extra_keys(self, viz_with_data, tmp_path):
+        viz, data = viz_with_data
+        viz.add_color_layout("value", data["continuous"])
+        viz.add_label("name", data["labels"])
+
+        out = viz.write_static(tmp_path / "out")
+        meta = json.loads((out / "metadata.json").read_text())
+
+        # card should be null when not configured
+        assert meta.get("card") is None
+        # filters/search auto-populated from layouts/labels
+        assert meta.get("filters") == ["value"]
+        assert meta.get("search") == ["value", "name"]
+
+        # No column should have a "ui" key
+        for col_meta in meta["columns"].values():
+            assert "ui" not in col_meta
+
+
+class TestStaticShellMode:
+    """Ensure write_static emits fetch-based HTML shell."""
+
+    def test_write_static_uses_fetch_shell(self, viz_with_data, tmp_path):
+        viz, data = viz_with_data
+        viz.add_color_layout("value", data["continuous"])
+        viz.add_label("name", data["labels"])
+
+        out = viz.write_static(tmp_path / "out")
+        index_html = (out / "index.html").read_text()
+
+        assert "const metadata = await fetch('./metadata.json').then(r => r.json());" in index_html
+        assert "const metadata = {" not in index_html

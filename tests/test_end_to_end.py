@@ -2,7 +2,7 @@
 End-to-end tests for the full TMAP2 pipeline.
 
 Tests the complete flow:
-    data -> MinHash -> LSHForest -> MSTBuilder -> ForceDirectedLayout -> TmapViz
+    data -> MinHash -> LSHForest -> KNNGraph -> OGDF MST/Layout -> TmapViz
 
 Each stage is also tested independently to isolate failures.
 """
@@ -175,95 +175,96 @@ class TestLSHForestKNN:
 
 
 # =============================================================================
-# Stage 3: MST Building
+# Stage 3: Tree extraction from k-NN
 # =============================================================================
 
 
-class TestMSTBuilder:
-    """Test MST construction from k-NN graph."""
+def _make_layout_config(seed: int, iterations: int):
+    from tmap.layout import LayoutConfig
+
+    config = LayoutConfig()
+    config.deterministic = True
+    config.seed = seed
+    config.fme_iterations = iterations
+    return config
+
+
+class TestTreeFromKNNGraph:
+    """Test MST extraction from a k-NN graph."""
 
     def test_mst_edge_count(self, similar_signatures):
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
+        from tmap.graph import tree_from_knn_graph
 
         lsh = LSHForest(d=128, l=32)
         lsh.batch_add(similar_signatures)
         lsh.index()
         knn = lsh.get_knn_graph(k=10, kc=20)
 
-        builder = MSTBuilder(bias_factor=0.1)
-        tree = builder.build(knn)
+        tree = tree_from_knn_graph(knn)
 
-        # With clustered data, MST may have disconnected components
-        # Each cluster of 10 samples should have 9 edges (fully connected within)
-        # So minimum expected edges = n_clusters * (cluster_size - 1) = 10 * 9 = 90
         assert tree.n_nodes == 100
-        assert len(tree.edges) >= 90  # At least intra-cluster edges
-        assert len(tree.edges) <= 99  # At most n-1 (fully connected)
+        assert 90 <= len(tree.edges) <= 99
         assert len(tree.weights) == len(tree.edges)
 
     def test_mst_weights_positive(self, similar_signatures):
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
+        from tmap.graph import tree_from_knn_graph
 
         lsh = LSHForest(d=128, l=32)
         lsh.batch_add(similar_signatures)
         lsh.index()
         knn = lsh.get_knn_graph(k=10, kc=20)
 
-        tree = MSTBuilder().build(knn)
+        tree = tree_from_knn_graph(knn)
 
         assert np.all(tree.weights >= 0)
 
 
 # =============================================================================
-# Stage 4: Force-Directed Layout
+# Stage 4: OGDF layout from k-NN
 # =============================================================================
 
 
-class TestForceDirectedLayout:
-    """Test layout computation from tree."""
+class TestOGDFLayout:
+    """Test layout computation directly from a k-NN graph."""
 
     def test_layout_coordinate_shape(self, similar_signatures):
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
-        from tmap.layout import ForceDirectedLayout
+        from tmap.layout import layout_from_knn_graph
 
         lsh = LSHForest(d=128, l=32)
         lsh.batch_add(similar_signatures)
         lsh.index()
         knn = lsh.get_knn_graph(k=10, kc=20)
 
-        tree = MSTBuilder(bias_factor=0.1).build(knn)
+        config = _make_layout_config(seed=42, iterations=100)
+        x, y, s, t = layout_from_knn_graph(knn, config=config, create_mst=True)
 
-        layout = ForceDirectedLayout(seed=42, max_iterations=100)
-        coords = layout.compute(tree)
-
-        assert len(coords.x) == 100
-        assert len(coords.y) == 100
-        assert coords.x.dtype == np.float32
-        assert coords.y.dtype == np.float32
+        assert len(x) == 100
+        assert len(y) == 100
+        assert x.dtype == np.float32
+        assert y.dtype == np.float32
+        assert s.dtype == np.uint32
+        assert t.dtype == np.uint32
 
     def test_layout_deterministic(self, small_similar_signatures):
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
-        from tmap.layout import ForceDirectedLayout
+        from tmap.layout import layout_from_knn_graph
 
         lsh = LSHForest(d=64)
         lsh.batch_add(small_similar_signatures)
         lsh.index()
         knn = lsh.get_knn_graph(k=5, kc=10)
 
-        tree = MSTBuilder().build(knn)
+        config = _make_layout_config(seed=42, iterations=50)
+        x1, y1, s1, t1 = layout_from_knn_graph(knn, config=config, create_mst=True)
+        x2, y2, s2, t2 = layout_from_knn_graph(knn, config=config, create_mst=True)
 
-        layout1 = ForceDirectedLayout(seed=42, max_iterations=50)
-        layout2 = ForceDirectedLayout(seed=42, max_iterations=50)
-
-        coords1 = layout1.compute(tree)
-        coords2 = layout2.compute(tree)
-
-        np.testing.assert_array_almost_equal(coords1.x, coords2.x)
-        np.testing.assert_array_almost_equal(coords1.y, coords2.y)
+        np.testing.assert_array_equal(s1, s2)
+        np.testing.assert_array_equal(t1, t2)
+        np.testing.assert_array_almost_equal(x1, x2)
+        np.testing.assert_array_almost_equal(y1, y2)
 
 
 # =============================================================================
@@ -276,8 +277,7 @@ class TestTmapViz:
 
     def test_render_produces_html(self, similar_signatures):
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
-        from tmap.layout import ForceDirectedLayout
+        from tmap.layout import layout_from_knn_graph
         from tmap.visualization.tmapviz import TmapViz
 
         lsh = LSHForest(d=128, l=32)
@@ -285,34 +285,28 @@ class TestTmapViz:
         lsh.index()
         knn = lsh.get_knn_graph(k=10, kc=20)
 
-        tree = MSTBuilder(bias_factor=0.1).build(knn)
+        x, y, s, t = layout_from_knn_graph(
+            knn,
+            config=_make_layout_config(seed=42, iterations=100),
+            create_mst=True,
+        )
 
-        layout = ForceDirectedLayout(seed=42, max_iterations=100)
-        coords = layout.compute(tree)
-
-        # Create visualization
         viz = TmapViz()
-        viz.set_points(coords.x, coords.y)
+        viz.set_points(x, y)
+        viz.set_edges(s, t)
+        viz.add_label("id", [f"Point_{i}" for i in range(100)])
+        viz.add_color_layout("index", np.arange(100, dtype=float).tolist(), color="viridis")
 
-        # Add some metadata
-        labels = [f"Point_{i}" for i in range(100)]
-        values = np.arange(100, dtype=float)
+        html = viz.to_html()
 
-        viz.add_label("id", labels)
-        viz.add_color_layout("index", values.tolist(), categorical=False, color="viridis")
-
-        html = viz.render()
-
-        # Validate HTML output
         assert isinstance(html, str)
-        assert len(html) > 1000  # Should be substantial
+        assert len(html) > 1000
         assert "<!DOCTYPE html>" in html or "<html" in html
         assert "regl" in html.lower() or "scatterplot" in html.lower()
 
     def test_viz_with_categorical_colors(self, small_similar_signatures):
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
-        from tmap.layout import ForceDirectedLayout
+        from tmap.layout import layout_from_knn_graph
         from tmap.visualization.tmapviz import TmapViz
 
         lsh = LSHForest(d=64)
@@ -320,18 +314,18 @@ class TestTmapViz:
         lsh.index()
         knn = lsh.get_knn_graph(k=5, kc=10)
 
-        tree = MSTBuilder().build(knn)
-        layout = ForceDirectedLayout(seed=42, max_iterations=50)
-        coords = layout.compute(tree)
+        x, y, s, t = layout_from_knn_graph(
+            knn,
+            config=_make_layout_config(seed=42, iterations=50),
+            create_mst=True,
+        )
 
         viz = TmapViz()
-        viz.set_points(coords.x, coords.y)
+        viz.set_points(x, y)
+        viz.set_edges(s, t)
+        viz.add_color_layout("category", ["A", "B", "C"] * 3 + ["A"], categorical=True)
 
-        # Categorical color layout
-        categories = ["A", "B", "C"] * 3 + ["A"]  # 10 items
-        viz.add_color_layout("category", categories, categorical=True, color="tab10")
-
-        html = viz.render()
+        html = viz.to_html()
         assert "<html" in html
 
 
@@ -344,96 +338,83 @@ class TestFullPipeline:
     """Complete end-to-end integration tests."""
 
     def test_full_pipeline_100_points(self, similar_signatures):
-        """Test complete pipeline with 100 points (using similar signatures)."""
+        """Test complete pipeline with 100 points."""
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
-        from tmap.layout import ForceDirectedLayout
+        from tmap.graph import tree_from_knn_graph
+        from tmap.layout import layout_from_knn_graph
         from tmap.visualization.tmapviz import TmapViz
 
-        # Stage 1: Use pre-generated similar signatures
-        assert similar_signatures.shape[0] == 100
-
-        # Stage 2: Build k-NN
         lsh = LSHForest(d=128, l=32)
         lsh.batch_add(similar_signatures)
         lsh.index()
         knn = lsh.get_knn_graph(k=10, kc=20)
-        assert knn.indices.shape[0] == 100
 
-        # Stage 3: Build MST
-        # With clustered data, may have disconnected components
-        tree = MSTBuilder(bias_factor=0.1).build(knn)
+        tree = tree_from_knn_graph(knn)
         assert tree.n_nodes == 100
-        assert len(tree.edges) >= 90  # At least intra-cluster connections
+        assert len(tree.edges) >= 90
 
-        # Stage 4: Compute layout
-        layout = ForceDirectedLayout(seed=42, max_iterations=100)
-        coords = layout.compute(tree)
-        assert len(coords.x) == 100
+        x, y, s, t = layout_from_knn_graph(
+            knn,
+            config=_make_layout_config(seed=42, iterations=100),
+            create_mst=True,
+        )
+        assert len(x) == 100
 
-        # Stage 5: Visualize
         viz = TmapViz()
         viz.title = "End-to-End Test"
-        viz.set_points(coords.x, coords.y)
-
-        # Add multiple metadata columns
+        viz.set_points(x, y)
+        viz.set_edges(s, t)
         viz.add_label("index", [str(i) for i in range(100)])
         viz.add_color_layout("value", list(range(100)), categorical=False, color="plasma")
 
-        html = viz.render()
+        html = viz.to_html()
 
-        # Final validation
         assert len(html) > 5000
         assert "End-to-End Test" in html
 
     def test_full_pipeline_with_minhash(self, clustered_fingerprints):
         """Test full pipeline including MinHash encoding."""
         from tmap import LSHForest, MinHash
-        from tmap.graph.mst import MSTBuilder
-        from tmap.layout import ForceDirectedLayout
+        from tmap.graph import tree_from_knn_graph
+        from tmap.layout import layout_from_knn_graph
         from tmap.visualization.tmapviz import TmapViz
 
-        # Stage 1: MinHash encoding
         mh = MinHash(num_perm=128, seed=42)
         signatures = mh.batch_from_binary_array(clustered_fingerprints)
         assert signatures.shape == (20, 128)
 
-        # Stage 2: Build k-NN (with high kc for better recall on small dataset)
         lsh = LSHForest(d=128, l=16)
         lsh.batch_add(signatures)
         lsh.index()
         knn = lsh.get_knn_graph(k=10, kc=50)
 
-        # Verify we found some valid neighbors
         valid_neighbors = np.sum(knn.indices >= 0)
         assert valid_neighbors > 0, "No valid neighbors found in k-NN"
 
-        # Stage 3: Build MST
-        tree = MSTBuilder(bias_factor=0.1).build(knn)
+        tree = tree_from_knn_graph(knn)
         assert tree.n_nodes == 20
 
-        # Stage 4: Compute layout
-        layout = ForceDirectedLayout(seed=42, max_iterations=50)
-        coords = layout.compute(tree)
-        assert len(coords.x) == 20
+        x, y, _, _ = layout_from_knn_graph(
+            knn,
+            config=_make_layout_config(seed=42, iterations=50),
+            create_mst=True,
+        )
+        assert len(x) == 20
 
-        # Stage 5: Visualize
         viz = TmapViz()
-        viz.set_points(coords.x, coords.y)
-        html = viz.render()
+        viz.set_points(x, y)
+        html = viz.to_html()
         assert "<html" in html
 
     def test_pipeline_deterministic(self):
         """Verify pipeline produces identical results with same signatures."""
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
-        from tmap.layout import ForceDirectedLayout
+        from tmap.layout import layout_from_knn_graph
 
-        def create_similar_sigs(seed):
-            """Create signatures with 95% similarity within clusters."""
+        def create_similar_sigs(seed: int) -> np.ndarray:
             rng = np.random.default_rng(seed)
             d = 64
-            sigs = np.zeros((20, d), dtype=np.uint64)
+            signatures = np.zeros((20, d), dtype=np.uint64)
             for cluster_id in range(4):
                 template = rng.integers(0, 2**63, size=d, dtype=np.uint64)
                 for i in range(5):
@@ -443,10 +424,10 @@ class TestFullPipeline:
                     sig[modify_mask] = rng.integers(
                         0, 2**63, size=np.sum(modify_mask), dtype=np.uint64
                     )
-                    sigs[idx] = sig
-            return sigs
+                    signatures[idx] = sig
+            return signatures
 
-        def run_pipeline(seed):
+        def run_pipeline(seed: int) -> tuple[np.ndarray, np.ndarray]:
             signatures = create_similar_sigs(seed)
 
             lsh = LSHForest(d=64, l=16)
@@ -454,12 +435,12 @@ class TestFullPipeline:
             lsh.index()
             knn = lsh.get_knn_graph(k=10, kc=20)
 
-            tree = MSTBuilder().build(knn)
-
-            layout = ForceDirectedLayout(seed=seed, max_iterations=50)
-            coords = layout.compute(tree)
-
-            return coords.x, coords.y
+            x, y, _, _ = layout_from_knn_graph(
+                knn,
+                config=_make_layout_config(seed=seed, iterations=50),
+                create_mst=True,
+            )
+            return x, y
 
         x1, y1 = run_pipeline(seed=999)
         x2, y2 = run_pipeline(seed=999)
@@ -470,34 +451,22 @@ class TestFullPipeline:
     def test_pipeline_with_layout_config(self, small_similar_signatures):
         """Test pipeline with custom layout configuration."""
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
-        from tmap.layout import LayoutConfig, layout_from_edge_list
+        from tmap.graph import tree_from_knn_graph
+        from tmap.layout import layout_from_knn_graph
 
         lsh = LSHForest(d=64, l=16)
         lsh.batch_add(small_similar_signatures)
         lsh.index()
         knn = lsh.get_knn_graph(k=5, kc=20)
 
-        tree = MSTBuilder().build(knn)
-
-        # Convert tree to edge list format
-        edges = [
-            (int(tree.edges[i, 0]), int(tree.edges[i, 1]), float(tree.weights[i]))
-            for i in range(len(tree.edges))
-        ]
-
-        # Use layout_from_edge_list with custom config
-        config = LayoutConfig()
-        config.fme_iterations = 50
-        config.deterministic = True
-        config.seed = 42
-
-        x, y, s, t = layout_from_edge_list(tree.n_nodes, edges, config, create_mst=False)
+        config = _make_layout_config(seed=42, iterations=50)
+        tree = tree_from_knn_graph(knn, config=config)
+        x, y, s, t = layout_from_knn_graph(knn, config=config, create_mst=True)
 
         assert len(x) == 10
         assert len(y) == 10
-        # With 2 clusters of 5, may have 8 edges (2 * 4) if clusters disconnected
-        assert len(s) >= 8  # At least intra-cluster edges
+        assert len(s) == len(t) == len(tree.edges)
+        assert len(s) >= 8
 
 
 # =============================================================================
@@ -509,52 +478,51 @@ class TestEdgeCases:
     """Test edge cases and boundary conditions."""
 
     def test_minimal_dataset_2_points(self):
-        """Test with minimum viable dataset (2 points)."""
+        """Test with minimum viable dataset."""
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
-        from tmap.layout import ForceDirectedLayout
+        from tmap.graph import tree_from_knn_graph
+        from tmap.layout import layout_from_knn_graph
 
-        # Create 2 nearly identical signatures (95% same)
         rng = np.random.default_rng(42)
         d = 32
         template = rng.integers(0, 2**63, size=d, dtype=np.uint64)
         sig1 = template.copy()
         sig2 = template.copy()
-        # Modify just 1-2 values for sig2
         sig2[0] = rng.integers(0, 2**63, dtype=np.uint64)
 
         signatures = np.stack([sig1, sig2])
 
-        lsh = LSHForest(d=32, l=16)  # More bands for better recall
+        lsh = LSHForest(d=32, l=16)
         lsh.batch_add(signatures)
         lsh.index()
         knn = lsh.get_knn_graph(k=1, kc=10)
 
-        tree = MSTBuilder().build(knn)
+        tree = tree_from_knn_graph(knn)
         assert tree.n_nodes == 2
         assert len(tree.edges) == 1
 
-        layout = ForceDirectedLayout(seed=42, max_iterations=10)
-        coords = layout.compute(tree)
-
-        assert len(coords.x) == 2
-        assert len(coords.y) == 2
+        x, y, _, _ = layout_from_knn_graph(
+            knn,
+            config=_make_layout_config(seed=42, iterations=10),
+            create_mst=True,
+        )
+        assert len(x) == 2
+        assert len(y) == 2
 
     def test_high_k_value(self, small_similar_signatures):
-        """Test with k approaching n (should still work)."""
+        """Test with k approaching n."""
         from tmap import LSHForest
-        from tmap.graph.mst import MSTBuilder
-        from tmap.layout import ForceDirectedLayout
+        from tmap.layout import layout_from_knn_graph
 
         lsh = LSHForest(d=64, l=16)
         lsh.batch_add(small_similar_signatures)
         lsh.index()
-
-        # k=9 is max for 10 points (can't include self)
         knn = lsh.get_knn_graph(k=9, kc=20)
 
-        tree = MSTBuilder().build(knn)
-        layout = ForceDirectedLayout(seed=42, max_iterations=50)
-        coords = layout.compute(tree)
+        x, y, _, _ = layout_from_knn_graph(
+            knn,
+            config=_make_layout_config(seed=42, iterations=50),
+            create_mst=True,
+        )
 
-        assert len(coords.x) == 10
+        assert len(x) == 10
