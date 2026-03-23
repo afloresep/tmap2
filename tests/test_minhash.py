@@ -9,10 +9,14 @@ Tests verify:
 - API compatibility (from_* methods)
 """
 
+import builtins
+import sys
+
 import numpy as np
 import pytest
 from datasketch.weighted_minhash import WeightedMinHashGenerator
 
+import tmap.index.encoders.minhash as minhash_module
 from tmap.index.encoders.minhash import MinHash, WeightedMinHash
 
 # =============================================================================
@@ -262,6 +266,56 @@ class TestMinHashFromMethods:
         sig2 = mh.encode([set(strings)])[0]
 
         np.testing.assert_array_equal(sig1, sig2)
+
+
+class TestMinHashOptionalDependencies:
+    """Test that optional dependencies are only loaded on relevant paths."""
+
+    def test_binary_and_integer_set_paths_skip_optional_deps(self, monkeypatch):
+        def _unexpected() -> None:
+            raise AssertionError("Optional dependency loader should not be called")
+
+        monkeypatch.setattr(minhash_module, "_get_xxhash", _unexpected)
+        monkeypatch.setattr(minhash_module, "_get_weighted_minhash_generator", _unexpected)
+
+        mh = MinHash(num_perm=16, seed=42)
+
+        binary = np.array([[1, 0, 1], [0, 1, 1]], dtype=np.uint8)
+        sigs_binary = mh.encode(binary)
+        assert sigs_binary.shape == (2, 16)
+
+        sigs_sets = mh.encode([{1, 2, 3}, {2, 3, 4}])  # type: ignore[arg-type]
+        assert sigs_sets.shape == (2, 16)
+
+    def test_string_path_missing_xxhash_raises_clear_error(self, monkeypatch):
+        real_import = builtins.__import__
+
+        def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "xxhash":
+                raise ModuleNotFoundError("No module named 'xxhash'")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.delitem(sys.modules, "xxhash", raising=False)
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+        mh = MinHash(num_perm=16, seed=42)
+        with pytest.raises(ModuleNotFoundError, match="optional dependency 'xxhash'"):
+            mh.from_string_array(["hello", "world"])
+
+    def test_weighted_path_missing_datasketch_raises_clear_error(self, monkeypatch):
+        real_import = builtins.__import__
+
+        def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "datasketch.weighted_minhash":
+                raise ModuleNotFoundError("No module named 'datasketch'")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.delitem(sys.modules, "datasketch.weighted_minhash", raising=False)
+        monkeypatch.delitem(sys.modules, "datasketch", raising=False)
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+        with pytest.raises(ModuleNotFoundError, match="optional dependency 'datasketch'"):
+            WeightedMinHash(dim=4, num_perm=16, seed=42)
 
 
 # =============================================================================

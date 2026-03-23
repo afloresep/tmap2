@@ -85,8 +85,8 @@ What type of data do you have?
 | `from_binary_array()` | 1D array (bits,) | Numba | ⚡⚡⚡ | Single fingerprint |
 | `batch_from_sparse_binary_array()` | List of index lists | Numba | ⚡⚡⚡ | Sparse data (< 30% fill rate) |
 | `from_sparse_binary_array()` | List of indices | Numba | ⚡⚡⚡ | Single sparse fingerprint |
-| `batch_from_string_array()` | List of string lists | datasketch | ⚡ | Text data with SHA1 hashing |
-| `from_string_array()` | List of strings | datasketch | ⚡ | Single text document |
+| `batch_from_string_array()` | List of string lists | Numba + xxhash | ⚡⚡ | Text data with xxhash64 token hashing |
+| `from_string_array()` | List of strings | Numba + xxhash | ⚡⚡ | Single text document |
 | `encode()` | Auto-detect | Auto | Varies | General purpose, flexible |
 
 ---
@@ -200,7 +200,7 @@ signatures = mh.batch_from_string_array(documents)
 - Chemical SMILES treated as character n-grams
 - Any string-based set data
 
-**Important:** String signatures use SHA1 hashing (via datasketch) for compatibility. This is different from the binary hash function, so **binary and string signatures are NOT comparable**.
+**Important:** String signatures use `xxhash64` token hashing before the Numba MinHash path. This is different from the binary hash function, so **binary and string signatures are NOT comparable**.
 
 ---
 
@@ -231,8 +231,8 @@ sigs = mh.encode(data)
 **Behavior:**
 
 - NumPy array → Uses Numba (fast)
-- List of sets → Uses datasketch
-- List of lists → Converts to sets, uses datasketch
+- List of integer sets/lists → Uses the sparse Numba path
+- List of string sets/lists → Uses `xxhash64` token hashing + Numba
 
 ---
 

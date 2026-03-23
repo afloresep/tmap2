@@ -16,12 +16,10 @@ API Compatibility:
 import os
 from collections.abc import Collection, Sequence
 from concurrent.futures import ProcessPoolExecutor
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
-from datasketch.weighted_minhash import WeightedMinHashGenerator as _WeightedMinHashGenerator
 from numpy.typing import NDArray
-import xxhash
 
 from ._minhash_numba import (
     binary_to_sparse,
@@ -36,12 +34,37 @@ __all__ = [
 ]
 
 
+def _get_weighted_minhash_generator() -> Any:
+    """Load datasketch's weighted MinHash generator on demand."""
+    try:
+        from datasketch.weighted_minhash import WeightedMinHashGenerator
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "WeightedMinHash requires optional dependency 'datasketch'. "
+            "Install it with `pip install datasketch`."
+        ) from exc
+    return WeightedMinHashGenerator
+
+
+def _get_xxhash() -> Any:
+    """Load xxhash only when string token hashing is requested."""
+    try:
+        import xxhash
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "String MinHash encoding requires optional dependency 'xxhash'. "
+            "Install it with `pip install xxhash`."
+        ) from exc
+    return xxhash
+
+
 def _encode_weighted_chunk(
     args: tuple[NDArray[np.float32], int, int, int],
 ) -> NDArray[np.uint64]:
     """Encode a chunk of weighted vectors (creates its own generator)."""
     data, dim, num_perm, seed = args
-    generator = _WeightedMinHashGenerator(dim=dim, sample_size=num_perm, seed=seed)
+    generator_cls = _get_weighted_minhash_generator()
+    generator = generator_cls(dim=dim, sample_size=num_perm, seed=seed)
     n_samples = data.shape[0]
     signatures = np.zeros((n_samples, num_perm, 2), dtype=np.uint64)
     for i in range(n_samples):
@@ -269,6 +292,7 @@ class MinHash:
 
     def _encode_strings(self, sets: list[set[str]]) -> NDArray[np.uint64]:
         """Encode batches of string tokens through the sparse MinHash path."""
+        xxhash = _get_xxhash()
         cache: dict[str, int] = {}
         #CSR
         indices_flat: list[int] = []
@@ -435,7 +459,8 @@ class WeightedMinHash:
         self._dim = dim
 
         # Generator must be created with known dimension
-        self._generator = _WeightedMinHashGenerator(dim=dim, sample_size=num_perm, seed=seed)
+        generator_cls = _get_weighted_minhash_generator()
+        self._generator = generator_cls(dim=dim, sample_size=num_perm, seed=seed)
 
     def encode(self, data: NDArray[np.float32]) -> NDArray[np.uint64]:
         """
