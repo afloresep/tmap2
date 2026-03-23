@@ -288,7 +288,6 @@ Comprehensive guides are available in the [`docs/`](docs/) directory:
 | [Graph Guide](docs/graph_guide.md) | MST construction, tree traversal, bias factor tuning |
 | [Layout Guide](docs/layout_guide.md) | OGDF layout configuration, parameter tuning, determinism |
 | [Visualization Guide](docs/visualization_guide.md) | Creating interactive visualizations with TmapViz |
-| [Roadmap](docs/ROADMAP.md) | Shipped features, remaining work, and product direction |
 | [API Reference](docs/api_reference.md) | Complete API documentation |
 
 ## 🧪 Development
