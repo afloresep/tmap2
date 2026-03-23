@@ -1,102 +1,73 @@
 # TMAP Documentation
 
-Welcome to TMAP - Tree-based visualization for high-dimensional data.
+TMAP builds a tree-shaped 2D map from high-dimensional data.
 
-## Getting Started
+Most users only need one pattern:
 
-TMAP creates tree visualizations from high-dimensional data (like molecular fingerprints). Similar items cluster together, revealing the structure in your data.
+1. Prepare data.
+2. Call `TMAP(...).fit(X)`.
+3. Explore the result in a notebook, save it as HTML, or serve it locally.
+
+## Start Here
+
+- [Molecule Tutorial](molecule_tutorial.md)
+  Load `cluster_65053.csv`, compute fingerprints and molecular properties, fit a TMAP, and explore it with `TmapViz`.
+- [Visualization Guide](visualization_guide.md)
+  Learn when to use notebook widgets, HTML export, and `serve()`.
+- [API Reference](api_reference.md)
+  Quick reference for `TMAP`, `TmapViz`, chemistry helpers, and layout functions.
+
+## Choose Your API
+
+### Estimator API
+
+Use `TMAP(...).fit(X)` when you want the simplest path.
+
+### Lower-level pipeline
+
+Use `MinHash`, `LSHForest`, `layout_from_lsh_forest`, and related functions when you want direct control over hashing, indexing, or graph construction.
+
+## Quick Example
 
 ```python
-from tmap import MinHash, LSHForest
-from tmap.layout import layout_from_lsh_forest, LayoutConfig
+import pandas as pd
+from tmap import TMAP
+from tmap.utils import fingerprints_from_smiles
 
-# 1. Encode your data
-mh = MinHash(num_perm=128, seed=42)
-signatures = mh.batch_from_binary_array(your_fingerprints)
+df = pd.read_csv("../examples/cluster_65053.csv", nrows=3000)
+smiles = df["smiles"].tolist()
 
-# 2. Build index
-lsh = LSHForest(d=128, l=64)
-lsh.batch_add(signatures)
-lsh.index()
+fps = fingerprints_from_smiles(smiles, fp_type="morgan", radius=2, n_bits=2048)
+model = TMAP(metric="jaccard", n_neighbors=20, seed=42).fit(fps)
 
-# 3. Create layout
-cfg = LayoutConfig()
-cfg.k = 20
-cfg.kc = 50
-x, y, s, t = layout_from_lsh_forest(lsh, cfg)
-
-# x, y are coordinates; s, t are tree edges
+viz = model.to_tmapviz()
+viz.title = "Cluster 65053"
+viz.add_smiles(smiles)
+viz.write_html("cluster_65053.html")
 ```
 
-## Documentation
+## Supported Input Paths
 
-| Document | Description |
-|----------|-------------|
-| [MinHash Guide](minhash_guide.md) | **Start here!** Understanding MinHash encoding and choosing the right method for your data. |
-| [LSHForest Guide](lshforest_guide.md) | Building the LSH index, query methods, and k-NN graph construction. |
-| [Graph Guide](graph_guide.md) | MST extraction from k-NN graphs and Tree traversal. |
-| [Layout Guide](layout_guide.md) | Visual, conceptual explanation of how TMAP layout works and parameter tuning. |
-| [Visualization Guide](visualization_guide.md) | Creating interactive HTML visualizations with TmapViz. |
-| [API Reference](api_reference.md) | Quick reference for functions, classes, and parameters. |
+| Input | Metric | Good for |
+|-------|--------|----------|
+| Binary matrix | `jaccard` | Molecular fingerprints and other 0/1 features |
+| Dense float matrix | `cosine` | Embeddings where direction matters |
+| Dense float matrix | `euclidean` | Embeddings where magnitude matters |
+| Distance matrix | `precomputed` | Distances you already computed elsewhere |
 
-## Key Concepts
+## Choose The Right Output
 
-### The Pipeline
+| Goal | Method |
+|------|--------|
+| Quick notebook exploration | `viz.to_widget(...)` or `model.plot(...)` |
+| Share one file | `viz.write_html(...)` or `model.to_html(...)` |
+| Browse a large map locally | `viz.serve(...)` or `model.serve(...)` |
 
-```
-Your Data -> MinHash -> LSHForest -> k-NN Graph -> MST -> Layout -> Visualization
-```
+## Advanced Guides
 
-1. **MinHash**: Compresses data into compact signatures preserving similarity
-2. **LSHForest**: Builds a searchable index for fast neighbor queries
-3. **k-NN Graph**: Connects each point to its k nearest neighbors
-4. **MST**: Extracts essential tree structure (minimum spanning tree)
-5. **Layout**: Arranges the MST in 2D with OGDF's multilevel layout
+- [MinHash Guide](minhash_guide.md)
+- [LSHForest Guide](lshforest_guide.md)
+- [Graph Guide](graph_guide.md)
+- [Layout Guide](layout_guide.md)
 
-### Which Function to Use?
-
-| Scenario | Function | Why |
-|----------|----------|-----|
-| Most cases | `layout_from_lsh_forest()` | Best connectivity, matches original TMAP |
-| Custom k-NN | `layout_from_knn_graph()` | When you want to inspect/modify k-NN first |
-| Custom edges | `layout_from_edge_list()` | For non-LSH graphs |
-| Tree analysis from custom k-NN | `tree_from_knn_graph()` | When you need a `Tree` from FAISS, Annoy, or another k-NN source |
-
-### Common Parameters
-
-| Parameter | What it does | Typical values |
-|-----------|--------------|----------------|
-| `k` | Neighbors per point | 10-50 |
-| `kc` | Search quality | 20-100 |
-| `node_size` | Spread of tree | 1/100 to 1/10 |
-| `fme_iterations` | Smoothness | 500-2000 |
-
-## Examples
-
-See `examples/smiles_tmap.py` for a complete molecular visualization example.
-
-## Troubleshooting
-
-### Disconnected points (grid pattern)
-
-Increase connectivity:
-```python
-cfg.k = 30    # More neighbors
-cfg.kc = 100  # Better quality neighbors
-```
-
-### Layout not reproducible
-
-Enable deterministic mode:
-```python
-cfg.deterministic = True
-cfg.seed = 42
-```
-
-### Layout too slow
-
-Reduce iterations:
-```python
-cfg.fme_iterations = 500
-cfg.mmm_repeats = 1
-```
+The files in `docs/` that are not linked here are planning notes or historical material and may not track the current public API line by line.

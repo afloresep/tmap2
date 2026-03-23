@@ -1,454 +1,150 @@
-# Visualization Guide: Creating Interactive TMAP Visualizations
+# Visualization Guide
 
-This guide explains how to create interactive HTML visualizations from your TMAP layouts using the `TmapViz` class.
+`TmapViz` is the public visualization object in TMAP.
 
----
+The most useful mental model is simple:
 
-## Overview
+- `to_widget(...)` for notebooks
+- `write_html(...)` for one shareable file
+- `serve(...)` for larger local maps
 
-The visualization module renders TMAP layouts as self-contained, interactive HTML files:
+This guide uses the molecule example from `examples/cluster_65053.csv`.
 
-- **WebGL rendering** via regl-scatterplot (handles millions of points)
-- **Self-contained** - no server required, just open the HTML file
-- **Interactive** - pan, zoom, lasso selection, tooltips
-- **Color mapping** - continuous (heatmaps) and categorical (distinct groups)
-- **Binary encoding** - gzip-compressed typed arrays for fast loading
-- **Large dataset support** - server mode for 1M+ points
-- **Filtering and search** - declarative column-level filtering and text search
-- **Domain extensions** - SMILES rendering, image thumbnails, protein 3D viewer
-
----
-
-## Quick Start
+## Build A Base Visualization
 
 ```python
-from tmap.visualization import TmapViz
+import pandas as pd
+from tmap import TMAP
+from tmap.utils import fingerprints_from_smiles, molecular_properties, murcko_scaffolds
 
-# Create visualizer
-viz = TmapViz()
-viz.title = "My TMAP"
+df = pd.read_csv("../examples/cluster_65053.csv", nrows=3000)
+smiles = df["smiles"].tolist()
 
-# Set coordinates (from layout)
-viz.set_points(x, y)
+fps = fingerprints_from_smiles(smiles, fp_type="morgan", radius=2, n_bits=2048)
+props = molecular_properties(smiles, properties=["mw", "logp", "n_rings", "qed"])
+scaffolds = murcko_scaffolds(smiles)
 
-# Add color column (continuous)
-viz.add_color_layout("activity", activity_values, categorical=False, color="viridis")
+model = TMAP(metric="jaccard", n_neighbors=20, seed=42).fit(fps)
 
-# Add labels for tooltips
-viz.add_label("name", compound_names)
-
-# Save to HTML
-viz.write_html("./output")  # Creates "My TMAP.html"
+viz = model.to_tmapviz()
+viz.title = "Cluster 65053"
+viz.add_smiles(smiles)
+viz.add_color_layout("MW", props["mw"].tolist(), color="viridis")
+viz.add_color_layout("LogP", props["logp"].tolist(), color="plasma")
+viz.add_color_layout("Ring Count", props["n_rings"].tolist(), categorical=True, color="tab10")
+viz.add_color_layout("QED", props["qed"].tolist(), color="magma")
+viz.add_label("Murcko Scaffold", scaffolds.tolist())
 ```
 
----
+## Notebook Workflow
 
-## The TmapViz Class
-
-### Creating a Visualizer
+Use notebook widgets when you want fast iteration in Jupyter.
 
 ```python
-from tmap.visualization import TmapViz
-
-viz = TmapViz()
-
-# Configure appearance
-viz.title = "Chemical Space"        # Filename and title
-viz.background_color = "#7A7A7A"    # Gray background (default)
-viz.point_color = "#4a9eff"         # Default point color (blue)
-viz.point_size = 4.0                # Point radius in pixels
-viz.opacity = 0.85                  # Point opacity [0-1]
+widget = viz.to_widget(width=1000, height=650, controls=True)
+widget.show()
 ```
 
-### Setting Coordinates
+Good for:
+
+- switching color layouts
+- filtering categories
+- inspecting tooltips
+- staying inside a notebook
+
+Current limitation:
+
+- notebook widgets do not draw tree edges yet
+
+## HTML Workflow
+
+Use HTML when you want one file you can send to someone else.
 
 ```python
-# From layout_from_lsh_forest output
-x, y, s, t = layout_from_lsh_forest(lsh, cfg)
-viz.set_points(x, y)
-
-# Or from layout_from_knn_graph if k-NN was computed elsewhere
-x, y, s, t = layout_from_knn_graph(knn, cfg)
-viz.set_points(x, y)
+path = viz.write_html("cluster_65053.html")
+print(path)
 ```
 
-**Note:** Coordinates are automatically normalized to [-1, 1] for WebGL rendering.
+Good for:
 
-### Tree Edges and Edge Style
+- sharing a result
+- opening the map in any browser
+- keeping edge rendering
 
-If your layout function returns edge arrays (`s`, `t`), pass them to `TmapViz` to
-render MST edges in the HTML visualization.
+## Local Server Workflow
+
+Use `serve()` when the map gets large and one HTML file becomes awkward.
 
 ```python
-# Typical layout output includes edges
-x, y, s, t = layout_from_lsh_forest(lsh, cfg)
-
-viz.set_points(x, y)
-viz.set_edges(s, t)            # Enable edge rendering from layout edges
-viz.show_edges = True          # Default True; set False to hide edges
-
-# Optional edge appearance tuning
-viz.set_edge_style(
-    color="#000000",           # Hex color (#rgb or #rrggbb)
-    width=2.0,                 # Line width in CSS pixels
-    opacity=0.5,               # Edge alpha in [0, 1]
-)
+viz.serve(port=8050)
 ```
 
-For large datasets, keep edge width moderate and use binary mode when possible.
+This writes static assets and starts a small local HTTP server at `http://127.0.0.1:8050`.
 
----
+Good for:
+
+- larger maps
+- faster reloads during local work
+- lazy loading of data files
 
 ## Adding Data Columns
 
-### Color Layouts (Continuous)
+### Numeric Properties
 
-For numeric values that should be shown as a gradient:
+```python
+viz.add_color_layout("MW", props["mw"].tolist(), color="viridis")
+viz.add_color_layout("LogP", props["logp"].tolist(), color="plasma")
+```
+
+Use this for values you want to color continuously.
+
+### Categorical Properties
 
 ```python
 viz.add_color_layout(
-    name="activity",           # Column name (shown in UI)
-    values=activity_values,    # List or array of numeric values
-    categorical=False,         # Continuous colormap
-    add_as_label=True,        # Also show in tooltip (default True)
-    color="viridis",          # Colormap name
+    "Ring Count",
+    props["n_rings"].tolist(),
+    categorical=True,
+    color="tab10",
 )
 ```
 
-**Available continuous colormaps:**
+Use this for discrete labels or small integer sets.
 
-- Sequential: `viridis`, `plasma`, `inferno`, `magma`, `cividis`
-- Diverging: `coolwarm`, `RdYlBu`, `RdBu`
-- Single-hue: `Blues`, `Reds`, `Greens`
-
-**NaN behavior:** If a continuous column contains `NaN`, TmapViz emits a warning and
-renders those points in black (`#000000`) by default.
-
-### Color Layouts (Categorical)
-
-For discrete groups or categories:
+### Tooltip Labels
 
 ```python
-viz.add_color_layout(
-    name="cluster",
-    values=cluster_labels,     # e.g., ["A", "A", "B", "C", ...]
-    categorical=True,          # Discrete colors
-    color="tab10",             # Categorical colormap
-)
+viz.add_label("Murcko Scaffold", scaffolds.tolist())
 ```
 
-**Available categorical colormaps:**
+Use labels for text that should appear in the tooltip but should not control colors.
 
-- `tab10` (10 colors, default)
-- `tab20` (20 colors)
-- `Set1`, `Set2`, `Set3`
-- `Dark2`, `Paired`
-
-**Warning:** The number of unique values must not exceed the colormap's color count.
-
-### Labels (Tooltip Only)
-
-For text that appears in tooltips but doesn't affect coloring:
+### Molecular Structures
 
 ```python
-viz.add_label(
-    name="compound_name",
-    values=names,              # List of strings
-)
+viz.add_smiles(smiles)
 ```
 
-### SMILES (Molecular Structures)
+This enables SMILES structure rendering in tooltips.
 
-For molecular visualization with structure rendering in tooltips:
+## Common Patterns
+
+### Quick Notebook First, HTML Second
 
 ```python
-viz.add_smiles(
-    name="structure",
-    values=smiles_list,        # List of SMILES strings
-)
+widget = viz.to_widget(width=1000, height=650, controls=True)
+widget.show()
+
+viz.write_html("cluster_65053.html")
 ```
 
-The default HTML view renders SMILES structures in the tooltip automatically.
-
-**Note:** Only one SMILES column is supported per visualization.
-
----
-
-## Rendering and Saving
-
-### Quick Save
+### Save Model And Visualization
 
 ```python
-# Save to directory (uses viz.title as filename)
-output_path = viz.write_html("./output")
-print(f"Saved to: {output_path}")
+model.save("cluster_65053.pkl")
+viz.write_html("cluster_65053.html")
 ```
 
-### Manual Rendering
+### Start Small
 
-```python
-# Get HTML string (for custom handling)
-html = viz.to_html()
-
-# Write manually
-with open("custom_name.html", "w") as f:
-    f.write(html)
-```
-
-### Large Datasets
-
-All output uses binary encoding by default (gzip-compressed typed arrays,
-uint16 quantized coordinates). For very large datasets (1M+ points), use
-the server-based approach which loads columns lazily via HTTP fetch:
-
-```python
-# Local dev server (lazy column loading)
-viz.serve(port=8050)
-
-# Write static files for hosting (nginx, S3, etc.)
-viz.write_static("dist/my_tmap/")
-```
-
-**Binary encoding benefits (built-in for all outputs):**
-
-- 4x smaller file size (quantized coordinates)
-- Faster loading (gzip compression)
-- Non-blocking decoding (WebWorker)
-
----
-
-## Interactive Features
-
-The generated HTML includes these interactive features:
-
-| Feature | Control |
-|---------|---------|
-| **Pan** | Click and drag |
-| **Zoom** | Mouse wheel |
-| **Hover** | Shows tooltip with labels |
-| **Lasso selection** | Shift + drag |
-| **Color selector** | Dropdown in top-left |
-| **Reset view** | Double-click |
-
----
-
-## Complete Example
-
-```python
-import numpy as np
-from tmap import MinHash, LSHForest
-from tmap.layout import layout_from_lsh_forest, LayoutConfig
-from tmap.visualization import TmapViz
-
-# Sample data
-np.random.seed(42)
-n_samples = 1000
-fingerprints = (np.random.rand(n_samples, 2048) < 0.1).astype(np.uint8)
-activities = np.random.rand(n_samples) * 100
-clusters = np.random.choice(["Active", "Inactive", "Unknown"], n_samples)
-names = [f"Compound_{i}" for i in range(n_samples)]
-
-# 1. Encode and index
-mh = MinHash(num_perm=128, seed=42)
-sigs = mh.batch_from_binary_array(fingerprints)
-
-lsh = LSHForest(d=128, l=64)
-lsh.batch_add(sigs)
-lsh.index()
-
-# 2. Compute layout
-cfg = LayoutConfig()
-cfg.k = 20
-cfg.kc = 50
-cfg.deterministic = True
-cfg.seed = 42
-
-x, y, s, t = layout_from_lsh_forest(lsh, cfg)
-
-# 3. Create visualization
-viz = TmapViz()
-viz.title = "Chemical Space"
-viz.point_size = 3.0
-viz.opacity = 0.8
-
-# Set coordinates
-viz.set_points(x, y)
-viz.set_edges(s, t)
-viz.set_edge_style(color="#111111", width=1.5, opacity=0.35)
-
-# Add continuous coloring by activity
-viz.add_color_layout("Activity", activities, categorical=False, color="viridis")
-
-# Add categorical coloring by cluster
-viz.add_color_layout("Cluster", clusters, categorical=True, color="Set1")
-
-# Add labels
-viz.add_label("Name", names)
-
-# Save
-viz.write_html("./")
-```
-
----
-
-## Configuration Reference
-
-### TmapViz Properties
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `title` | str | "MyTMAP" | HTML title and filename |
-| `background_color` | str | "#7A7A7A" | Canvas background (hex) |
-| `point_color` | str | "#4a9eff" | Default point color (hex) |
-| `point_size` | float | 4.0 | Point radius in pixels |
-| `opacity` | float | 0.85 | Point opacity [0-1] |
-| `show_edges` | bool | True | Render edges when edge arrays are set |
-| `edge_color` | str | "#000000" | Edge color (hex) |
-| `edge_width` | float | 2.0 | Edge line width in pixels |
-| `edge_opacity` | float | 0.5 | Edge opacity [0-1] |
-
-### add_color_layout Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `name` | str | required | Column name |
-| `values` | list/array | required | Data values |
-| `categorical` | bool | False | True for discrete, False for continuous |
-| `add_as_label` | bool | True | Show in tooltip |
-| `color` | str | auto | Colormap name |
-
-### set_edges Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `s` | list/ndarray | required | Source point indices for edges |
-| `t` | list/ndarray | required | Target point indices for edges |
-
-### set_edge_style Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `color` | str | None | Edge color override (`#rgb` or `#rrggbb`) |
-| `width` | float | None | Edge width override (must be > 0) |
-| `opacity` | float | None | Edge opacity override in [0, 1] |
-
-### write_html Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | str/Path | required | File path (.html) or directory |
-
-### write_static Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `output_dir` | str/Path | required | Directory for data files + HTML shell |
-| `template_name` | str | `"base.html.j2"` | Template for the HTML shell |
-
-### serve Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `port` | int | 8050 | TCP port for local HTTP server |
-| `open_browser` | bool | True | Auto-open browser |
-
----
-
-## Performance Tips
-
-### For Large Datasets (100K-500K points)
-
-```python
-viz.point_size = 2.0       # Smaller points
-viz.opacity = 0.6          # More transparent
-```
-
-### For Very Large Datasets (1M+ points)
-
-```python
-# Serve locally (lazy column loading via HTTP fetch)
-viz.serve(port=8050)
-
-# Or write static files for hosting
-viz.write_static("dist/my_tmap/")
-```
-
-### For Publication Quality
-
-```python
-viz.background_color = "#FFFFFF"  # White background
-viz.point_size = 5.0              # Larger points
-viz.opacity = 0.9                 # Less transparent
-```
-
----
-
-## Troubleshooting
-
-### "Missing JS dependencies" Error
-
-This means the vendored JavaScript files aren't found. Reinstall the package:
-
-```bash
-pip install --force-reinstall tmap
-```
-
-### "Jinja2 is required" Error
-
-Install with visualization extras:
-
-```bash
-pip install tmap[viz]
-```
-
-### Points Not Visible
-
-1. Check that coordinates are valid (not NaN/Inf)
-2. Try increasing `point_size`
-3. Check `opacity` is > 0
-
-### Colormap Not Found
-
-Use `matplotlib.colormaps` to list available colormaps:
-
-```python
-import matplotlib
-print(list(matplotlib.colormaps))
-```
-
-### Too Many Categories for Colormap
-
-Categorical colormaps have limited colors. Either:
-
-1. Use a larger colormap (`tab20` instead of `tab10`)
-2. Aggregate categories
-3. Switch to continuous coloring
-
----
-
-## Templates
-
-All HTML output uses binary encoding by default (gzip-compressed typed arrays).
-`base.html.j2` handles the standard interactive visualization, including
-SMILES, image thumbnails, and protein cards when the corresponding metadata
-columns are present.
-
-| Template | Use Case |
-|----------|----------|
-| `base.html.j2` | Default visualization, including SMILES/images/proteins |
-| `afdb.html.j2` | AlphaFold DB cluster explorer (extends base template) |
-
-Use `template_name=` only when you explicitly want the AlphaFold DB shell:
-
-```python
-html = viz.to_html(template_name="afdb.html.j2")
-```
-
----
-
-## Related Documentation
-
-- [MinHash Guide](minhash_guide.md) - Data encoding
-- [LSHForest Guide](lshforest_guide.md) - Building the index
-- [Graph Guide](graph_guide.md) - MST construction
-- [Layout Guide](layout_guide.md) - Computing coordinates
+For tutorials, start with `nrows=1000` or `nrows=3000`. Once the workflow is working, use more rows.

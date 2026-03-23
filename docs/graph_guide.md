@@ -77,7 +77,7 @@ knn = KNNGraph.from_arrays(indices, distances)
 tree = tree_from_knn_graph(knn)
 ```
 
-That second path is the answer for FAISS, Annoy, or any external neighbor search:
+That second path is the answer for USearch, Annoy, or any external neighbor search:
 convert the arrays into `KNNGraph`, then extract the tree with `tree_from_knn_graph`.
 
 ---

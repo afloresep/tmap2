@@ -170,8 +170,7 @@ def _encode_images(split: str, size: int = 128) -> list[str]:
 def _build_tmap(embeddings: np.ndarray) -> TMAP:
     """Build a TMAP from cosine-distance on embeddings.
 
-    Uses a precomputed distance matrix to avoid the FAISS dependency
-    (and the PyTorch/FAISS dual-libomp crash on macOS).
+    Uses a precomputed distance matrix (simple for small datasets).
     ~3.7k points → ~54 MB matrix, trivially fits in memory.
     """
     # Cosine distance = 1 - cosine_similarity

@@ -4,7 +4,6 @@ Demonstrates the new cosine/euclidean metric support on a classic dataset.
 70,000 handwritten digits (784D pixel vectors) embedded as an explorable tree.
 
 Usage:
-    pip install faiss-cpu      # ANN backend
     python examples/mnist_cosine_tmap.py
 
 Output:
