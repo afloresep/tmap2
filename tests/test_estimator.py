@@ -5,11 +5,6 @@ from tmap import TMAP
 from tmap.index.types import KNNGraph
 from tmap.layout import OGDF_AVAILABLE
 
-try:
-    import faiss  # noqa: F401
-    FAISS_AVAILABLE = True
-except (ImportError, AttributeError):
-    FAISS_AVAILABLE = False
 
 
 def _clustered_binary_data(
@@ -100,23 +95,12 @@ def test_jaccard_rejects_non_binary_input() -> None:
         TMAP(metric="jaccard", n_neighbors=1).fit(data)
 
 
-def test_dense_metric_requires_faiss() -> None:
-    """Cosine/euclidean should either work (if faiss installed) or give ImportError."""
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_dense_metric_works() -> None:
+    """Cosine/euclidean should work (usearch is a core dependency)."""
     data = np.random.default_rng(9).random((8, 4), dtype=np.float32)
-
-    try:
-        import faiss  # noqa: F401
-
-        has_faiss = True
-    except (ImportError, AttributeError):
-        has_faiss = False
-
-    if has_faiss:
-        model = TMAP(metric="cosine", n_neighbors=3, seed=42).fit(data)
-        assert model.embedding_.shape == (8, 2)
-    else:
-        with pytest.raises(ImportError):
-            TMAP(metric="cosine", n_neighbors=3).fit(data)
+    model = TMAP(metric="cosine", n_neighbors=3, seed=42).fit(data)
+    assert model.embedding_.shape == (8, 2)
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
@@ -185,6 +169,67 @@ def test_path_before_fit_raises() -> None:
 
 
 # =============================================================================
+# transform() tests
+# =============================================================================
+
+
+def test_transform_before_fit_raises() -> None:
+    model = TMAP()
+    with pytest.raises(RuntimeError, match="fit"):
+        model.transform(np.zeros((3, 10), dtype=np.uint8))
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_transform_jaccard_non_mutating() -> None:
+    data = _clustered_binary_data(n_samples=40, n_features=128)
+    model = TMAP(n_neighbors=5, n_permutations=64, seed=42).fit(data)
+    original_embedding = model.embedding_.copy()
+    original_tree_nodes = model.tree_.n_nodes
+    original_graph_shape = model.graph_.indices.shape
+
+    new_data = _clustered_binary_data(n_samples=5, n_features=128, seed=99)
+    coords = model.transform(new_data)
+
+    assert coords.shape == (5, 2)
+    assert coords.dtype == np.float32
+    np.testing.assert_array_equal(model.embedding_, original_embedding)
+    assert model.tree_.n_nodes == original_tree_nodes
+    assert model.graph_.indices.shape == original_graph_shape
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_transform_precomputed_non_mutating() -> None:
+    points = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        dtype=np.float32,
+    )
+    dist_full = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=2)
+    model = TMAP(metric="precomputed", n_neighbors=2, seed=11).fit(dist_full)
+    original_embedding = model.embedding_.copy()
+    original_tree_nodes = model.tree_.n_nodes
+
+    new_pt = np.array([[0.5, 0.5]], dtype=np.float32)
+    new_dists = np.linalg.norm(new_pt[:, None, :] - points[None, :, :], axis=2).astype(np.float32)
+    coords = model.transform(new_dists)
+
+    assert coords.shape == (1, 2)
+    np.testing.assert_array_equal(model.embedding_, original_embedding)
+    assert model.tree_.n_nodes == original_tree_nodes
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_transform_after_set_fit_accepts_set_input() -> None:
+    model = TMAP(n_neighbors=2, metric="jaccard", n_permutations=64, seed=42)
+    model.fit([[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]])
+    original_embedding = model.embedding_.copy()
+
+    coords = model.transform([[0, 1, 2]])
+
+    assert coords.shape == (1, 2)
+    np.testing.assert_array_equal(model.embedding_, original_embedding)
+
+
+# =============================================================================
 # add_points() tests
 # =============================================================================
 
@@ -229,7 +274,6 @@ def test_add_points_existing_coords_unchanged() -> None:
     np.testing.assert_array_equal(model.embedding_[:40], original_coords)
 
 
-@pytest.mark.skipif(not FAISS_AVAILABLE, reason="faiss not available")
 def test_add_points_cosine_requires_store_index() -> None:
 
     data = np.random.default_rng(9).random((20, 8), dtype=np.float32)
@@ -241,7 +285,6 @@ def test_add_points_cosine_requires_store_index() -> None:
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
-@pytest.mark.skipif(not FAISS_AVAILABLE, reason="faiss not available")
 def test_add_points_cosine_with_store_index() -> None:
 
     data = np.random.default_rng(9).random((20, 8), dtype=np.float32)
@@ -253,6 +296,23 @@ def test_add_points_cosine_with_store_index() -> None:
     assert coords.shape == (3, 2)
     assert model.embedding_.shape == (23, 2)
     assert model.tree_.n_nodes == 23
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_add_points_dense_updates_index_across_batches() -> None:
+    base = np.full((20, 4), 10.0, dtype=np.float32)
+    batch1 = np.array([[0.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+    batch2 = np.array([[0.01, 0.01, 0.01, 0.01]], dtype=np.float32)
+
+    model = TMAP(metric="euclidean", n_neighbors=3, store_index=True, seed=42).fit(base)
+    model.add_points(batch1)
+
+    assert model.index_.n_nodes == 21
+
+    model.add_points(batch2)
+
+    assert model.index_.n_nodes == 22
+    assert model.graph_.indices[-1, 0] == 20
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")

@@ -264,7 +264,7 @@ def layout_from_knn_graph(
     Parameters
     ----------
     knn : KNNGraph
-        k-NN graph from LSHForest, FAISS, or another source.
+        k-NN graph from LSHForest, USearch, or another source.
     config : LayoutConfig, optional
         Layout configuration
     create_mst : bool, default True

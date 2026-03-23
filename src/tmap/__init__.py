@@ -77,7 +77,6 @@ _LAZY_IMPORTS: dict[str, str] = {
     "LSHForest": "tmap.index.lsh_forest",
     "MinHash": "tmap.index.encoders.minhash",
     "WeightedMinHash": "tmap.index.encoders.minhash",
-    "FaissIndex": "tmap.index.faiss_index",
     "AVAILABLE_PROPERTIES": "tmap.utils.chemistry",
     "AVAILABLE_REACTION_PROPERTIES": "tmap.utils.chemistry",
     "AVAILABLE_SEQUENCE_PROPERTIES": "tmap.utils.proteins",
@@ -108,10 +107,11 @@ def __getattr__(name: str) -> Any:
     try:
         module = import_module(module_path)
     except ModuleNotFoundError as exc:
-        if name in {"MinHash", "WeightedMinHash"} and exc.name == "datasketch":
+        if name in {"MinHash", "WeightedMinHash"} and exc.name in {"datasketch", "xxhash"}:
             raise ModuleNotFoundError(
-                f"Optional dependency 'datasketch' is required for `tmap.{name}`. "
-                "Install it with `pip install datasketch`."
+                f"Optional dependencies 'datasketch' and 'xxhash' are required "
+                f"for `tmap.{name}`. Install them with "
+                "`pip install datasketch xxhash`."
             ) from exc
         raise
 
