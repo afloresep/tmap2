@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import math
 import pickle
+import sys
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
 
 import numpy as np
 from numpy.typing import NDArray
