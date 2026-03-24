@@ -37,8 +37,14 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Project-specific
+# Data files
 *.index
 *.layout
 *.meta
 *.pkl
+data/
+examples/data/
+
+# Generated outputs
+*.html
+!src/tmap/visualization/templates/*.html.j2

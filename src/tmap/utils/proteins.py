@@ -30,9 +30,9 @@ import logging
 import re
 import urllib.parse
 import urllib.request
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -842,9 +842,9 @@ def fetch_uniprot(
     if n_failed:
         logger.warning("fetch_uniprot: %d/%d chunks failed", n_failed, n_chunks)
 
-    print(
-        f"  [UniProt] fetched {len(all_rows):,}/{len(valid_ids):,} entries ({n_failed} chunk failures)"
-    )
+    n_fetched = len(all_rows)
+    n_total = len(valid_ids)
+    print(f"  [UniProt] fetched {n_fetched:,}/{n_total:,} entries ({n_failed} chunk failures)")
 
     # Build accession → row lookup from TSV headers
     # UniProt TSV uses human-readable column names; map them back

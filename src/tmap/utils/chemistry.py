@@ -145,7 +145,7 @@ def _drfp_fp_batch(smiles_batch: list[str]) -> NDArray[np.uint8]:
 def _mol_props_batch(smiles_batch: list[str]) -> NDArray[np.float64]:
     """Process a batch, return (len(batch), n_props) array. Invalid rows are NaN."""
     from rdkit import Chem
-    from rdkit.Chem import Descriptors, QED, rdMolDescriptors
+    from rdkit.Chem import QED, Descriptors, rdMolDescriptors
 
     computers = {
         "mw": lambda mol: Descriptors.ExactMolWt(mol),

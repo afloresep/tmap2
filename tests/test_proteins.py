@@ -3,29 +3,28 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 from tmap.utils.proteins import (
     AVAILABLE_SEQUENCE_PROPERTIES,
-    sequence_properties,
-    fetch_uniprot,
+    DEFAULT_FIELDS,
+    _compute_pI,
+    _fetch_one_alphafold,
+    _is_valid_sequence,
+    _net_charge_at_ph,
     fetch_alphafold,
+    fetch_uniprot,
     parse_alignment,
     read_fasta,
     read_id_list,
     read_pdb,
     read_pdb_dir,
     read_protein_csv,
-    _is_valid_sequence,
-    _compute_pI,
-    _net_charge_at_ph,
-    _fetch_one_alphafold,
-    DEFAULT_FIELDS,
+    sequence_properties,
 )
-
 
 # ---------------------------------------------------------------------------
 # Known sequences for validation

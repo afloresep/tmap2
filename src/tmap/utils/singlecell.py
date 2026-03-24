@@ -9,7 +9,8 @@ Requires ``anndata`` (install via ``pip install tmap[singlecell]``).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray

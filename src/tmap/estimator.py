@@ -4,7 +4,7 @@ import math
 import pickle
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self, Tuple
+from typing import TYPE_CHECKING, Any, Self
 
 import numpy as np
 from numpy.typing import NDArray
@@ -235,7 +235,7 @@ class TMAP:
         X: Any | None = None,
         *,
         knn_graph: KNNGraph | None = None,
-    ) -> Tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.int32], NDArray[np.int32]]:
+    ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.int32], NDArray[np.int32]]:
         """Fit the model and return coordinates and tree edges.
 
         Args:
@@ -312,7 +312,8 @@ class TMAP:
         """Return the fitted LSH forest for jaccard models."""
         if self._lsh_forest is None:
             raise RuntimeError(
-                "No fitted LSHForest available. This estimator was not fitted with metric='jaccard'."
+                "No fitted LSHForest available. "
+                "This estimator was not fitted with metric='jaccard'."
             )
         return self._lsh_forest
 
@@ -647,7 +648,7 @@ class TMAP:
             if self._index is None:
                 raise RuntimeError(
                     "No ANN index stored. Reconstruct with store_index=True "
-                    "to use transform() or add_points() with metric={!r}.".format(self.metric)
+                    f"to use transform() or add_points() with metric={self.metric!r}."
                 )
             X_dense = self._coerce_dense_matrix(X, min_samples=0)
             # Check that the new data has the same number of features as fit().
@@ -1046,7 +1047,8 @@ class TMAP:
         distances = np.asarray(X, dtype=np.float32)
         if distances.ndim != 2 or distances.shape[0] != distances.shape[1]:
             raise ValueError(
-                "metric='precomputed' expects a square distance matrix with shape (n_samples, n_samples)."
+                "metric='precomputed' expects a square distance matrix "
+                "with shape (n_samples, n_samples)."
             )
         if distances.shape[0] < 2:
             raise ValueError("Distance matrix must contain at least 2 samples.")
