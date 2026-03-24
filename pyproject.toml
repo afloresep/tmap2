@@ -6,7 +6,7 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "tmap"
+name = "tmap2"
 version = "0.1.0"
 description = "Tree-based visualization for high-dimensional data"
 readme = "README.md"
@@ -18,9 +18,11 @@ authors = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Visualization",
 ]
 dependencies = [
     "numpy>=1.26",
@@ -57,11 +59,21 @@ cmake.build-type = "Release"
 build.verbose = true
 wheel.install-dir = "tmap/layout"
 
+# Keep sdist lean: only source + build files, not dev/docs/tests
+sdist.exclude = [
+    "docs/",
+    "examples/",
+    "notebooks/",
+    "tests/",
+    ".github/",
+]
+
 [tool.scikit-build.cmake.define]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+exclude = ["extern/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]

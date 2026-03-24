@@ -9,8 +9,11 @@ Tree-based visualization for high-dimensional data. Organizes similar items into
 A modernized reimplementation of the [original TMAP](https://github.com/reymond-group/tmap) with an sklearn-style API, multiple distance metrics, and interactive visualization.
 
 ```text
-Your Data → [MinHash → LSHForest] (jaccard)    → k-NN Graph → MST → OGDF Tree Layout → Interactive Viz
-            [USearch]             (cosine/euclidean)
+Your Data
+   ├─→ MinHash → LSHForest        (Jaccard)
+   └─→ USearch                    (Cosine / Euclidean / other metrics)
+                ↓
+             k-NN Graph → MST → OGDF Tree Layout → Interactive Visualization
 ```
 
 ## Installation
