@@ -1143,9 +1143,9 @@ class TmapViz:
                     f"{n_points} points"
                 )
 
-        from tmap.visualization.jupyter import to_jscatter
-
         import pandas as pd
+
+        from tmap.visualization.jupyter import to_jscatter
 
         selected_layout = self._layout_keys[0] if self._layout_keys else None
 

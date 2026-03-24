@@ -12,11 +12,10 @@ Compatibility Notes:
 - For string data: uses xxhash for fast hashing (different from datasketch's SHA1) -> TODO: Have to rewrit the string data implementation. Not comparable with others and far slower. Maybe reuse Daniel stuff?
 """
 
-import numpy as np
-from numpy.typing import NDArray
-
 import numba
+import numpy as np
 from numba import prange
+from numpy.typing import NDArray
 
 # Constants matching
 MERSENNE_PRIME = np.uint64((1 << 61) - 1)

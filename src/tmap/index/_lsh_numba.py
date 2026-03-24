@@ -10,11 +10,10 @@ Key optimizations:
 3. Efficient top-k selection using partial sorting
 """
 
-import numpy as np
-from numpy.typing import NDArray
-
 import numba
+import numpy as np
 from numba import prange
+from numpy.typing import NDArray
 
 
 @numba.njit(cache=True)

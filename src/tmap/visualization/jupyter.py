@@ -21,7 +21,9 @@ def _check_jscatter() -> None:
         ) from None
 
     try:
-        from jscatter.jscatter import Scatter as _Scatter  # type: ignore[import-untyped]  # noqa: F401
+        from jscatter.jscatter import (
+            Scatter as _Scatter,  # type: ignore[import-untyped]  # noqa: F401
+        )
     except ImportError:
         raise ImportError(
             "Could not import jscatter widget bindings from jupyter-scatter.\n"
@@ -106,9 +108,8 @@ def to_jscatter(
 ) -> Any:
     """Create an interactive ``jscatter.Scatter`` widget from an embedding."""
     _check_jscatter()
-    from jscatter.jscatter import Scatter as _Scatter
-
     import pandas as pd
+    from jscatter.jscatter import Scatter as _Scatter
 
     coords = _validate_embedding(embedding)
     n = coords.shape[0]
