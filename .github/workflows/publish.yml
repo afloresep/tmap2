@@ -58,7 +58,7 @@ jobs:
 
           # Linux: install build tools inside the manylinux container
           CIBW_BEFORE_ALL_LINUX: >
-            yum install -y cmake3 gcc-c++ make &&
+            yum install -y cmake3 gcc-c++ make openblas-devel &&
             ln -sf /usr/bin/cmake3 /usr/bin/cmake || true
 
           # macOS: cmake is pre-installed on GitHub runners
