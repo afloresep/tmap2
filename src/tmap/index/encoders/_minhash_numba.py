@@ -9,7 +9,7 @@ Key optimizations:
 Compatibility Notes:
 - Permutation parameters (a, b) match datasketch exactly when using the same seed
 - For binary data: uses indices directly as hash input (faster, valid MinHash)
-- For string data: uses xxhash for fast hashing (different from datasketch's SHA1) -> TODO: Have to rewrit the string data implementation. Not comparable with others and far slower. Maybe reuse Daniel stuff?
+- For string data: uses xxhash for fast hashing (different from datasketch's SHA1)
 """
 
 import numba
@@ -62,7 +62,8 @@ def _minhash_single_sample(
     for p in range(num_perm):
         min_hash = MAX_HASH
         for idx in indices:
-            # Universal hash: (a * x + b) mod prime, then mask to 32 bits NOTE: mask to 32bits for compatibility but makes sense to keep 64bit as intermediary for num. stability (e.g.MERSENNE_PRIME)
+            # Universal hash: (a*x + b) mod prime, masked to 32 bits.
+            # 64-bit intermediary for numerical stability (MERSENNE_PRIME).
             h = np.uint64((a[p] * np.uint64(idx) + b[p]) % MERSENNE_PRIME) & MAX_HASH
             if h < min_hash:
                 min_hash = h

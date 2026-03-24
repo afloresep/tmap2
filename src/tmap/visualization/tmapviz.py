@@ -92,7 +92,8 @@ def _get_jinja_env() -> Environment:
     """Get or create a cached Jinja2 environment for templates."""
     if not _JINJA_AVAILABLE:
         raise ImportError(
-            "Jinja2 is required for template rendering. Install full dependencies with: pip install -e ."
+            "Jinja2 is required for template rendering. "
+            "Install full dependencies with: pip install -e ."
         )
     return Environment(
         loader=PackageLoader("tmap.visualization", "templates"),
@@ -992,7 +993,8 @@ class TmapViz:
                 raise ValueError("x_col and y_col must be different names.")
             if x_col in df.columns or y_col in df.columns:
                 raise ValueError(
-                    f"Coordinate columns '{x_col}'/'{y_col}' conflict with existing metadata columns."
+                    f"Coordinate columns '{x_col}'/'{y_col}' "
+                    "conflict with existing metadata columns."
                 )
             coords = self._points_array.astype(np.float32, copy=False)
             df[x_col] = coords[:, 0]
