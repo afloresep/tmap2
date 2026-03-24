@@ -11,7 +11,7 @@ version = "0.1.0"
 description = "Tree-based visualization for high-dimensional data"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "Alejandro Flores", email = "afloresep01@gmail.com" }
 ]
@@ -20,7 +20,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -36,7 +35,6 @@ dependencies = [
     "matplotlib>=3.7",
     "pandas>=2.2",
     "usearch>=2.16,<3",
-    "typing_extensions>=4.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -75,7 +73,7 @@ sdist.exclude = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 exclude = ["extern/", "*.ipynb"]
 
 [tool.ruff.lint]

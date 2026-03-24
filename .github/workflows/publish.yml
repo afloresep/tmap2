@@ -50,16 +50,18 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21
         env:
-          # Build for Python 3.10 - 3.13
-          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
+          # Build for Python 3.11 - 3.13
+          CIBW_BUILD: "cp311-* cp312-* cp313-*"
 
           # Skip 32-bit and musl (Alpine) builds
           CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux*"
 
-          # Linux: install build tools inside the manylinux container
+          # Use manylinux_2_28 (usearch only ships wheels for this platform)
+          CIBW_MANYLINUX_X86_64_IMAGE: "manylinux_2_28"
+
+          # Linux: install build tools inside the container
           CIBW_BEFORE_ALL_LINUX: >
-            yum install -y cmake3 gcc-c++ make openblas-devel &&
-            ln -sf /usr/bin/cmake3 /usr/bin/cmake || true
+            dnf install -y cmake gcc-c++ make openblas-devel || true
 
           # macOS: cmake is pre-installed on GitHub runners
           CIBW_BEFORE_ALL_MACOS: >
