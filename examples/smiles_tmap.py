@@ -1,229 +1,98 @@
-"""
-End-to-end TMAP visualization from SMILES strings.
+"""Low-level TMAP pipeline from SMILES strings.
 
-This script demonstrates the full pipeline:
-    SMILES -> Morgan Fingerprints -> MinHash -> LSHForest -> Layout -> Visualization
+Demonstrates each step of the pipeline explicitly:
+    SMILES → Morgan fingerprints → MinHash → LSHForest → OGDF layout → TmapViz
+
+For a simpler high-level approach, see molecules_tmap.py which uses the
+TMAP estimator to do all of this in a few lines.
 
 Requirements:
-    pip install rdkit tqdm
+    pip install rdkit
 
 Usage:
     python examples/smiles_tmap.py
-    # Or with custom SMILES list:
-    from examples.smiles_tmap import create_tmap_from_smiles
-    coords = create_tmap_from_smiles(my_smiles_list, "output.html")
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-from tqdm import tqdm
 
-# Check RDKit availability
-try:
-    from rdkit import Chem
-    from rdkit.Chem import Descriptors, rdFingerprintGenerator, rdMolDescriptors
-    RDKIT_AVAILABLE = True
-except ImportError:
-    RDKIT_AVAILABLE = False
-
-from tmap import LSHForest, MinHash
+from tmap import LSHForest, MinHash, fingerprints_from_smiles, molecular_properties
 from tmap.layout import LayoutConfig, ScalingType, layout_from_lsh_forest
 from tmap.visualization import TmapViz
 
-
-def smiles_to_fingerprints(
-    smiles_list: list[str],
-    radius: int = 2,
-    n_bits: int = 2048,
-) -> tuple[np.ndarray, list[int], list]:
-    """
-    Convert SMILES strings to Morgan fingerprints.
-
-    Args:
-        smiles_list: List of SMILES strings
-        radius: Morgan fingerprint radius (default 2 = ECFP4)
-        n_bits: Number of bits in fingerprint
-
-    Returns:
-        fingerprints: numpy array of shape (n_valid, n_bits)
-        valid_indices: indices of successfully parsed SMILES
-        mols: list of RDKit molecule objects
-    """
-    if not RDKIT_AVAILABLE:
-        raise ImportError("RDKit is required: pip install rdkit")
-
-    # Use the newer MorganGenerator API
-    morgan_gen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
-
-    fingerprints = []
-    valid_indices = []
-    mols = []
-
-    for i, smi in tqdm(enumerate(smiles_list),
-                       desc='Generating Fingerprints', total=len(smiles_list)):
-        mol = Chem.MolFromSmiles(smi)
-        if mol is not None:
-            fp = morgan_gen.GetFingerprintAsNumPy(mol)
-            fingerprints.append(fp.astype(np.uint8))
-            valid_indices.append(i)
-            mols.append(mol)
-
-    return np.array(fingerprints), valid_indices, mols
+DATA_PATH = Path(__file__).with_name("cluster_65053.csv")
 
 
-def compute_molecular_properties(mols: list) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute molecular properties for coloring."""
-    mw = [Descriptors.MolWt(mol) for mol in mols] # type: ignore
-    logp = [Descriptors.MolLogP(mol) for mol in mols] # type: ignore
-    n_rings = [rdMolDescriptors.CalcNumRings(mol) for mol in mols]
-    return np.array(mw), np.array(logp), np.array(n_rings)
+def main() -> None:
+    # 1. Load SMILES and compute fingerprints
+    df = pd.read_csv(DATA_PATH)
+    smiles = df["smiles"].tolist()
+    print(f"Loaded {len(smiles):,} molecules")
 
+    fps = fingerprints_from_smiles(smiles, fp_type="morgan", radius=2, n_bits=2048)
+    n = fps.shape[0]
+    print(f"  Valid fingerprints: {n} x {fps.shape[1]}")
 
-def create_tmap_from_smiles(
-    smiles: list[str],
-    output_path: str = "tmap_molecules.html",
-    title: str = "TMAP Visualization",
-    k: int = 20,
-    kc: int = 100,
-    num_perm: int = 128,
-    seed: int = 42,
-):
-    """
-    Create a TMAP visualization from SMILES strings.
+    # 2. MinHash encoding
+    #    Converts binary fingerprints into compact hash signatures for
+    #    fast approximate Jaccard similarity search.
+    num_perm = 128
+    mh = MinHash(num_perm=num_perm, seed=42)
+    signatures = mh.batch_from_binary_array(fps)
+    print(f"  MinHash signatures: {signatures.shape}")
 
-    Args:
-        smiles: List of SMILES strings
-        output_path: Path to save HTML file
-        title: Title for the visualization
-        k: Number of nearest neighbors for k-NN graph
-        kc: Search quality multiplier
-        num_perm: Number of MinHash permutations
-        seed: Random seed for reproducibility
-
-    Returns:
-        Tuple of (x, y) coordinates
-    """
-    print(f"Processing {len(smiles)} SMILES...")
-
-    # Step 1: Convert SMILES to fingerprints
-    print("Step 1: Computing Morgan fingerprints...")
-    fingerprints, valid_indices, mols = smiles_to_fingerprints(smiles)
-    n = len(valid_indices)
-    print(f"  Valid molecules: {n}/{len(smiles)}")
-
-    if n < 2:
-        raise ValueError("Need at least 2 valid molecules")
-
-    # Get valid SMILES
-    valid_smiles = [smiles[i] for i in valid_indices]
-
-    # Step 2: Compute molecular properties
-    print("Step 2: Computing molecular properties...")
-    mw, logp, n_rings = compute_molecular_properties(mols)
-
-    # Step 3: MinHash encoding
-    print("Step 3: Encoding with MinHash...")
-    mh = MinHash(num_perm=num_perm, seed=seed)
-    signatures = mh.batch_from_binary_array(fingerprints)
-    print(f"  Signature shape: {signatures.shape}")
-
-    # Step 4: Build LSH Forest
-    print("Step 4: Building LSH Forest...")
+    # 3. Build LSH Forest index
+    #    Locality-sensitive hashing index for fast approximate kNN queries.
+    #    d = number of permutations, l = number of hash tables.
     lsh = LSHForest(d=num_perm, l=64)
     lsh.batch_add(signatures)
     lsh.index()
+    print(f"  LSH Forest indexed ({lsh.size()} points)")
 
-    # Step 5: Compute layout
-    print("Step 5: Computing layout...")
-
+    # 4. Compute OGDF layout
+    #    layout_from_lsh_forest queries the kNN graph internally,
+    #    computes an MST, and runs the OGDF tree layout algorithm.
+    #    Returns (x, y, edge_sources, edge_targets).
     cfg = LayoutConfig()
-    cfg.k = k
-    cfg.kc = kc
-    cfg.node_size = 1/30
+    cfg.k = 20
+    cfg.kc = 50
+    cfg.node_size = 1 / 30
     cfg.mmm_repeats = 2
     cfg.sl_extra_scaling_steps = 10
     cfg.sl_scaling_type = ScalingType.RelativeToDrawing
     cfg.fme_iterations = 1000
     cfg.deterministic = True
-    cfg.seed = seed
+    cfg.seed = 42
 
     x, y, s, t = layout_from_lsh_forest(lsh, cfg)
+    print(f"  Layout: {len(x)} nodes, {len(s)} edges")
 
-    print(f"  Nodes: {len(x)}")
-    print(f"  Edges: {len(s)} (fully connected tree has {n-1} edges)")
+    # 5. Build visualization
+    #    TmapViz takes pre-computed coordinates and edges directly.
+    props = molecular_properties(smiles, properties=["mw", "logp", "n_rings"])
 
-    # Step 6: Create visualization
-    print("Step 6: Creating visualization...")
     viz = TmapViz()
-    viz.title = title
+    viz.title = "Molecular TMAP (low-level pipeline)"
     viz.background_color = "#FFFFFF"
-    viz.point_color = "#4a9eff"
-    viz.point_size = 4.0
-    viz.opacity = 0.9
-
-    # Set coordinates
     viz.set_points(x, y)
+    viz.set_edges(s, t)
 
-    # Add SMILES for structure rendering
-    viz.add_smiles(valid_smiles)
-
-    # Add molecular properties as color layouts
-    viz.add_color_layout("Molecular Weight", mw.tolist(), categorical=False, color="viridis")
-    viz.add_color_layout("LogP", logp.tolist(), categorical=False, color="plasma")
-    viz.add_color_layout("Number of Rings", n_rings.tolist(), categorical=False, color="coolwarm")
-
-    # Add index labels
-    viz.add_label("Index", [str(i) for i in range(n)])
-
-    # Save visualization
-    saved_path = viz.write_html(output_path)
-    print(f"\nSaved visualization to: {saved_path}")
-    return x, y
-
-
-
-# Get the directory where this script is located
-script_dir = Path(__file__).parent
-csv_path = script_dir / 'cluster_65053.csv'
-df = pd.read_csv(csv_path)
-EXAMPLE_SMILES = df.smiles.to_list()
-
-if __name__ == "__main__":
-    if not RDKIT_AVAILABLE:
-        print("RDKit is required for this example.")
-        print("Install with: pip install rdkit")
-        exit(1)
-
-    # Create more data by adding variations
-    smiles_list = EXAMPLE_SMILES.copy()
-
-    # Add some simple modifications to increase dataset size
-    for smi in EXAMPLE_SMILES[:15]:
-        mol = Chem.MolFromSmiles(smi)
-        if mol:
-            # Add methylated versions
-            smiles_list.append(smi.replace("c1", "Cc1", 1))
-            # Add hydroxylated versions
-            smiles_list.append(smi.replace("c1", "Oc1", 1))
-
-    # Filter valid SMILES
-    valid_smiles = [s for s in smiles_list if Chem.MolFromSmiles(s) is not None]
-    print(f"Working with {len(valid_smiles)} molecules")
-
-    # Create visualization
-    coords = create_tmap_from_smiles(
-        smiles=valid_smiles,
-        output_path="tmap_molecules.html",
-        title="Molecular TMAP Demo",
-        k=20,
-        num_perm=128,
-        seed=42,
+    viz.add_smiles(smiles)
+    viz.add_color_layout("MW", props["mw"].tolist(), color="viridis")
+    viz.add_color_layout("LogP", props["logp"].tolist(), color="plasma")
+    viz.add_color_layout(
+        "Ring Count",
+        props["n_rings"].tolist(),
+        categorical=True,
+        color="tab10",
     )
 
-    print("\nDone! Open the HTML file in a browser to view the interactive visualization.")
-    print("  - Pan: Click and drag")
-    print("  - Zoom: Scroll wheel")
-    print("  - Hover: See molecule structure and properties")
-    print("  - Use dropdown to change color scheme")
+    out = viz.write_html(str(DATA_PATH.with_suffix(".html")))
+    print(f"\nSaved: {out}")
+
+
+if __name__ == "__main__":
+    main()

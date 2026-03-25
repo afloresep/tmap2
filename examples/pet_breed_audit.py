@@ -168,25 +168,13 @@ def _encode_images(split: str, size: int = 128) -> list[str]:
 
 
 def _build_tmap(embeddings: np.ndarray) -> TMAP:
-    """Build a TMAP from cosine-distance on embeddings.
-
-    Uses a precomputed distance matrix (simple for small datasets).
-    ~3.7k points → ~54 MB matrix, trivially fits in memory.
-    """
-    # Cosine distance = 1 - cosine_similarity
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norms = np.maximum(norms, 1e-8)
-    normed = embeddings / norms
-    dist = 1.0 - normed @ normed.T
-    np.clip(dist, 0, 2, out=dist)  # numerical safety
-    np.fill_diagonal(dist, 0.0)
-
+    """Build a TMAP from cosine similarity on embeddings."""
     model = TMAP(
         n_neighbors=15,
-        metric="precomputed",
+        metric="cosine",
         layout_iterations=1000,
     )
-    model.fit(dist.astype(np.float32))
+    model.fit(embeddings.astype(np.float32))
     return model
 
 
@@ -259,7 +247,8 @@ def _analyze_tree(
     w = lines.append
 
     acc = (preds == true_labels).mean()
-    w(f"Oxford-IIIT Pets Classifier Audit  ({len(true_labels)} test images, {len(class_names)} breeds)")
+    w(f"Oxford-IIIT Pets Classifier Audit  "
+      f"({len(true_labels)} test images, {len(class_names)} breeds)")
     w(f"Overall accuracy: {acc:.1%}\n")
 
     # 1. Boundary edges
@@ -278,7 +267,8 @@ def _analyze_tree(
         if pair_counts[i] == 0:
             break
         r, c = upper[0][i], upper[1][i]
-        w(f"   {class_names[classes[r]]:>30s}  <->  {class_names[classes[c]]:<30s}  ({pair_counts[i]} edges)")
+        w(f"   {class_names[classes[r]]:>30s}  <->  "
+          f"{class_names[classes[c]]:<30s}  ({pair_counts[i]} edges)")
     w("")
 
     # 3. Confidence gradients
@@ -298,8 +288,10 @@ def _analyze_tree(
     paths = _find_best_failure_paths(tree, true_labels, preds, confidences, class_names)
     w(f"5. Top failure paths ({len(paths)} shown):")
     for p in paths:
-        w(f"   Node {p['from']} ({p['true_class']}, predicted {p['pred_class']}, conf={p['conf_start']:.2f})")
-        w(f"     -> Node {p['to']} (correct, conf={p['conf_end']:.2f})  path_len={p['path_length']}  min_conf={p['conf_min']:.2f}")
+        w(f"   Node {p['from']} ({p['true_class']}, "
+          f"predicted {p['pred_class']}, conf={p['conf_start']:.2f})")
+        w(f"     -> Node {p['to']} (correct, conf={p['conf_end']:.2f})  "
+          f"path_len={p['path_length']}  min_conf={p['conf_min']:.2f}")
     w("")
 
     # 6. Mislabel candidates
@@ -398,7 +390,9 @@ def main() -> None:
 
     # Visualization
     print("Building visualization...")
-    viz = _create_visualization(model, class_names, test_labels, preds, confidences, purity, image_uris)
+    viz = _create_visualization(
+        model, class_names, test_labels, preds, confidences, purity, image_uris,
+    )
     html_path = viz.write_html(OUTPUT_DIR / "pets_tmap")
     print(f"HTML saved to {html_path}")
 
