@@ -62,13 +62,11 @@ def quantize_coords(coords: NDArray[np.float64], bits: int = 16) -> NDArray[Any]
     Returns:
         Quantized coordinates as uint16 or uint32
     """
-    if bits == 16:
-        max_val = 65535
-        return ((coords.astype(np.float64) + 1.0) * (max_val / 2.0)).astype(np.uint16)
-    if bits == 32:
-        max_val = 4294967295
-        return ((coords.astype(np.float64) + 1.0) * (max_val / 2.0)).astype(np.uint32)
-    raise ValueError(f"bits must be 16 or 32, got {bits}")
+    if bits not in (16, 32):
+        raise ValueError(f"bits must be 16 or 32, got {bits}")
+    max_val = (1 << bits) - 1
+    dtype = np.uint16 if bits == 16 else np.uint32
+    return ((coords.astype(np.float64) + 1.0) * (max_val / 2.0)).astype(dtype)
 
 
 def dequantize_coords(quantized: NDArray[Any], bits: int = 16) -> NDArray[np.float32]:

@@ -456,8 +456,6 @@ class TmapViz:
         else:
             values = list(values)
 
-        # Default to continuous because it will give less issues and having to pass
-        # always the type can be annoying...
         # Validate continuous values are actually numeric
         if not categorical:
             for v in values:

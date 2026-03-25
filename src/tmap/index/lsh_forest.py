@@ -153,9 +153,17 @@ class LSHForest:
     def _compute_distance(self, sig_a: NDArray[np.uint64], sig_b: NDArray[np.uint64]) -> float:
         """Compute distance using appropriate method based on weighted flag."""
         if self._weighted:
-            return cast(float, weighted_jaccard_distance(sig_a, sig_b))
-        else:
-            return cast(float, jaccard_distance(sig_a, sig_b))
+            return float(weighted_jaccard_distance(sig_a, sig_b))
+        return float(jaccard_distance(sig_a, sig_b))
+
+    def _ensure_indexed(self) -> None:
+        """Raise if index() has not been called."""
+        if (
+            self._sorted_hashes_flat is None
+            or self._sorted_indices_flat is None
+            or self._band_offsets is None
+        ):
+            raise RuntimeError("Index structures not initialized. Call index() first.")
 
     # Add methods
 
@@ -285,12 +293,7 @@ class LSHForest:
         else:
             query_bands = compute_hash_bands(signature[np.newaxis, :], self._l, self._k)
 
-        if (
-            self._sorted_hashes_flat is None
-            or self._sorted_indices_flat is None
-            or self._band_offsets is None
-        ):
-            raise RuntimeError("Index structures not initialized")
+        self._ensure_indexed()
 
         # Query using Numba batch function (single query)
         candidates, counts = query_lsh_forest_batch(
@@ -463,7 +466,7 @@ class LSHForest:
         """
         Construct the k-nearest neighbor graph of all indexed signatures.
 
-        This is the primary output method becuase it produces input for OGDF layout
+        This is the primary output method because it produces input for OGDF layout
         and MST construction APIs.
 
         Args:
@@ -550,12 +553,7 @@ class LSHForest:
             raise ValueError("query_external_batch requires store=True")
         if self._signatures is None or self._n_indexed == 0:
             raise RuntimeError("Must add signatures and call index() first")
-        if (
-            self._sorted_hashes_flat is None
-            or self._sorted_indices_flat is None
-            or self._band_offsets is None
-        ):
-            raise RuntimeError("Index structures not initialized")
+        self._ensure_indexed()
 
         max_candidates = k * kc
 

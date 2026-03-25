@@ -790,7 +790,8 @@ class TMAP:
 
         centroid = existing.mean(axis=0)
         coord_range = existing.max(axis=0) - existing.min(axis=0)
-        jitter_scale = coord_range * 0.001  # tiny jitter to avoid exact overlaps
+        # Tiny jitter (0.1% of range) prevents exact overlaps in the scatter plot
+        jitter_scale = coord_range * 0.001
 
         # We need a sense of how far apart connected nodes are in the
         # embedding so offset distances look proportional.
@@ -821,15 +822,17 @@ class TMAP:
                     # Point the offset toward the centroid of the next
                     # few neighbors so the new point sits on the correct
                     # "side" of its parent branch.
+                    # Use up to 4 secondary neighbors to estimate direction
                     nb_coords = existing[idxs[1 : min(5, len(idxs))]]
                     direction = nb_coords.mean(axis=0) - parent_coord
                     norm = np.linalg.norm(direction)
-                    if norm > 1e-8:
+                    if norm > 1e-8:  # near-zero guard
                         direction /= norm
                     else:
-                        # Neighbors are on top of each other then pick a random direction
+                        # Neighbors coincide — pick a random direction
                         direction = rng.normal(0, 1, size=2).astype(np.float32)
                         direction /= np.linalg.norm(direction)
+                    # Place at 30% of the typical inter-node distance
                     new_coords[i] = parent_coord + direction * (local_scale * 0.3)
                 else:
                     new_coords[i] = parent_coord

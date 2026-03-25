@@ -11,8 +11,6 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
-"""idea is to have the tree class to support DFS, BFS etc. probably not worht keeping """
-
 
 @dataclass(slots=True)
 class Tree:

@@ -302,7 +302,7 @@ class MinHash:
             for token in token_set:
                 n_tokens += 1
                 if token not in cache:
-                    # xxhas64 could be up to 2^64 but numpy int64 holds up to  2^63 -1
+                    # xxhash64 could be up to 2^64 but numpy int64 holds up to 2^63 - 1
                     # so mask to 63 bits ANDing the number
 
                     cache[token] = xxhash.xxh64_intdigest(token) & 0x7FFFFFFFFFFFFFFF
