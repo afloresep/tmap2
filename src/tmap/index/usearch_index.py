@@ -1,9 +1,10 @@
 """USearch-based nearest neighbor index.
 
-Wraps USearch (https://github.com/unum-cloud/usearch) for cosine/euclidean
-kNN search.
+Wraps USearch (https://github.com/unum-cloud/usearch) for cosine, euclidean,
+and Jaccard (binary) kNN search.
 
 Auto mode: exact brute-force for n < 50 000, HNSW for n >= 50 000.
+Binary Jaccard always uses HNSW.
 """
 
 from __future__ import annotations
@@ -28,10 +29,11 @@ _METRIC_MAP = {
 
 
 class USearchIndex:
-    """Nearest-neighbor index for dense vectors using USearch.
+    """Nearest-neighbor index using USearch.
 
-    Use this for cosine or euclidean search. In ``auto`` mode it uses exact
-    search for small datasets and HNSW for larger ones.
+    Supports cosine, euclidean (dense float vectors), and Jaccard (binary
+    0/1 vectors). In ``auto`` mode it uses exact search for small datasets
+    and HNSW for larger ones. Binary Jaccard always uses HNSW.
 
     Args:
         seed: Stored as metadata. USearch itself does not use this value.
@@ -58,6 +60,8 @@ class USearchIndex:
         self._expansion_search = expansion_search
         self._effective_mode: str | None = None
         self._vectors: NDArray[np.float32] | None = None
+        self._binary_vectors: NDArray[np.uint8] | None = None
+        self._is_binary: bool = False
         self._usearch_index: Any | None = None  # usearch.index.Index
         self._is_built = False
         self._n_nodes: int = 0
@@ -89,7 +93,7 @@ class USearchIndex:
         vectors: NDArray[np.float32],
         metric: str = "euclidean",
     ) -> USearchIndex:
-        """Build the index from a matrix of vectors.
+        """Build the index from a matrix of dense vectors.
 
         Args:
             vectors: Data matrix of shape ``(n_samples, n_features)``.
@@ -136,16 +140,77 @@ class USearchIndex:
         # For exact mode we skip HNSW build entirely; queries use
         # the module-level ``usearch.index.search`` function on raw vectors.
         self._vectors = vectors
+        self._binary_vectors = None
+        self._is_binary = False
         self._n_nodes = n
         self._ndim = d
         self._metric = metric
         self._is_built = True
         return self
 
+    def build_from_binary(
+        self,
+        matrix: NDArray,
+    ) -> USearchIndex:
+        """Build a Jaccard index from a binary (0/1) matrix.
+
+        Packs the binary matrix to bytes and builds an HNSW index using
+        USearch's native bit-vector Jaccard distance. No MinHash encoding
+        is needed — distances are computed on the raw bits.
+
+        Args:
+            matrix: Binary matrix of shape ``(n_samples, n_features)``
+                with 0/1 values.
+
+        Returns:
+            The built index.
+        """
+        matrix = np.asarray(matrix)
+        if matrix.ndim != 2:
+            raise ValueError(f"matrix must be 2D, got shape {matrix.shape}")
+        if matrix.shape[0] < 2:
+            raise ValueError("Need at least 2 vectors to build index")
+        if not np.all((matrix == 0) | (matrix == 1)):
+            raise ValueError(
+                "Binary matrix must contain only 0/1 values."
+            )
+
+        from usearch.index import Index, MetricKind
+
+        n, d = matrix.shape
+        packed = np.packbits(matrix.astype(np.uint8, copy=False), axis=1)
+        packed = np.ascontiguousarray(packed)
+
+        idx = Index(
+            ndim=d,
+            metric=MetricKind.Jaccard,
+            dtype="b1x8",
+            connectivity=self._connectivity,
+            expansion_add=self._expansion_add,
+            expansion_search=self._expansion_search,
+        )
+        keys = np.arange(n, dtype=np.int64)
+        idx.add(keys, packed)
+
+        self._usearch_index = idx
+        self._binary_vectors = packed
+        self._vectors = None
+        self._is_binary = True
+        self._effective_mode = "hnsw"
+        self._n_nodes = n
+        self._ndim = d  # number of bits (original feature dimension)
+        self._metric = "jaccard"
+        self._is_built = True
+        return self
+
     # -- kNN graph (all-vs-all) --
 
-    def add(self, vectors: NDArray[np.float32]) -> NDArray[np.int64]:
+    def add(self, vectors: NDArray) -> NDArray[np.int64]:
         """Append new vectors to an existing index.
+
+        For binary indices, pass a 0/1 matrix with the same number of
+        features as ``build_from_binary()``. For dense indices, pass a
+        float matrix matching ``build_from_vectors()``.
 
         Args:
             vectors: New vectors with the same number of features.
@@ -155,11 +220,44 @@ class USearchIndex:
         """
         self._check_is_built()
 
-        vectors = np.ascontiguousarray(vectors, dtype=np.float32)
+        vectors = np.asarray(vectors)
         if vectors.ndim != 2:
             raise ValueError(f"vectors must be 2D, got shape {vectors.shape}")
+
+        if self._is_binary:
+            if vectors.shape[1] != self._ndim:
+                raise ValueError(
+                    f"vectors must have {self._ndim} features, got {vectors.shape[1]}"
+                )
+            if vectors.shape[0] == 0:
+                return np.empty(0, dtype=np.int64)
+            if not np.all((vectors == 0) | (vectors == 1)):
+                raise ValueError("Binary vectors must contain only 0/1 values.")
+
+            packed = np.packbits(vectors.astype(np.uint8, copy=False), axis=1)
+            packed = np.ascontiguousarray(packed)
+
+            start = self._n_nodes
+            keys = np.arange(start, start + packed.shape[0], dtype=np.int64)
+
+            if self._usearch_index is None:
+                raise RuntimeError("HNSW index not available")
+            self._usearch_index.add(keys, packed)
+
+            if self._binary_vectors is not None:
+                self._binary_vectors = np.concatenate(
+                    [self._binary_vectors, packed], axis=0
+                )
+
+            self._n_nodes += packed.shape[0]
+            return keys
+
+        # Dense float path
+        vectors = np.ascontiguousarray(vectors, dtype=np.float32)
         if vectors.shape[1] != self._ndim:
-            raise ValueError(f"vectors must have {self._ndim} features, got {vectors.shape[1]}")
+            raise ValueError(
+                f"vectors must have {self._ndim} features, got {vectors.shape[1]}"
+            )
         if vectors.shape[0] == 0:
             return np.empty(0, dtype=np.int64)
 
@@ -190,16 +288,23 @@ class USearchIndex:
             A ``KNNGraph`` with neighbor indices and distances.
         """
         self._check_is_built()
-        if self._vectors is None:
-            raise RuntimeError(
-                "Cannot call query_knn() on a loaded index: the original "
-                "vectors were not saved.  Rebuild with build_from_vectors() "
-                "or use query_point()/query_batch() instead."
-            )
         if k >= self._n_nodes:
             raise ValueError(f"k={k} must be < n_nodes={self._n_nodes}")
 
-        keys, dists = self._search(self._vectors, k + 1)
+        if self._is_binary:
+            if self._binary_vectors is None:
+                raise RuntimeError("No binary vectors stored for query_knn().")
+            queries = self._binary_vectors
+        else:
+            if self._vectors is None:
+                raise RuntimeError(
+                    "Cannot call query_knn() on a loaded index: the original "
+                    "vectors were not saved.  Rebuild with build_from_vectors() "
+                    "or use query_point()/query_batch() instead."
+                )
+            queries = self._vectors
+
+        keys, dists = self._search(queries, k + 1)
         keys, dists = self._strip_self(keys, dists, k)
         dists = self._convert_distances(dists)
         return KNNGraph.from_arrays(
@@ -211,40 +316,42 @@ class USearchIndex:
 
     def query_point(
         self,
-        point: NDArray[np.float32],
+        point: NDArray,
         k: int,
     ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
         """Query neighbors for one point.
 
         Args:
-            point: Query vector.
+            point: Query vector (binary 0/1 or dense float, matching the
+                index type).
             k: Number of neighbors to return.
 
         Returns:
             Tuple ``(indices, distances)``.
         """
         self._check_is_built()
-        query = np.ascontiguousarray(point.reshape(1, -1), dtype=np.float32)
+        query = self._prepare_query(np.asarray(point).reshape(1, -1))
         keys, dists = self._search(query, k)
         dists = self._convert_distances(dists)
         return self._safe_int32(keys[0]), dists[0].astype(np.float32)
 
     def query_batch(
         self,
-        points: NDArray[np.float32],
+        points: NDArray,
         k: int,
     ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
         """Query neighbors for many points at once.
 
         Args:
-            points: Query matrix.
+            points: Query matrix (binary 0/1 or dense float, matching the
+                index type).
             k: Number of neighbors to return per point.
 
         Returns:
             Tuple ``(indices, distances)``.
         """
         self._check_is_built()
-        queries = np.ascontiguousarray(points, dtype=np.float32)
+        queries = self._prepare_query(np.asarray(points))
         keys, dists = self._search(queries, k)
         dists = self._convert_distances(dists)
         return self._safe_int32(keys), dists.astype(np.float32)
@@ -271,7 +378,9 @@ class USearchIndex:
             if self._usearch_index is None:
                 raise RuntimeError("HNSW index cannot be saved before it is built.")
             self._usearch_index.save(str(path))
-            meta["has_vectors"] = False
+            if self._is_binary and self._binary_vectors is not None:
+                np.save(self._vectors_path(path), self._binary_vectors, allow_pickle=False)
+            meta["has_vectors"] = self._is_binary
         with open(self._meta_path(path), "wb") as f:
             pickle.dump(meta, f)
 
@@ -298,15 +407,30 @@ class USearchIndex:
             expansion_add=meta.get("expansion_add", 256),
             expansion_search=meta.get("expansion_search", 200),
         )
+        is_binary = meta.get("is_binary", False)
+        instance._is_binary = is_binary
+
         if meta.get("effective_mode") == "hnsw":
             if not path.exists():
                 raise FileNotFoundError(f"USearch index file not found: {path}")
             instance._usearch_index = Index.restore(str(path))
+            if is_binary and meta.get("has_vectors"):
+                vectors_path = cls._vectors_path(path)
+                if not vectors_path.exists():
+                    raise FileNotFoundError(
+                        f"Binary vectors file not found: {vectors_path}. "
+                        f"Cannot restore binary index without stored vectors."
+                    )
+                instance._binary_vectors = np.ascontiguousarray(
+                    np.load(vectors_path, allow_pickle=False)
+                )
         elif meta.get("has_vectors"):
             vectors_path = cls._vectors_path(path)
             if not vectors_path.exists():
                 raise FileNotFoundError(f"USearch vectors file not found: {vectors_path}")
-            instance._vectors = np.ascontiguousarray(np.load(vectors_path, allow_pickle=False))
+            instance._vectors = np.ascontiguousarray(
+                np.load(vectors_path, allow_pickle=False)
+            )
         instance._n_nodes = meta.get("n_nodes", 0)
         instance._ndim = meta.get("ndim", 0)
         instance._metric = meta.get("metric")
@@ -320,14 +444,20 @@ class USearchIndex:
         state = self.__dict__.copy()
         idx = state.pop("_usearch_index")
         if idx is not None:
-            state["_vectors"] = None
             state["_usearch_index_bytes"] = bytes(idx.save())
+            # For binary, keep _binary_vectors; for dense, drop _vectors
+            # (they're redundant with the HNSW index for dense).
+            if not state.get("_is_binary"):
+                state["_vectors"] = None
         else:
             state["_usearch_index_bytes"] = None
         return state
 
     def __setstate__(self, state: dict) -> None:
         buf = state.pop("_usearch_index_bytes")
+        # Handle loading from older pickles that lack binary fields
+        state.setdefault("_is_binary", False)
+        state.setdefault("_binary_vectors", None)
         self.__dict__.update(state)
         if buf is not None:
             from usearch.index import Index
@@ -342,9 +472,25 @@ class USearchIndex:
         if not self._is_built:
             raise RuntimeError("Index not built. Call build_from_vectors() first.")
 
+    def _prepare_query(self, data: NDArray) -> NDArray:
+        """Convert user-supplied query data to the format USearch expects."""
+        if self._is_binary:
+            expected = self._ndim
+            actual = data.shape[-1] if data.ndim >= 1 else 0
+            if actual != expected:
+                raise ValueError(
+                    f"Query has {actual} features but index was built "
+                    f"with {expected}."
+                )
+            if not np.all((data == 0) | (data == 1)):
+                raise ValueError("Query data must contain only 0/1 values.")
+            packed = np.packbits(data.astype(np.uint8, copy=False), axis=1)
+            return np.ascontiguousarray(packed)
+        return np.ascontiguousarray(data, dtype=np.float32)
+
     def _search(
         self,
-        queries: NDArray[np.float32],
+        queries: NDArray,
         count: int,
     ) -> tuple[NDArray[np.int64], NDArray[np.float32]]:
         """Run search and return (keys, distances) as 2D arrays."""
@@ -405,7 +551,7 @@ class USearchIndex:
 
     def _convert_distances(self, dists: NDArray[np.float32]) -> NDArray[np.float32]:
         """Convert raw USearch distances to user-facing metric."""
-        # Cosine: USearch 'cos' already returns cosine distance. No conversion.
+        # Cosine and Jaccard: already returns the correct distance.
         if self._metric == "euclidean":
             # USearch 'l2sq' returns squared L2.
             np.maximum(dists, 0, out=dists)
@@ -433,6 +579,7 @@ class USearchIndex:
             "connectivity": self._connectivity,
             "expansion_add": self._expansion_add,
             "expansion_search": self._expansion_search,
+            "is_binary": self._is_binary,
         }
 
     @staticmethod
