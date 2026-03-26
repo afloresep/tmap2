@@ -249,6 +249,160 @@ class TestUSearchIndex:
 
 
 # ---------------------------------------------------------------------------
+# Binary Jaccard tests
+# ---------------------------------------------------------------------------
+
+
+def _binary_data(n_samples: int = 60, n_features: int = 256, seed: int = 42) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    return rng.integers(0, 2, (n_samples, n_features)).astype(np.uint8)
+
+
+class TestUSearchBinaryJaccard:
+    def _make_index(self, **kwargs):
+        kwargs.setdefault("seed", 42)
+        return USearchIndex(**kwargs)
+
+    def test_build_from_binary(self) -> None:
+        data = _binary_data()
+        index = self._make_index()
+        index.build_from_binary(data)
+        assert index.is_built
+        assert index.metric == "jaccard"
+        assert index.n_nodes == data.shape[0]
+        assert index.effective_mode == "hnsw"
+
+    def test_knn_shape_and_dtype(self) -> None:
+        data = _binary_data()
+        index = self._make_index()
+        index.build_from_binary(data)
+        knn = index.query_knn(k=K)
+
+        assert isinstance(knn, KNNGraph)
+        assert knn.indices.shape == (data.shape[0], K)
+        assert knn.distances.shape == (data.shape[0], K)
+        assert knn.indices.dtype == np.int32
+        assert knn.distances.dtype == np.float32
+
+    def test_knn_contract(self) -> None:
+        data = _binary_data()
+        index = self._make_index()
+        index.build_from_binary(data)
+        knn = index.query_knn(k=K)
+
+        assert np.all(knn.indices >= 0)
+        assert np.all(knn.indices < data.shape[0])
+        assert np.all(knn.distances >= -1e-6)
+        assert np.all(knn.distances <= 1.0 + 1e-6)  # Jaccard in [0, 1]
+        for i in range(data.shape[0]):
+            assert i not in knn.indices[i]
+
+    def test_query_single(self) -> None:
+        data = _binary_data()
+        index = self._make_index()
+        index.build_from_binary(data)
+
+        indices, distances = index.query_point(data[0], k=K)
+        assert indices.shape == (K,)
+        assert distances.shape == (K,)
+        assert distances[0] == 0.0  # self should be nearest
+
+    def test_query_batch(self) -> None:
+        data = _binary_data()
+        index = self._make_index()
+        index.build_from_binary(data)
+
+        query = data[:5]
+        indices, distances = index.query_batch(query, k=K)
+
+        assert indices.shape == (5, K)
+        assert distances.shape == (5, K)
+        assert np.all(indices >= 0)
+        assert np.all(distances >= -1e-6)
+        assert np.all(distances <= 1.0 + 1e-6)
+
+    def test_add_binary(self) -> None:
+        data = _binary_data(n_samples=40)
+        added = np.zeros((1, 256), dtype=np.uint8)
+
+        index = self._make_index()
+        index.build_from_binary(data)
+        keys = index.add(added)
+
+        assert keys.tolist() == [40]
+        assert index.n_nodes == 41
+
+    def test_build_rejects_nonbinary_values(self) -> None:
+        bad = np.array([[2, 0, 1, 0], [0, 1, 0, 3]], dtype=np.uint8)
+        index = self._make_index()
+        with pytest.raises(ValueError, match="0/1"):
+            index.build_from_binary(bad)
+
+    def test_add_rejects_nonbinary_values(self) -> None:
+        data = _binary_data(n_samples=10, n_features=16)
+        index = self._make_index()
+        index.build_from_binary(data)
+        bad = np.array([[2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]])
+        with pytest.raises(ValueError, match="0/1"):
+            index.add(bad)
+
+    def test_query_rejects_wrong_width(self) -> None:
+        data = _binary_data(n_samples=10, n_features=16)
+        index = self._make_index()
+        index.build_from_binary(data)
+        with pytest.raises(ValueError, match="features"):
+            index.query_point(np.array([1, 0, 1]), k=3)
+
+    def test_query_rejects_nonbinary_values(self) -> None:
+        data = _binary_data(n_samples=10, n_features=16)
+        index = self._make_index()
+        index.build_from_binary(data)
+        with pytest.raises(ValueError, match="0/1"):
+            index.query_point(np.array([2] * 16), k=3)
+
+    def test_load_fails_when_vectors_missing(self, tmp_path) -> None:
+        data = _binary_data()
+        index = self._make_index()
+        index.build_from_binary(data)
+        path = tmp_path / "binary.usearch"
+        index.save(path)
+
+        # Delete the sidecar vectors file
+        vectors_path = USearchIndex._vectors_path(path)
+        vectors_path.unlink()
+
+        with pytest.raises(FileNotFoundError, match="Binary vectors"):
+            USearchIndex.load(path)
+
+    def test_pickle_roundtrip(self) -> None:
+        data = _binary_data()
+        index = self._make_index()
+        index.build_from_binary(data)
+
+        buf = pickle.dumps(index)
+        restored = pickle.loads(buf)
+
+        assert restored.is_built
+        assert restored.metric == "jaccard"
+        idx_r, dist_r = restored.query_point(data[0], k=K)
+        assert idx_r.shape == (K,)
+
+    def test_save_load_roundtrip(self, tmp_path) -> None:
+        data = _binary_data()
+        index = self._make_index()
+        index.build_from_binary(data)
+
+        path = tmp_path / "binary.usearch"
+        index.save(path)
+        restored = USearchIndex.load(path)
+
+        assert restored.is_built
+        assert restored.metric == "jaccard"
+        knn = restored.query_knn(k=K)
+        assert knn.indices.shape == (data.shape[0], K)
+
+
+# ---------------------------------------------------------------------------
 # Estimator integration
 # ---------------------------------------------------------------------------
 
