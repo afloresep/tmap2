@@ -10,8 +10,8 @@ A modernized reimplementation of the [original TMAP](https://github.com/reymond-
 
 ```text
 Your Data
-   ├─→ MinHash → LSHForest        (Jaccard)
-   └─→ USearch                    (Cosine / Euclidean / other metrics)
+   ├─→ Binary matrix ─────────→ USearch        (Jaccard / cosine / euclidean)
+   └─→ Sets / strings ───────→ MinHash → LSHForest
                 ↓
              k-NN Graph → MST → OGDF Tree Layout → Interactive Visualization
 ```
@@ -99,7 +99,35 @@ from tmap.utils.singlecell import from_anndata
 
 ## Lower-Level Pipeline
 
-For direct control over MinHash, LSH Forest, and layout stages:
+For direct control over search backends, hashing, and layout stages:
+
+### USearchIndex
+
+Use this when you want direct nearest-neighbor queries on binary or dense
+matrices without fitting the full estimator.
+
+```python
+from tmap.index import USearchIndex
+
+index = USearchIndex(seed=42)
+index.build_from_vectors(X, metric="cosine")
+
+indices, distances = index.query_batch(X[:10], k=20)
+```
+
+Binary Jaccard also uses `USearchIndex` directly:
+
+```python
+index = USearchIndex(seed=42)
+index.build_from_binary(binary_matrix)
+
+indices, distances = index.query_batch(binary_matrix[:10], k=20)
+```
+
+### MinHash + LSHForest
+
+Use this lower-level path for legacy workflows, direct control over MinHash
+signatures, or Jaccard on sets / strings.
 
 ```python
 from tmap import MinHash, LSHForest
@@ -116,6 +144,10 @@ cfg = LayoutConfig(k=20, kc=50, deterministic=True, seed=42)
 x, y, s, t = layout_from_lsh_forest(lsh, cfg)
 # x, y = coordinates; s, t = tree edge indices
 ```
+
+`LSHForest` also exposes direct query APIs such as `query()`,
+`query_linear_scan()`, and `query_external_batch()` when you want retrieval
+without building a full map.
 
 ## Key Features
 

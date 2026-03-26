@@ -27,6 +27,7 @@ TMAP(
 |--------|---------------|
 | `fit(X)` | Build the graph, tree, and 2D embedding |
 | `fit_transform(X)` | Fit and return `(x, y, s, t)` |
+| `kneighbors(X)` | Query nearest fitted neighbors for new points without placement or mutation |
 | `transform(X_new)` | Place new points on the existing map without changing the model |
 | `add_points(X_new)` | Add new points into the fitted model |
 | `to_tmapviz()` | Create a `TmapViz` object for notebook or HTML output |
@@ -41,17 +42,51 @@ TMAP(
 | `embedding_` | 2D coordinates, shape `(n, 2)` |
 | `tree_` | Tree extracted from the kNN graph |
 | `graph_` | k-nearest-neighbor graph |
-| `lsh_forest_` | Jaccard search index |
-| `index_` | Dense ANN index when `store_index=True` |
+| `lsh_forest_` | Jaccard search index for set / string inputs |
+| `index_` | USearch index for cosine / euclidean (`store_index=True`) and binary Jaccard |
 
 ### Metrics
 
 | Metric | Input | Backend |
 |--------|-------|---------|
-| `jaccard` | Binary matrix | MinHash + LSHForest |
+| `jaccard` | Binary matrix | USearch |
+| `jaccard` | Sets / strings | MinHash + LSHForest |
 | `cosine` | Dense float matrix | USearch |
 | `euclidean` | Dense float matrix | USearch |
 | `precomputed` | Distance matrix | Direct graph construction |
+
+### Lower-Level Search Backends
+
+`TMAP` is the main entry point for maps. For direct nearest-neighbor queries,
+the lower-level search classes are also public.
+
+#### `USearchIndex`
+
+Use for dense cosine / euclidean search and binary Jaccard search.
+
+| Method | What it does |
+|--------|---------------|
+| `build_from_vectors(X, metric=...)` | Build a dense cosine / euclidean index |
+| `build_from_binary(X)` | Build a binary Jaccard index |
+| `query_point(x, k)` | Query one vector |
+| `query_batch(X, k)` | Query many vectors |
+| `query_knn(k)` | Build the all-vs-all kNN graph |
+| `add(X)` | Append new vectors to the index |
+| `save(path)` / `load(path)` | Persist the index |
+
+#### `LSHForest`
+
+Use for lower-level MinHash workflows and Jaccard on sets / strings.
+
+| Method | What it does |
+|--------|---------------|
+| `query(signature, k)` | LSH-only candidate lookup |
+| `query_linear_scan(signature, k, kc)` | Query one external signature with candidate refinement |
+| `query_linear_scan_by_id(id, k, kc)` | Query one indexed signature by ID |
+| `query_external_batch(signatures, k, kc)` | Batch query external signatures |
+| `get_knn_graph(k, kc)` | Build the all-vs-all kNN graph |
+| `get_all_distances(signature)` | Exact MinHash distances to all indexed signatures |
+| `save(path)` / `load(path)` | Persist the index |
 
 ## `TmapViz`
 
