@@ -372,8 +372,25 @@ class TestReadFasta:
         fasta = tmp_path / "test.fa"
         fasta.write_text(">sp|P12345|PROT1 Some protein\nACDE\nFGHI\n>P99999\nKLMN\n")
         ids, seqs = read_fasta(fasta)
-        assert ids == ["sp|P12345|PROT1", "P99999"]
+        # UniProt pipe format auto-detected: accession extracted
+        assert ids == ["P12345", "P99999"]
         assert seqs == ["ACDEFGHI", "KLMN"]
+
+    def test_uniprot_pipe_format(self, tmp_path):
+        fasta = tmp_path / "uniprot.fa"
+        fasta.write_text(
+            ">sp|P12345|NAME_HUMAN Some protein\nACDE\n"
+            ">tr|A0A009GYV0|A0A009GYV0_ACIB9 Uncharacterized\nFGHI\n"
+        )
+        ids, seqs = read_fasta(fasta)
+        assert ids == ["P12345", "A0A009GYV0"]
+
+    def test_parse_id_callback(self, tmp_path):
+        fasta = tmp_path / "custom.fa"
+        fasta.write_text(">sp|P12345|PROT1 desc\nACDE\n>simple_id desc\nFGHI\n")
+        # Custom callback that returns the full first token
+        ids, _ = read_fasta(fasta, parse_id=lambda h: h.split()[0])
+        assert ids == ["sp|P12345|PROT1", "simple_id"]
 
     def test_max_seqs(self, tmp_path):
         fasta = tmp_path / "test.fa"

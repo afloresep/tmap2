@@ -30,7 +30,7 @@ import logging
 import re
 import urllib.parse
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -305,9 +305,28 @@ def _fetch_uniprot_chunk(
     return rows
 
 
+# Matches UniProt pipe-delimited headers: >sp|P12345|NAME or >tr|A0A009GYV0|NAME
+_UNIPROT_PIPE_RE = re.compile(r"^(?:sp|tr)\|([^|]+)\|")
+
+
+def _extract_fasta_id(header: str) -> str:
+    """Extract a usable ID from a FASTA header line (without the leading '>').
+
+    Handles UniProt pipe format (``>sp|P12345|NAME_SPECIES ...``) by
+    extracting the accession (second field).  For all other formats, returns
+    the first whitespace-delimited token.
+    """
+    token = header.split()[0] if header.strip() else ""
+    m = _UNIPROT_PIPE_RE.match(token)
+    if m:
+        return m.group(1)
+    return token
+
+
 def read_fasta(
     path: str | Path,
     max_seqs: int | None = None,
+    parse_id: Callable[[str], str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Parse a FASTA file into IDs and sequences.
 
@@ -317,14 +336,22 @@ def read_fasta(
         Path to a ``.fa`` / ``.fasta`` file.
     max_seqs : int or None
         Stop after this many sequences. ``None`` reads all.
+    parse_id : callable or None
+        Custom function that receives the full header (without ``>``) and
+        returns the ID string.  When ``None`` (the default), UniProt
+        pipe-delimited headers (``sp|ACC|NAME``) are detected automatically
+        and the accession is extracted; other formats use the first
+        whitespace-delimited token.
 
     Returns
     -------
     ids : list[str]
-        Header lines (everything after ``>`` up to the first whitespace).
+        Parsed identifier for each sequence.
     sequences : list[str]
         Protein sequences (uppercased, multi-line concatenated).
     """
+    _parse = parse_id if parse_id is not None else _extract_fasta_id
+
     ids: list[str] = []
     sequences: list[str] = []
     current_seq: list[str] = []
@@ -340,8 +367,7 @@ def read_fasta(
                     current_seq = []
                 if max_seqs is not None and len(ids) >= max_seqs:
                     break
-                # ID = first whitespace-delimited token after '>'
-                ids.append(line[1:].split()[0] if line[1:].strip() else "")
+                ids.append(_parse(line[1:]))
             else:
                 current_seq.append(line)
         if current_seq and (max_seqs is None or len(sequences) < max_seqs):

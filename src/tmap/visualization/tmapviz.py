@@ -945,6 +945,20 @@ class TmapViz:
         """Return labels added."""
         return [self._columns[labels] for labels in self._labels_keys]
 
+    def _string_label_names(self) -> list[str]:
+        """Return label column names that contain string (non-numeric) data."""
+        result = []
+        for name in self._labels_keys:
+            col = self._columns.get(name)
+            if col is None:
+                continue
+            # Only include pure label columns (string data).
+            # Continuous/categorical layouts added with add_as_label=True
+            # are numeric and belong in filters, not search.
+            if col.dtype == "label":
+                result.append(name)
+        return result
+
     def to_dataframe(
         self,
         *,
@@ -1489,7 +1503,10 @@ class TmapViz:
             "columns": columns_meta,
             "card": self._card_config,
             "filters": self._filterable if self._filterable else (layout_options or None),
-            "search": self._searchable if self._searchable else (label_options or None),
+            "search": (
+                self._searchable if self._searchable
+                else (self._string_label_names() or None)
+            ),
         }
 
         metadata_json_str = json.dumps(
@@ -1691,7 +1708,10 @@ class TmapViz:
             "columns": columns_meta,
             "card": self._card_config,
             "filters": self._filterable if self._filterable else (layout_options or None),
-            "search": self._searchable if self._searchable else (label_options or None),
+            "search": (
+                self._searchable if self._searchable
+                else (self._string_label_names() or None)
+            ),
         }
 
         metadata_json = json.dumps(

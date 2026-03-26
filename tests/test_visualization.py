@@ -1139,7 +1139,8 @@ class TestBackwardCompat:
         assert meta.get("card") is None
         # filters/search auto-populated from layouts/labels
         assert meta.get("filters") == ["value"]
-        assert meta.get("search") == ["value", "name"]
+        # Only string labels are searchable by default (not numeric layouts)
+        assert meta.get("search") == ["name"]
 
         # No column should have a "ui" key
         for col_meta in meta["columns"].values():

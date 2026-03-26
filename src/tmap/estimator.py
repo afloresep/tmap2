@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import pickle
+import time
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
@@ -90,6 +91,7 @@ class TMAP:
         layout_config: Optional advanced OGDF layout config.
         store_index: If True, keep the dense ANN index after ``fit()`` so you
             can later call ``transform()`` or ``add_points()``.
+        verbose: If True, print progress messages during ``fit()``.
 
     Example:
         >>> model = TMAP(metric="jaccard", n_neighbors=20).fit(binary_matrix)
@@ -108,6 +110,7 @@ class TMAP:
         layout_iterations: int = 1000,
         layout_config: Any | None = None,
         store_index: bool = False,
+        verbose: bool = False,
     ) -> None:
         if n_neighbors <= 0:
             raise ValueError(f"n_neighbors must be > 0, got {n_neighbors}")
@@ -131,6 +134,7 @@ class TMAP:
         self.layout_iterations = layout_iterations
         self.layout_config = layout_config
         self.store_index = store_index
+        self.verbose = verbose
 
         self._embedding: NDArray[np.float32] | None = None
         self._index: Any | None = None
@@ -139,6 +143,37 @@ class TMAP:
         self._lsh_forest: LSHForest | None = None
         self._n_features: int | None = None
         self._jaccard_mode: str | None = None  # "binary", "sets", or "strings"
+
+    def _log(self, msg: str) -> None:
+        """Print a progress message when verbose mode is enabled."""
+        if self.verbose:
+            print(f"[TMAP] {msg}")  # noqa: T201
+
+    def _validate_input(self, X: Any) -> None:
+        """Fast-fail on obviously wrong input types before heavy computation."""
+        if isinstance(X, str):
+            raise TypeError(
+                "fit() received a string, but expects array-like data. "
+                "Pass a matrix (numpy array, list of lists, or DataFrame)."
+            )
+        if self.metric in {"cosine", "euclidean", "precomputed"}:
+            arr = np.asarray(X)
+            if arr.ndim == 0:
+                raise ValueError(
+                    f"fit() received a scalar, but expects a 2D array for "
+                    f"metric={self.metric!r}."
+                )
+            if arr.ndim == 1:
+                raise ValueError(
+                    f"fit() received a 1D array with shape {arr.shape}, but "
+                    f"metric={self.metric!r} expects a 2D array of shape "
+                    f"(n_samples, n_features)."
+                )
+            if not np.issubdtype(arr.dtype, np.number):
+                raise TypeError(
+                    f"fit() received an array with dtype={arr.dtype}, but "
+                    f"metric={self.metric!r} expects numeric data."
+                )
 
     def fit(
         self,
@@ -163,14 +198,22 @@ class TMAP:
         if knn_graph is None and X is None:
             raise ValueError("Either X or knn_graph must be provided.")
 
+        # Early input validation — catch common mistakes at the API boundary.
+        if X is not None and knn_graph is None:
+            self._validate_input(X)
+
+        t0 = time.perf_counter()
+
         if knn_graph is not None:
             knn = knn_graph
             self._lsh_forest = None
             self._n_features = None
         elif self.metric == "jaccard":
+            self._log("Encoding input (MinHash)...")
             signatures, n_samples, n_features = self._encode_jaccard(X)
             self._n_features = n_features
 
+            self._log(f"Building kNN graph ({n_samples} points, k={self.n_neighbors})...")
             lsh_l = _select_lsh_l(self.n_permutations, n_samples)
             forest = LSHForest(d=self.n_permutations, l=lsh_l)
             forest.batch_add(signatures)
@@ -200,6 +243,7 @@ class TMAP:
 
             self._lsh_forest = forest
         elif self.metric == "precomputed":
+            self._log("Building kNN graph from distance matrix...")
             distance_matrix = self._coerce_distance_matrix(X)
             knn = KNNGraph.from_distance_matrix(distance_matrix, k=self.n_neighbors)
             self._lsh_forest = None
@@ -210,6 +254,10 @@ class TMAP:
                 raise ValueError(
                     f"n_neighbors={self.n_neighbors} must be < n_samples={X_dense.shape[0]}"
                 )
+            self._log(
+                f"Building kNN graph ({X_dense.shape[0]} points, "
+                f"d={X_dense.shape[1]}, metric={self.metric})..."
+            )
             index = _resolve_ann_backend(seed=self.seed)
             index.build_from_vectors(X_dense, metric=self.metric)
             knn = index.query_knn(k=self.n_neighbors)
@@ -222,12 +270,14 @@ class TMAP:
 
         self._graph = knn
 
+        self._log("Computing MST and tree layout...")
         require_ogdf()
         config = self._make_layout_config()
         x, y, s, t = layout_from_knn_graph(knn, config=config, create_mst=True)
         self._tree = _tree_from_ogdf_edges(knn, s, t)
 
         self._embedding = np.column_stack([x, y]).astype(np.float32, copy=False)
+        self._log(f"Done ({time.perf_counter() - t0:.1f}s)")
         return self
 
     def fit_transform(
