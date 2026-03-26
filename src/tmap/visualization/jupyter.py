@@ -18,7 +18,7 @@ def _check_jscatter() -> None:
     except PackageNotFoundError:
         raise ImportError(
             "jupyter-scatter is required for interactive notebook visualization.\n"
-            "Install with: pip install tmap[notebook]"
+            "Install with: pip install tmap2[notebook]"
         ) from None
 
     try:
