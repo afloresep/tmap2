@@ -1,5 +1,5 @@
 """Parallel chemistry utilities for fingerprint and property computation.
-Requires ``rdkit`` (install via ``pip install tmap[chemistry]``).
+Requires ``rdkit`` (install via ``pip install rdkit``).
 """
 
 from __future__ import annotations

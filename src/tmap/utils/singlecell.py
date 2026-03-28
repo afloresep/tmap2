@@ -3,7 +3,7 @@
 Bridge between the scverse/AnnData ecosystem and TMAP. Provides helpers
 to extract matrices, cell metadata, and gene scores from AnnData objects.
 
-Requires ``anndata`` (install via ``pip install tmap[singlecell]``).
+Requires ``anndata`` (install via ``pip install anndata``).
 """
 
 from __future__ import annotations

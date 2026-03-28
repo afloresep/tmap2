@@ -1,17 +1,15 @@
-"""Build a molecule TMAP from examples/cluster_65053.csv.
+"""High-level molecular TMAP from a SMILES CSV.
 
-This is the clearest chemistry example in the repo:
+The simplest chemistry example: load SMILES, compute fingerprints and
+properties using domain utilities, fit a TMAP, and export an interactive
+HTML visualization.
 
-1. Load SMILES from a CSV
-2. Compute Morgan fingerprints
-3. Compute a few molecular properties and Murcko scaffolds
-4. Fit `TMAP(metric="jaccard")`
-5. Explore the result in HTML or with `serve()`
+For the step-by-step low-level pipeline, see smiles_tmap.py.
 
 Usage:
-    python examples/cluster_65053_tmap.py
-    python examples/cluster_65053_tmap.py --nrows 3000
-    python examples/cluster_65053_tmap.py --serve
+    python examples/molecules_tmap.py
+    python examples/molecules_tmap.py --nrows 3000
+    python examples/molecules_tmap.py --serve
 """
 
 from __future__ import annotations
@@ -29,7 +27,7 @@ DEFAULT_OUTPUT = Path(__file__).with_name("cluster_65053.html")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build a TMAP for cluster_65053 molecules.")
+    parser = argparse.ArgumentParser(description="High-level molecular TMAP.")
     parser.add_argument(
         "--nrows",
         type=int,
