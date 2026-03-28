@@ -4,9 +4,7 @@
 
 # TMAP2
 
-Tree-based visualization for high-dimensional data. Organizes similar items into interactive tree structures — ideal for chemical space, protein embeddings, single-cell data, or any high-dimensional dataset.
-
-A modernized reimplementation of the [original TMAP](https://github.com/reymond-group/tmap) with an sklearn-style API, multiple distance metrics, and interactive visualization.
+Tree-based visualization for high-dimensional data. Organizes similar items into interactive tree structures. Ideal for chemical space, protein embeddings, single-cell data, or any high-dimensional dataset.
 
 ```text
 Your Data
@@ -64,7 +62,7 @@ new_coords = model.transform(X[:10])
 
 ### Notebook Widgets
 
-![Notebook controls demo](https://raw.githubusercontent.com/afloresep/TMAP/master/docs/images/ScreenRecording2026-02-15at19.43.12-ezgif.com-video-to-gif-converter.gif)
+![Notebook controls demo](https://raw.githubusercontent.com/afloresep/TMAP/master/docs/images/filter-preview.gif)
 
 Color switching, categorical filtering, and lasso selection with pandas-backed metadata:
 
@@ -78,7 +76,7 @@ viz.show(width=1000, height=620, controls=True)
 
 ### Lasso Selection + DataFrame Integration
 
-![Lasso and dataframe integration](https://raw.githubusercontent.com/afloresep/TMAP/master/docs/images/ScreenRecording2026-02-15at19.44.43-ezgif.com-video-to-gif-converter.gif)
+![Lasso and dataframe integration](https://raw.githubusercontent.com/afloresep/TMAP/master/docs/images/selection-preview.gif)
 
 ## Domain Utilities
 
