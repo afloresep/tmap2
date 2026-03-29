@@ -55,6 +55,38 @@ TMAP(
 | `euclidean` | Dense float matrix | USearch |
 | `precomputed` | Distance matrix | Direct graph construction |
 
+### Reproducibility
+
+The `seed` parameter controls the OGDF tree layout, which is fully
+deterministic: same kNN graph + same seed = identical coordinates.
+
+The kNN step depends on the backend:
+
+- **MinHash + LSHForest** (sets / strings): deterministic for a given
+  `seed` and `minhash_seed`.
+- **USearch HNSW** (binary Jaccard, cosine, euclidean): approximate and
+  multi-threaded. Neighbor sets may vary slightly across runs or
+  platforms. The resulting trees are nearly identical in practice because
+  the MST is robust to small kNN variations.
+
+If you need bit-exact kNN reproducibility for binary data, use the
+MinHash + LSHForest pipeline directly:
+
+```python
+from tmap import MinHash, LSHForest
+from tmap.layout import LayoutConfig, layout_from_lsh_forest
+
+mh = MinHash(num_perm=128, seed=42)
+signatures = mh.batch_from_binary_array(X)
+
+lsh = LSHForest(d=128, l=64)
+lsh.batch_add(signatures)
+lsh.index()
+
+cfg = LayoutConfig(k=20, kc=50, deterministic=True, seed=42)
+x, y, s, t = layout_from_lsh_forest(lsh, cfg)
+```
+
 ### Lower-Level Search Backends
 
 `TMAP` is the main entry point for maps. For direct nearest-neighbor queries,
