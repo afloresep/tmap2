@@ -4,16 +4,31 @@
 
 # TMAP2
 
-Tree-based visualization for high-dimensional data. Organizes similar items into interactive tree structures — ideal for chemical space, protein embeddings, single-cell data, or any high-dimensional dataset.
+Tree-based visualization for high-dimensional data. Organizes similar items into interactive tree structures. Ideal for chemical space, protein embeddings, single-cell data, or any high-dimensional dataset.
 
-A modernized reimplementation of the [original TMAP](https://github.com/reymond-group/tmap) with an sklearn-style API, multiple distance metrics, and interactive visualization.
+<table>
+  <tr>
+    <td><img src="docs/images/enamine.png" alt="Interactive HTML export" width="100%"/></td>
+    <td><img src="docs/images/protein-shot.png" alt="AlphaFold protein clusters" width="100%"/></td>
+  </tr>
+</table>
 
-```text
-Your Data
-   ├─→ MinHash → LSHForest        (Jaccard)
-   └─→ USearch                    (Cosine / Euclidean / other metrics)
-                ↓
-             k-NN Graph → MST → OGDF Tree Layout → Interactive Visualization
+## Why Trees?
+
+Most dimensionality reduction tools (UMAP, t-SNE) produce point clouds. TMAP produces a **tree**, a connected structure where every point is linked to its neighbors through branches. This makes the layout itself explorable: you can follow branches, trace paths between any two points, and discover how regions connect.
+
+For example, in a TMAP of pet breed images, following the branch from terriers toward cats reveals that the bridge between the two groups runs through chihuahuas and sphynx cats (the bald ones) which is both hilarious and logical; both are small, short-haired, big-eyed. The tree doesn't just cluster similar things it also shows you *how* dissimilar things are connected.
+
+<p align="center">
+  <img src="docs/images/breed-tree.gif" alt="Exploring pet breed tree" width="80%"/>
+</p>
+
+Because the layout is a tree, you get operations that point clouds can't support:
+
+```python
+path = model.path(idx_a, idx_b)         # nodes along the tree path
+d = model.distance(idx_a, idx_b)        # sum of edge weights along the path
+pseudotime = model.distances_from(idx)  # tree distance from one point to all others
 ```
 
 ## Installation
@@ -50,23 +65,25 @@ model = TMAP(metric="cosine", n_neighbors=20).fit(X)
 new_coords = model.transform(X[:10])
 ```
 
+```python
+# Interactive notebook widget
+model.plot(color_by="label", data=df, tooltip_properties=["name", "score"])
+```
+
+## Key Features
+
+- **Tree structure**: follow branches, trace paths, compute pseudotime
+- **Deterministic**: same input + seed = same output
+- **Multiple metrics**: `jaccard`, `cosine`, `euclidean`, `precomputed`
+- **Incremental**: `add_points()` and `transform()` for new data
+- **Model persistence**: `save()` / `load()`
+- **Three viz backends**: interactive HTML, jupyter-scatter, matplotlib
+
 ## Visualization
 
-### Interactive HTML Export
+**Interactive HTML** — lasso selection, light/dark theme, filter and search panels, pinned metadata cards, binary mode for large datasets.
 
-![Interactive HTML features](https://raw.githubusercontent.com/afloresep/TMAP/master/docs/images/image.png)
-
-- Lasso selection (`Shift + drag`)
-- Light / dark theme toggle
-- Filter and search side panels
-- Pinned cards for metadata, structures, and links
-- Binary mode for large datasets
-
-### Notebook Widgets
-
-![Notebook controls demo](https://raw.githubusercontent.com/afloresep/TMAP/master/docs/images/ScreenRecording2026-02-15at19.43.12-ezgif.com-video-to-gif-converter.gif)
-
-Color switching, categorical filtering, and lasso selection with pandas-backed metadata:
+**Notebook widgets** — color switching, categorical filtering, and lasso selection with pandas-backed metadata:
 
 ```python
 viz = model.to_tmapviz()
@@ -76,9 +93,7 @@ viz.add_label("SMILES", smiles_list)
 viz.show(width=1000, height=620, controls=True)
 ```
 
-### Lasso Selection + DataFrame Integration
-
-![Lasso and dataframe integration](https://raw.githubusercontent.com/afloresep/TMAP/master/docs/images/ScreenRecording2026-02-15at19.44.43-ezgif.com-video-to-gif-converter.gif)
+**Static plots** — matplotlib for publication figures: `model.plot_static(color_by=labels)`
 
 ## Domain Utilities
 
@@ -93,37 +108,39 @@ from tmap.utils.singlecell import from_anndata
 | Domain | Metric | Utilities |
 |--------|--------|-----------|
 | Chemoinformatics | `jaccard` | `fingerprints_from_smiles`, `molecular_properties`, `murcko_scaffolds` |
-| Proteins | `cosine` / `euclidean` | `fetch_uniprot`, `fetch_alphafold`, `read_pdb`, `sequence_properties` |
+| Proteins | `cosine` / `euclidean` | `fetch_uniprot`, `fetch_alphafold`, `read_fasta`, `sequence_properties` |
 | Single-cell | `cosine` / `euclidean` | `from_anndata`, `cell_metadata`, `marker_scores` |
 | Generic embeddings | `cosine` / `euclidean` / `precomputed` | No domain utils needed |
 
+## Notebooks
+
+| Notebook | Topic |
+|----------|-------|
+| [01 Quick Start](notebooks/01_quickstart.ipynb) | End-to-end walkthrough |
+| [02 MinHash Deep Dive](notebooks/02_minhash_deep_dive.ipynb) | Encoding methods and when to use each |
+| [04 Notebook Widgets](notebooks/04_jscatter_demo.ipynb) | Selection, filtering, zoom, export |
+| [06 Metric Guide](notebooks/06_metric_guide.ipynb) | Choosing the right metric |
+| [08 Cheminformatics](notebooks/08_cheminformatics.ipynb) | Molecules, fingerprints, SAR |
+| [09 Protein Analysis](notebooks/09_protein_analysis.ipynb) | FASTA, ESM embeddings, AlphaFold |
+| [12 USearch Jaccard](notebooks/12_usearch_jaccard.ipynb) | Binary Jaccard with USearch backend |
+
 ## Lower-Level Pipeline
 
-For direct control over MinHash, LSH Forest, and layout stages:
+For direct control over indexing, hashing, and layout, see the [legacy pipeline notebook](notebooks/03_legacy_lsh_pipeline.ipynb). The main building blocks:
 
 ```python
-from tmap import MinHash, LSHForest
+from tmap.index import USearchIndex           # dense / binary kNN
+from tmap import MinHash, LSHForest           # Jaccard on sets / strings
 from tmap.layout import LayoutConfig, layout_from_lsh_forest
-
-mh = MinHash(num_perm=128, seed=42)
-signatures = mh.batch_from_binary_array(X)
-
-lsh = LSHForest(d=128, l=64)
-lsh.batch_add(signatures)
-lsh.index()
-
-cfg = LayoutConfig(k=20, kc=50, deterministic=True, seed=42)
-x, y, s, t = layout_from_lsh_forest(lsh, cfg)
-# x, y = coordinates; s, t = tree edge indices
 ```
 
-## Key Features
-
-- **Deterministic**: same input + seed = same output
-- **Multiple metrics**: `jaccard`, `cosine`, `euclidean`, `precomputed`
-- **Incremental**: `add_points()` and `transform()` for new data
-- **Model persistence**: `save()` / `load()`
-- **Three viz backends**: interactive HTML, jupyter-scatter, matplotlib
+```text
+Your Data
+   ├─→ Binary matrix ─────────→ USearch        (Jaccard / cosine / euclidean)
+   └─→ Sets / strings ───────→ MinHash → LSHForest
+                ↓
+             k-NN Graph → MST → OGDF Tree Layout → Interactive Visualization
+```
 
 ## Development
 

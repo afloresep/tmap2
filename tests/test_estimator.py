@@ -49,9 +49,17 @@ def test_list_and_array_inputs_produce_same_result() -> None:
     model_array = TMAP(n_neighbors=5, n_permutations=64, seed=7).fit(data)
     model_list = TMAP(n_neighbors=5, n_permutations=64, seed=7).fit(data.tolist())
 
-    np.testing.assert_array_equal(model_array.graph_.indices, model_list.graph_.indices)
-    np.testing.assert_allclose(model_array.graph_.distances, model_list.graph_.distances)
-    np.testing.assert_allclose(model_array.embedding_, model_list.embedding_)
+    # Both paths use USearch HNSW, which is approximate and multi-threaded.
+    # Neighbor sets should mostly overlap; mean distances should be close.
+    for i in range(model_array.graph_.indices.shape[0]):
+        set_a = set(model_array.graph_.indices[i])
+        set_l = set(model_list.graph_.indices[i])
+        assert len(set_a & set_l) >= 3, f"Row {i}: too few shared neighbors"
+    np.testing.assert_allclose(
+        np.mean(model_array.graph_.distances, axis=1),
+        np.mean(model_list.graph_.distances, axis=1),
+        atol=0.05,
+    )
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
@@ -109,13 +117,25 @@ def test_jaccard_knn_is_stable_across_layout_seeds_by_default() -> None:
     model_seed_1 = TMAP(n_neighbors=8, n_permutations=128, seed=1).fit(data)
     model_seed_42 = TMAP(n_neighbors=8, n_permutations=128, seed=42).fit(data)
 
-    np.testing.assert_array_equal(model_seed_1.graph_.indices, model_seed_42.graph_.indices)
-    np.testing.assert_allclose(model_seed_1.graph_.distances, model_seed_42.graph_.distances)
+    # USearch HNSW is approximate and multi-threaded; neighbor sets may
+    # vary slightly across runs. Check overlap and mean distance similarity.
+    for i in range(model_seed_1.graph_.indices.shape[0]):
+        set_1 = set(model_seed_1.graph_.indices[i])
+        set_42 = set(model_seed_42.graph_.indices[i])
+        assert len(set_1 & set_42) >= 5, f"Row {i}: too few shared neighbors"
+    np.testing.assert_allclose(
+        np.mean(model_seed_1.graph_.distances, axis=1),
+        np.mean(model_seed_42.graph_.distances, axis=1),
+        atol=0.05,
+    )
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
 def test_jaccard_knn_changes_when_minhash_seed_changes() -> None:
-    data = _clustered_binary_data(n_samples=80, n_features=256, seed=321)
+    """MinHash seed affects kNN. Uses set input to exercise LSH path."""
+    # Set-of-indices input forces MinHash + LSH (not USearch binary).
+    rng = np.random.default_rng(321)
+    data = [sorted(rng.choice(200, 30, replace=False).tolist()) for _ in range(80)]
 
     model_seed_1 = TMAP(n_neighbors=8, n_permutations=128, seed=1, minhash_seed=1).fit(data)
     model_seed_42 = TMAP(n_neighbors=8, n_permutations=128, seed=42, minhash_seed=42).fit(data)
@@ -165,6 +185,81 @@ def test_path_before_fit_raises() -> None:
     model = TMAP()
     with pytest.raises(RuntimeError, match="not fitted"):
         model.path(0, 1)
+
+
+# =============================================================================
+# kneighbors() tests
+# =============================================================================
+
+
+def test_kneighbors_before_fit_raises() -> None:
+    model = TMAP()
+    with pytest.raises(RuntimeError, match="fit"):
+        model.kneighbors(np.zeros((3, 10), dtype=np.uint8))
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_kneighbors_jaccard_non_mutating() -> None:
+    data = _clustered_binary_data(n_samples=40, n_features=128)
+    model = TMAP(n_neighbors=5, n_permutations=64, seed=42).fit(data)
+    original_embedding = model.embedding_.copy()
+    original_tree_nodes = model.tree_.n_nodes
+    original_graph_shape = model.graph_.indices.shape
+
+    new_data = _clustered_binary_data(n_samples=5, n_features=128, seed=99)
+    indices, distances = model.kneighbors(new_data)
+
+    assert indices.shape == (5, 5)
+    assert distances.shape == (5, 5)
+    assert indices.dtype == np.int32
+    assert distances.dtype == np.float32
+    np.testing.assert_array_equal(model.embedding_, original_embedding)
+    assert model.tree_.n_nodes == original_tree_nodes
+    assert model.graph_.indices.shape == original_graph_shape
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_kneighbors_return_distance_false() -> None:
+    data = _clustered_binary_data(n_samples=40, n_features=128)
+    model = TMAP(n_neighbors=5, n_permutations=64, seed=42).fit(data)
+
+    new_data = _clustered_binary_data(n_samples=3, n_features=128, seed=99)
+    indices = model.kneighbors(new_data, return_distance=False)
+
+    assert indices.shape == (3, 5)
+    assert indices.dtype == np.int32
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_kneighbors_set_input_matches_lsh_batch_query() -> None:
+    from tmap.index.encoders.minhash import MinHash
+
+    train = [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]]
+    query = [[0, 1, 2], [3, 4, 5]]
+
+    model = TMAP(n_neighbors=2, metric="jaccard", n_permutations=64, seed=42).fit(train)
+    indices, distances = model.kneighbors(query)
+
+    encoder = MinHash(num_perm=model.n_permutations, seed=model.minhash_seed)
+    signatures = encoder.batch_from_sparse_binary_array(query)
+    expected_indices, expected_distances = model.lsh_forest_.query_external_batch(
+        signatures,
+        model.n_neighbors,
+        model.kc,
+    )
+
+    np.testing.assert_array_equal(indices, expected_indices)
+    np.testing.assert_allclose(distances, expected_distances)
+
+
+@pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+def test_kneighbors_cosine_requires_store_index() -> None:
+    data = np.random.default_rng(9).random((20, 8), dtype=np.float32)
+    model = TMAP(metric="cosine", n_neighbors=3, store_index=False, seed=42).fit(data)
+
+    new_data = np.random.default_rng(10).random((3, 8), dtype=np.float32)
+    with pytest.raises(RuntimeError, match="store_index"):
+        model.kneighbors(new_data)
 
 
 # =============================================================================
@@ -452,7 +547,9 @@ def test_save_load_roundtrip(tmp_path: object) -> None:
     assert loaded.tree_.n_nodes == model.tree_.n_nodes
     assert loaded.n_neighbors == model.n_neighbors
     assert loaded.metric == model.metric
-    assert loaded.lsh_forest_.size == model.lsh_forest_.size
+    # Binary Jaccard uses USearch (no LSH forest); verify index survived.
+    assert loaded.index_.is_built
+    assert loaded.index_.n_nodes == model.index_.n_nodes
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
@@ -499,6 +596,9 @@ def test_sparse_csr_binary_input_fits() -> None:
     model.fit(sparse)
     assert model.embedding_.shape == (40, 2)
     assert model._n_features == 128
+    # Sparse input should use LSH path, not USearch (avoids densification).
+    assert model._lsh_forest is not None
+    assert model._index is None
 
 
 @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")

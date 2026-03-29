@@ -168,37 +168,68 @@ class TMAP:
             self._lsh_forest = None
             self._n_features = None
         elif self.metric == "jaccard":
-            signatures, n_samples, n_features = self._encode_jaccard(X)
-            self._n_features = n_features
+            # Try the fast USearch path for binary data first. If coercion
+            # fails (non-0/1 values, ragged lists, etc.), fall through to
+            # the MinHash + LSH path which handles sets and strings.
+            _use_usearch = False
+            if self._is_binary_input(X):
+                try:
+                    binary = self._coerce_binary_matrix(X)
+                    _use_usearch = True
+                except (ValueError, TypeError):
+                    pass
 
-            lsh_l = _select_lsh_l(self.n_permutations, n_samples)
-            forest = LSHForest(d=self.n_permutations, l=lsh_l)
-            forest.batch_add(signatures)
-            del signatures  # forest has its own copy
-            forest.index()
-            knn = forest.get_knn_graph(k=self.n_neighbors, kc=self.kc)
-
-            # Check that LSH returned a usable graph.
-            n_missing = int(np.sum(knn.indices == -1))
-            n_total = knn.indices.size
-            if n_total > 0 and n_missing == n_total:
-                raise ValueError(
-                    "kNN graph is completely empty (all neighbors are -1). "
-                    "The data may be too sparse for LSH to find any neighbors. "
-                    "Try increasing kc, n_permutations, or check that input "
-                    "rows have sufficient overlap."
+            if _use_usearch:
+                n_samples, n_features = binary.shape
+                self._n_features = n_features
+                self._jaccard_mode = "binary"
+                if self.n_neighbors >= n_samples:
+                    raise ValueError(
+                        f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
+                    )
+                index = USearchIndex(
+                    seed=self.seed,
+                    expansion_search=512,
                 )
-            if n_total > 0 and n_missing / n_total > 0.9:
-                warnings.warn(
-                    f"kNN graph is very sparse: {n_missing}/{n_total} neighbor "
-                    f"slots are empty (-1). Embedding quality may be poor. "
-                    f"Consider increasing kc (currently {self.kc}) or "
-                    f"n_permutations (currently {self.n_permutations}).",
-                    UserWarning,
-                    stacklevel=2,
-                )
+                index.build_from_binary(binary)
+                knn = index.query_knn(k=self.n_neighbors)
+                self._index = index
+                self._lsh_forest = None
+            else:
+                # Sets/strings → MinHash + LSH Forest.
+                signatures, n_samples, n_features = self._encode_jaccard(X)
+                self._n_features = n_features
 
-            self._lsh_forest = forest
+                lsh_l = _select_lsh_l(self.n_permutations, n_samples)
+                forest = LSHForest(d=self.n_permutations, l=lsh_l)
+                forest.batch_add(signatures)
+                del signatures  # forest has its own copy
+                forest.index()
+                knn = forest.get_knn_graph(k=self.n_neighbors, kc=self.kc)
+
+                # Check that LSH returned a usable graph.
+                n_missing = int(np.sum(knn.indices == -1))
+                n_total = knn.indices.size
+                if n_total > 0 and n_missing == n_total:
+                    raise ValueError(
+                        "kNN graph is completely empty (all neighbors are -1). "
+                        "The data may be too sparse for LSH to find any "
+                        "neighbors. Try increasing kc, n_permutations, or "
+                        "check that input rows have sufficient overlap."
+                    )
+                if n_total > 0 and n_missing / n_total > 0.9:
+                    warnings.warn(
+                        f"kNN graph is very sparse: {n_missing}/{n_total} "
+                        f"neighbor slots are empty (-1). Embedding quality "
+                        f"may be poor. Consider increasing kc (currently "
+                        f"{self.kc}) or n_permutations (currently "
+                        f"{self.n_permutations}).",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+
+                self._lsh_forest = forest
+                self._index = None
         elif self.metric == "precomputed":
             distance_matrix = self._coerce_distance_matrix(X)
             knn = KNNGraph.from_distance_matrix(distance_matrix, k=self.n_neighbors)
@@ -255,6 +286,31 @@ class TMAP:
             self.tree_.edges[:, 1],
         )
 
+    def kneighbors(
+        self,
+        X: Any,
+        *,
+        return_distance: bool = True,
+    ) -> NDArray[np.int32] | tuple[NDArray[np.int32], NDArray[np.float32]]:
+        """Query nearest fitted neighbors for new points without mutating the model.
+
+        Args:
+            X: Query data in the same format accepted by ``transform()``.
+            return_distance: If True, return ``(indices, distances)``.
+                If False, return only ``indices``.
+
+        Returns:
+            Either ``indices`` with shape ``(m, k)`` or
+            ``(indices, distances)`` with shapes ``(m, k)``.
+        """
+        if self._embedding is None or self._graph is None:
+            raise RuntimeError("Estimator is not fitted. Call fit() first.")
+
+        indices, distances, _ = self._query_new_points(X, update_state=False)
+        if return_distance:
+            return indices, distances
+        return indices
+
     def transform(self, X: Any) -> NDArray[np.float32]:
         """Place new points on the existing map without changing the model.
 
@@ -309,21 +365,33 @@ class TMAP:
 
     @property
     def lsh_forest_(self) -> LSHForest:
-        """Return the fitted LSH forest for jaccard models."""
+        """Return the fitted LSH forest (sets/strings Jaccard only).
+
+        Only available when ``metric='jaccard'`` and the input was
+        variable-length (sets or strings). Binary matrix inputs use
+        USearch instead — access via ``index_``.
+        """
         if self._lsh_forest is None:
             raise RuntimeError(
                 "No fitted LSHForest available. "
-                "This estimator was not fitted with metric='jaccard'."
+                "Binary Jaccard uses USearch (see index_). "
+                "LSHForest is only used for set/string Jaccard inputs."
             )
         return self._lsh_forest
 
     @property
     def index_(self) -> Any:
-        """Return the stored ANN index for dense models."""
+        """Return the stored USearch index.
+
+        Available for ``metric='cosine'``/``'euclidean'`` (requires
+        ``store_index=True``) and ``metric='jaccard'`` with binary
+        matrix input (always stored).
+        """
         if self._index is None:
             raise RuntimeError(
-                "No index stored. Use store_index=True when constructing TMAP "
-                "to retain the ANN index after fit()."
+                "No index stored. For cosine/euclidean, use "
+                "store_index=True. For Jaccard with sets/strings, "
+                "use lsh_forest_ instead."
             )
         return self._index
 
@@ -607,38 +675,54 @@ class TMAP:
         needed for incremental insertion (currently only Jaccard LSH updates).
         """
         k = self.n_neighbors
+        _empty = (
+            np.empty((0, k), dtype=np.int32),
+            np.empty((0, k), dtype=np.float32),
+            0,
+        )
 
-        if self.metric == "jaccard":
-            signatures, m = self._encode_jaccard_queries(X, allow_original_mode=not update_state)
-            if m == 0:
-                return (
-                    np.empty((0, k), dtype=np.int32),
-                    np.empty((0, k), dtype=np.float32),
-                    0,
+        if self.metric == "jaccard" and self._index is not None:
+            # USearch binary Jaccard path (batch query).
+            binary = self._coerce_binary_matrix(X, min_samples=0)
+            if self._n_features is not None and binary.shape[1] != self._n_features:
+                raise ValueError(
+                    f"Feature dimension mismatch: fit() saw {self._n_features} "
+                    f"features, but received {binary.shape[1]}."
                 )
+            m = binary.shape[0]
+            if m == 0:
+                return _empty
+
+            all_indices, all_distances = self._index.query_batch(binary, k)
+
+            if update_state:
+                self._index.add(binary)
+
+            return all_indices, all_distances, m
+
+        elif self.metric == "jaccard":
+            # MinHash + LSH path (sets/strings).
+            signatures, m = self._encode_jaccard_queries(
+                X,
+                allow_original_mode=not update_state,
+            )
+            if m == 0:
+                return _empty
 
             forest = self._lsh_forest
             if forest is None:
                 raise RuntimeError(
-                    "No LSH Forest available. Cannot query new points without a "
-                    "jaccard-fitted estimator."
+                    "No LSH Forest available. Cannot query new points "
+                    "without a jaccard-fitted estimator."
                 )
 
-            all_indices = np.empty((m, k), dtype=np.int32)
-            all_distances = np.empty((m, k), dtype=np.float32)
-
-            for i in range(m):
-                results = forest.query_linear_scan(signatures[i], k, self.kc)
-                for j, (dist, idx) in enumerate(results[:k]):
-                    all_indices[i, j] = idx
-                    all_distances[i, j] = dist
-                # Pad with -1 if fewer than k results
-                for j in range(len(results), k):
-                    all_indices[i, j] = -1
-                    all_distances[i, j] = np.inf
+            all_indices, all_distances = forest.query_external_batch(
+                signatures,
+                k,
+                self.kc,
+            )
 
             if update_state:
-                # Update LSH Forest so future add_points sees these points.
                 forest.batch_add(signatures)
                 forest.index()
 
@@ -648,10 +732,10 @@ class TMAP:
             if self._index is None:
                 raise RuntimeError(
                     "No ANN index stored. Reconstruct with store_index=True "
-                    f"to use transform() or add_points() with metric={self.metric!r}."
+                    f"to use transform() or add_points() with "
+                    f"metric={self.metric!r}."
                 )
             X_dense = self._coerce_dense_matrix(X, min_samples=0)
-            # Check that the new data has the same number of features as fit().
             if self._n_features is not None and X_dense.shape[1] != self._n_features:
                 raise ValueError(
                     f"Feature dimension mismatch: fit() saw {self._n_features} "
@@ -659,23 +743,9 @@ class TMAP:
                 )
             m = X_dense.shape[0]
             if m == 0:
-                return (
-                    np.empty((0, k), dtype=np.int32),
-                    np.empty((0, k), dtype=np.float32),
-                    0,
-                )
+                return _empty
 
-            all_indices = np.empty((m, k), dtype=np.int32)
-            all_distances = np.empty((m, k), dtype=np.float32)
-
-            for i in range(m):
-                idx_arr, dist_arr = self._index.query_point(X_dense[i], k)
-                n_returned = min(len(idx_arr), k)
-                all_indices[i, :n_returned] = idx_arr[:n_returned]
-                all_distances[i, :n_returned] = dist_arr[:n_returned]
-                for j in range(n_returned, k):
-                    all_indices[i, j] = -1
-                    all_distances[i, j] = np.inf
+            all_indices, all_distances = self._index.query_batch(X_dense, k)
 
             if update_state:
                 self._index.add(X_dense)
@@ -1069,3 +1139,33 @@ class TMAP:
         if not np.all(np.isfinite(arr)):
             raise ValueError("Input matrix must contain only finite values.")
         return arr
+
+    def _is_binary_input(self, X: Any) -> bool:
+        """Check whether X looks like a dense binary matrix (not sets/strings).
+
+        Sparse matrices return False — they go through the MinHash + LSH path
+        which handles sparse data without densifying.
+        """
+        if X is None:
+            return False
+        # Sparse matrices should NOT be densified; keep them on the LSH path.
+        if hasattr(X, "tocsr") or hasattr(X, "toarray"):
+            return False
+        if hasattr(X, "values") and not isinstance(X, np.ndarray):
+            return True  # DataFrame
+        if isinstance(X, np.ndarray):
+            return True
+        if not isinstance(X, (list, tuple)) or len(X) == 0:
+            return False
+        # List input: try to detect if it's a rectangular numeric array
+        # of 0/1 values (binary matrix as list-of-lists) vs sets/strings.
+        first = X[0]
+        if isinstance(first, (str, set, frozenset)):
+            return False
+        try:
+            arr = np.asarray(X)
+            if arr.ndim != 2 or not np.issubdtype(arr.dtype, np.number):
+                return False
+            return bool(np.all((arr == 0) | (arr == 1)))
+        except (ValueError, TypeError):
+            return False
