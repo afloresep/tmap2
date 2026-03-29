@@ -171,9 +171,7 @@ class USearchIndex:
         if matrix.shape[0] < 2:
             raise ValueError("Need at least 2 vectors to build index")
         if not np.all((matrix == 0) | (matrix == 1)):
-            raise ValueError(
-                "Binary matrix must contain only 0/1 values."
-            )
+            raise ValueError("Binary matrix must contain only 0/1 values.")
 
         from usearch.index import Index, MetricKind
 
@@ -226,9 +224,7 @@ class USearchIndex:
 
         if self._is_binary:
             if vectors.shape[1] != self._ndim:
-                raise ValueError(
-                    f"vectors must have {self._ndim} features, got {vectors.shape[1]}"
-                )
+                raise ValueError(f"vectors must have {self._ndim} features, got {vectors.shape[1]}")
             if vectors.shape[0] == 0:
                 return np.empty(0, dtype=np.int64)
             if not np.all((vectors == 0) | (vectors == 1)):
@@ -245,9 +241,7 @@ class USearchIndex:
             self._usearch_index.add(keys, packed)
 
             if self._binary_vectors is not None:
-                self._binary_vectors = np.concatenate(
-                    [self._binary_vectors, packed], axis=0
-                )
+                self._binary_vectors = np.concatenate([self._binary_vectors, packed], axis=0)
 
             self._n_nodes += packed.shape[0]
             return keys
@@ -255,9 +249,7 @@ class USearchIndex:
         # Dense float path
         vectors = np.ascontiguousarray(vectors, dtype=np.float32)
         if vectors.shape[1] != self._ndim:
-            raise ValueError(
-                f"vectors must have {self._ndim} features, got {vectors.shape[1]}"
-            )
+            raise ValueError(f"vectors must have {self._ndim} features, got {vectors.shape[1]}")
         if vectors.shape[0] == 0:
             return np.empty(0, dtype=np.int64)
 
@@ -428,9 +420,7 @@ class USearchIndex:
             vectors_path = cls._vectors_path(path)
             if not vectors_path.exists():
                 raise FileNotFoundError(f"USearch vectors file not found: {vectors_path}")
-            instance._vectors = np.ascontiguousarray(
-                np.load(vectors_path, allow_pickle=False)
-            )
+            instance._vectors = np.ascontiguousarray(np.load(vectors_path, allow_pickle=False))
         instance._n_nodes = meta.get("n_nodes", 0)
         instance._ndim = meta.get("ndim", 0)
         instance._metric = meta.get("metric")
@@ -479,8 +469,7 @@ class USearchIndex:
             actual = data.shape[-1] if data.ndim >= 1 else 0
             if actual != expected:
                 raise ValueError(
-                    f"Query has {actual} features but index was built "
-                    f"with {expected}."
+                    f"Query has {actual} features but index was built with {expected}."
                 )
             if not np.all((data == 0) | (data == 1)):
                 raise ValueError("Query data must contain only 0/1 values.")

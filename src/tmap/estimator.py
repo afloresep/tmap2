@@ -185,8 +185,7 @@ class TMAP:
                 self._jaccard_mode = "binary"
                 if self.n_neighbors >= n_samples:
                     raise ValueError(
-                        f"n_neighbors={self.n_neighbors} must be < "
-                        f"n_samples={n_samples}"
+                        f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
                     )
                 index = USearchIndex(
                     seed=self.seed,
@@ -704,7 +703,8 @@ class TMAP:
         elif self.metric == "jaccard":
             # MinHash + LSH path (sets/strings).
             signatures, m = self._encode_jaccard_queries(
-                X, allow_original_mode=not update_state,
+                X,
+                allow_original_mode=not update_state,
             )
             if m == 0:
                 return _empty
