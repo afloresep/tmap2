@@ -11,10 +11,6 @@ Tree-based visualization for high-dimensional data. Organizes similar items into
     <td><img src="docs/images/enamine.png" alt="Interactive HTML export" width="100%"/></td>
     <td><img src="docs/images/protein-shot.png" alt="AlphaFold protein clusters" width="100%"/></td>
   </tr>
-  <tr>
-    <td><img src="docs/images/filter+select.gif" alt="Filtering demo" width="100%"/></td>
-    <td><img src="docs/images/notebook-selection.gif" alt="Notebook widget" width="100%"/></td>
-  </tr>
 </table>
 
 ## Why Trees?
