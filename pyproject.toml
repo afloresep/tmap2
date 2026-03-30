@@ -50,9 +50,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/afloresep/TMAP"
-Documentation = "https://github.com/afloresep/TMAP#readme"
-Repository = "https://github.com/afloresep/TMAP"
+Homepage = "https://github.com/afloresep/tmap2"
+Documentation = "https://github.com/afloresep/tmap2#readme"
+Repository = "https://github.com/afloresep/tmap2"
 
 [tool.scikit-build]
 wheel.packages = ["src/tmap"]

@@ -1,4 +1,4 @@
-[![Tests](https://github.com/afloresep/TMAP/actions/workflows/tests.yml/badge.svg)](https://github.com/afloresep/TMAP/actions/workflows/tests.yml)
+[![Tests](https://github.com/afloresep/tmap2/actions/workflows/tests.yml/badge.svg)](https://github.com/afloresep/tmap2/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/tmap2)](https://pypi.org/project/tmap2/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
@@ -26,9 +26,9 @@ For example, in a TMAP of pet breed images, following the branch from terriers t
 Because the layout is a tree, you get operations that point clouds can't support:
 
 ```python
-path = model.path(idx_a, idx_b)         # nodes along the tree path
-d = model.distance(idx_a, idx_b)        # sum of edge weights along the path
-pseudotime = model.distances_from(idx)  # tree distance from one point to all others
+path = model.path(idx_a, idx_b) # nodes along the tree path
+d = model.distance(idx_a, idx_b # sum of edge weights along the path
+pseudotime = model.distances_from(idx) # tree distance from one point to all others
 ```
 
 ## Installation
@@ -40,7 +40,7 @@ pip install tmap2
 Optional extras:
 
 ```bash
-pip install rdkit          # chemistry helpers (fingerprints_from_smiles, molecular_properties)
+pip install rdkit # chemistry helpers (fingerprints_from_smiles, molecular_properties)
 pip install jupyter-scatter # notebook interactive widgets
 ```
 
@@ -81,9 +81,9 @@ model.plot(color_by="label", data=df, tooltip_properties=["name", "score"])
 
 ## Visualization
 
-**Interactive HTML** — lasso selection, light/dark theme, filter and search panels, pinned metadata cards, binary mode for large datasets.
+**Interactive HTML**: lasso selection, light/dark theme, filter and search panels, pinned metadata cards, binary mode for large datasets.
 
-**Notebook widgets** — color switching, categorical filtering, and lasso selection with pandas-backed metadata:
+**Notebook widgets**:  color switching, categorical filtering, and lasso selection with pandas-backed metadata:
 
 ```python
 viz = model.to_tmapviz()
@@ -145,8 +145,8 @@ Your Data
 ## Development
 
 ```bash
-git clone https://github.com/afloresep/TMAP.git
-cd TMAP
+git clone https://github.com/afloresep/tmap2.git
+cd tmap2
 pip install ".[dev]"
 pytest -v
 ```
