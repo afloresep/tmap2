@@ -1,7 +1,8 @@
 """Single-cell RNA-seq utilities for TMAP.
 
 Bridge between the scverse/AnnData ecosystem and TMAP. Provides helpers
-to extract matrices, cell metadata, and gene scores from AnnData objects.
+to extract matrices, subset AnnData objects, sample observations, parse
+observation columns, and compute lightweight marker scores.
 
 Requires ``anndata`` (install via ``pip install anndata``).
 """
@@ -29,6 +30,65 @@ def _to_dense(X: np.ndarray | sparse.spmatrix) -> NDArray[np.float32]:
     return np.asarray(X, dtype=np.float32)
 
 
+def _group_quotas(counts: NDArray[np.int64], max_items: int, mode: str) -> NDArray[np.int64]:
+    """Allocate sample sizes across groups without replacement."""
+    if mode == "proportional":
+        quotas = np.floor(max_items * counts / counts.sum()).astype(np.int64)
+        quotas = np.minimum(np.maximum(quotas, 1), counts)
+
+        while quotas.sum() > max_items:
+            idx = int(np.argmax(quotas))
+            if quotas[idx] > 1:
+                quotas[idx] -= 1
+        while quotas.sum() < max_items:
+            remaining = counts - quotas
+            idx = int(np.argmax(remaining))
+            if remaining[idx] == 0:
+                break
+            quotas[idx] += 1
+        return quotas
+
+    if mode == "balanced":
+        quotas = np.zeros_like(counts, dtype=np.int64)
+        remaining = int(max_items)
+        active = np.arange(len(counts), dtype=np.int64)
+
+        while remaining > 0 and len(active) > 0:
+            share = max(1, remaining // len(active))
+            new_active: list[int] = []
+            changed = False
+            for idx in active:
+                capacity = int(counts[idx] - quotas[idx])
+                if capacity <= 0:
+                    continue
+                take = min(capacity, share)
+                if take > 0:
+                    quotas[idx] += take
+                    remaining -= take
+                    changed = True
+                if quotas[idx] < counts[idx]:
+                    new_active.append(int(idx))
+                if remaining == 0:
+                    break
+            if not changed:
+                break
+            active = np.asarray(new_active, dtype=np.int64)
+
+        if remaining > 0:
+            remaining_cap = counts - quotas
+            for idx in np.argsort(-remaining_cap):
+                take = min(int(remaining_cap[idx]), remaining)
+                if take <= 0:
+                    continue
+                quotas[idx] += take
+                remaining -= take
+                if remaining == 0:
+                    break
+        return quotas
+
+    raise ValueError(f"Unknown sampling mode: {mode!r}")
+
+
 def from_anndata(
     adata: AnnData,
     use_rep: str | None = "X_pca",
@@ -53,14 +113,18 @@ def from_anndata(
         Layer in ``adata.layers`` to use instead of ``adata.X``.
         Only used when *use_rep* is ``None`` or missing.
     n_top_genes : int or None
-        If using ``adata.X`` / a layer, subset to the top *n* highly
-        variable genes (requires ``adata.var['highly_variable']``).
-        Ignored when using an obsm representation.
+        If using ``adata.X`` / a layer and ``adata.var['highly_variable']``
+        exists, use the marked highly variable genes when at least
+        *n_top_genes* are available. Ignored when using an obsm
+        representation.
 
     Returns
     -------
     ndarray of shape ``(n_cells, n_features)``, dtype ``float32``
-        Ready to pass to ``TMAP(metric='cosine').fit(X)``.
+        Ready to pass to ``TMAP(metric='cosine').fit(X)``. Expression
+        matrices and layers are densified before return, so for large
+        sparse inputs it is better to subset first or use a precomputed
+        obsm representation.
     """
     # Try obsm representation first
     if use_rep is not None and use_rep in adata.obsm:
@@ -89,7 +153,11 @@ def from_anndata(
         n_hvg = int(hvg_mask.sum())
         if n_hvg >= n_top_genes:
             raw = raw[:, hvg_mask]
-            logger.info("from_anndata: subset to %d HVGs", n_hvg)
+            logger.info(
+                "from_anndata: subset to %d highly variable genes (requested at least %d)",
+                n_hvg,
+                n_top_genes,
+            )
         else:
             logger.info(
                 "from_anndata: only %d HVGs found (requested %d), using all",
@@ -100,6 +168,128 @@ def from_anndata(
     X = _to_dense(raw)
     logger.info("from_anndata: using expression matrix shape %s", X.shape)
     return X
+
+
+def subset_anndata(
+    adata: AnnData,
+    *,
+    obs_mask: Sequence[bool] | NDArray[np.bool_] | None = None,
+    obs_indices: Sequence[int] | NDArray[np.int64] | None = None,
+    copy: bool = True,
+) -> AnnData:
+    """Subset observations in one step.
+
+    This is mainly useful for backed ``AnnData`` objects, where repeated
+    slicing into views is not allowed. Backed inputs are materialized with
+    ``to_memory()`` after subsetting.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Annotated data matrix.
+    obs_mask : sequence[bool] or None
+        Boolean mask over observations.
+    obs_indices : sequence[int] or None
+        Explicit observation indices.
+    copy : bool
+        Whether to return a copy for in-memory AnnData inputs.
+
+    Returns
+    -------
+    AnnData
+        Subsetted object. Backed inputs return an in-memory ``AnnData``.
+    """
+    if obs_mask is not None and obs_indices is not None:
+        raise ValueError("Provide either obs_mask or obs_indices, not both.")
+
+    if obs_mask is None and obs_indices is None:
+        if getattr(adata, "isbacked", False):
+            return adata.to_memory()
+        return adata.copy() if copy else adata
+
+    if obs_mask is not None:
+        mask = np.asarray(obs_mask, dtype=bool)
+        if mask.ndim != 1 or len(mask) != adata.n_obs:
+            raise ValueError("obs_mask must be a 1D boolean array of length adata.n_obs.")
+        idx = np.flatnonzero(mask)
+    else:
+        idx = np.asarray(obs_indices, dtype=np.int64)
+        if idx.ndim != 1:
+            raise ValueError("obs_indices must be a 1D array.")
+
+    subset = adata[np.sort(idx)]
+    if getattr(adata, "isbacked", False):
+        return subset.to_memory()
+    return subset.copy() if copy else subset
+
+
+def sample_obs_indices(
+    groups: Sequence[object] | NDArray,
+    *,
+    max_items: int,
+    seed: int,
+    mode: str = "proportional",
+) -> NDArray[np.int64]:
+    """Sample observation indices from groups without replacement.
+
+    Parameters
+    ----------
+    groups : sequence
+        Group label per observation.
+    max_items : int
+        Maximum number of observations to keep.
+    seed : int
+        Random seed for group-wise sampling.
+    mode : {"proportional", "balanced"}
+        ``"proportional"`` preserves group frequencies as much as
+        possible. ``"balanced"`` spreads observations more evenly across
+        groups, capped by the number available in each group.
+
+    Returns
+    -------
+    ndarray of shape ``(n_kept,)``, dtype ``int64``
+        Sorted indices into the original array.
+    """
+    groups_arr = np.asarray(groups).astype(str)
+    if groups_arr.ndim != 1:
+        raise ValueError("groups must be a 1D array.")
+    if max_items <= 0:
+        raise ValueError("max_items must be positive.")
+    if len(groups_arr) <= max_items:
+        return np.arange(len(groups_arr), dtype=np.int64)
+
+    unique, counts = np.unique(groups_arr, return_counts=True)
+    quotas = _group_quotas(counts.astype(np.int64), max_items, mode)
+    rng = np.random.default_rng(seed)
+
+    keep_parts: list[np.ndarray] = []
+    for group, quota in zip(unique, quotas, strict=True):
+        idx = np.where(groups_arr == group)[0]
+        chosen = np.sort(rng.choice(idx, size=int(quota), replace=False))
+        keep_parts.append(chosen)
+
+    return np.sort(np.concatenate(keep_parts))
+
+
+def obs_to_numeric(values: Sequence[object] | NDArray) -> NDArray[np.float32] | None:
+    """Convert an observation-like array to numeric values when possible."""
+    arr = np.asarray(values)
+
+    if np.issubdtype(arr.dtype, np.number):
+        return arr.astype(np.float32, copy=False)
+
+    out = np.full(arr.shape[0], np.nan, dtype=np.float32)
+    for i, value in enumerate(arr.astype(str)):
+        digits = "".join(ch for ch in value if ch.isdigit() or ch in ".-")
+        if digits and digits not in {"-", ".", "-."}:
+            try:
+                out[i] = float(digits)
+            except ValueError:
+                continue
+
+    if np.isnan(out).all():
+        return None
+    return out
 
 
 def cell_metadata(
@@ -171,12 +361,13 @@ def marker_scores(
     ndarray of shape ``(n_cells,)``, dtype ``float64``
         Mean expression across the gene set for each cell.
     """
-    var_names = list(adata.var_names)
+    var_index = {str(name): i for i, name in enumerate(adata.var_names)}
     indices = []
     missing = []
     for g in gene_list:
-        if g in var_names:
-            indices.append(var_names.index(g))
+        idx = var_index.get(g)
+        if idx is not None:
+            indices.append(idx)
         else:
             missing.append(g)
 
