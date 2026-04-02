@@ -21,6 +21,13 @@
 |---------|-------------|--------------|
 | [`afdb_clusters_tmap.py`](afdb_clusters_tmap.py) | AlphaFold DB: 2.3M structural clusters from Foldseek | Precomputed `KNNGraph`, taxonomy resolution, `node_diversity`, large-scale pipeline |
 
+## Single-cell
+
+| Example | Description | Key features |
+|---------|-------------|--------------|
+| [`singlecell_trajectory_tmap.py`](singlecell_trajectory_tmap.py) | Murine lung regeneration trajectory from an official AnnData `.h5ad` | `from_anndata`, `cell_metadata`, `marker_scores`, pseudotime via `distances_from()` |
+| [`singlecell_reprogramming_tmap.py`](singlecell_reprogramming_tmap.py) | Morris fibroblast-to-iEP direct reprogramming trajectory from an official AnnData `.h5ad` | Backed AnnData filtering, explicit root/target anchors, reference pseudotime comparison |
+
 ## Quick start
 
 The fastest way to try TMAP:

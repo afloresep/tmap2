@@ -33,7 +33,7 @@ def main() -> None:
     cfg = LayoutConfig()
     cfg.k = 20
     cfg.kc = 200
-    cfg.node_size = 1/30
+    cfg.node_size = 1 / 30
     cfg.mmm_repeats = 2
     cfg.sl_extra_scaling_steps = 10
     cfg.sl_scaling_type = ScalingType.RelativeToDrawing
@@ -44,11 +44,7 @@ def main() -> None:
     print("\nFitting TMAP (metric='cosine', n_neighbors=20)...")
     t0 = time.perf_counter()
     model = TMAP(
-        metric="cosine",
-        n_neighbors=20,
-        seed=42,
-        layout_iterations=1000,
-        layout_config=cfg
+        metric="cosine", n_neighbors=20, seed=42, layout_iterations=1000, layout_config=cfg
     ).fit(X)
     elapsed = time.perf_counter() - t0
     print(f"  Done in {elapsed:.1f}s")

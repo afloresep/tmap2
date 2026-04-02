@@ -62,12 +62,14 @@ def _extract_embeddings(
     if cache_emb.exists() and cache_lbl.exists():
         return np.load(cache_emb), np.load(cache_lbl)
 
-    transform = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    )
     dataset = datasets.OxfordIIITPet(
         root=str(Path(__file__).parent / "data" / "oxford-iiit-pet"),
         split=split,
@@ -76,15 +78,20 @@ def _extract_embeddings(
         transform=transform,
     )
     loader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, num_workers=2,
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=2,
     )
 
     model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
     model.eval().to(device)
     # Hook avgpool output (2048-d)
     features: list[torch.Tensor] = []
+
     def _hook(_mod: nn.Module, _inp: tuple, out: torch.Tensor) -> None:
         features.append(out.squeeze(-1).squeeze(-1).cpu())
+
     model.avgpool.register_forward_hook(_hook)
 
     all_labels: list[int] = []
@@ -219,16 +226,18 @@ def _find_best_failure_paths(
             continue
 
         conf_along = path_properties(tree, idx, best_target, confidences)
-        paths.append({
-            "from": idx,
-            "to": best_target,
-            "true_class": class_names[true_cls],
-            "pred_class": class_names[preds[idx]],
-            "path_length": int(best_len),
-            "conf_start": float(confidences[idx]),
-            "conf_end": float(confidences[best_target]),
-            "conf_min": float(conf_along.min()),
-        })
+        paths.append(
+            {
+                "from": idx,
+                "to": best_target,
+                "true_class": class_names[true_cls],
+                "pred_class": class_names[preds[idx]],
+                "path_length": int(best_len),
+                "conf_start": float(confidences[idx]),
+                "conf_end": float(confidences[best_target]),
+                "conf_min": float(conf_along.min()),
+            }
+        )
 
     paths.sort(key=lambda p: -p["path_length"])
     return paths[:top_k]
@@ -247,13 +256,15 @@ def _analyze_tree(
     w = lines.append
 
     acc = (preds == true_labels).mean()
-    w(f"Oxford-IIIT Pets Classifier Audit  "
-      f"({len(true_labels)} test images, {len(class_names)} breeds)")
+    w(
+        f"Oxford-IIIT Pets Classifier Audit  "
+        f"({len(true_labels)} test images, {len(class_names)} breeds)"
+    )
     w(f"Overall accuracy: {acc:.1%}\n")
 
     # 1. Boundary edges
     be = boundary_edges(tree, preds)
-    w(f"1. Boundary edges: {len(be)} / {len(tree.edges)} edges ({len(be)/len(tree.edges):.1%})")
+    w(f"1. Boundary edges: {len(be)} / {len(tree.edges)} edges ({len(be) / len(tree.edges):.1%})")
     w("   Edges where neighboring points have different predicted breeds.\n")
 
     # 2. Confusion matrix
@@ -267,8 +278,10 @@ def _analyze_tree(
         if pair_counts[i] == 0:
             break
         r, c = upper[0][i], upper[1][i]
-        w(f"   {class_names[classes[r]]:>30s}  <->  "
-          f"{class_names[classes[c]]:<30s}  ({pair_counts[i]} edges)")
+        w(
+            f"   {class_names[classes[r]]:>30s}  <->  "
+            f"{class_names[classes[c]]:<30s}  ({pair_counts[i]} edges)"
+        )
     w("")
 
     # 3. Confidence gradients
@@ -288,10 +301,14 @@ def _analyze_tree(
     paths = _find_best_failure_paths(tree, true_labels, preds, confidences, class_names)
     w(f"5. Top failure paths ({len(paths)} shown):")
     for p in paths:
-        w(f"   Node {p['from']} ({p['true_class']}, "
-          f"predicted {p['pred_class']}, conf={p['conf_start']:.2f})")
-        w(f"     -> Node {p['to']} (correct, conf={p['conf_end']:.2f})  "
-          f"path_len={p['path_length']}  min_conf={p['conf_min']:.2f}")
+        w(
+            f"   Node {p['from']} ({p['true_class']}, "
+            f"predicted {p['pred_class']}, conf={p['conf_start']:.2f})"
+        )
+        w(
+            f"     -> Node {p['to']} (correct, conf={p['conf_end']:.2f})  "
+            f"path_len={p['path_length']}  min_conf={p['conf_min']:.2f}"
+        )
     w("")
 
     # 6. Mislabel candidates
@@ -302,8 +319,10 @@ def _analyze_tree(
         top_wrong = wrong[np.argsort(wrong_conf)[::-1][:10]]
         w("6. Mislabel candidates (high-confidence misclassifications):")
         for idx in top_wrong:
-            w(f"   Index {idx:5d}  true={class_names[true_labels[idx]]:>25s}  "
-              f"pred={class_names[preds[idx]]:<25s}  conf={confidences[idx]:.3f}")
+            w(
+                f"   Index {idx:5d}  true={class_names[true_labels[idx]]:>25s}  "
+                f"pred={class_names[preds[idx]]:<25s}  conf={confidences[idx]:.3f}"
+            )
     else:
         w("6. No misclassifications found.")
     w("")
@@ -359,7 +378,9 @@ def main() -> None:
     # Class names
     ds = datasets.OxfordIIITPet(
         root=str(Path(__file__).parent / "data" / "oxford-iiit-pet"),
-        split="test", target_types="category", download=False,
+        split="test",
+        target_types="category",
+        download=False,
     )
     class_names = [name.replace("_", " ").title() for name in ds.classes]
     n_classes = len(class_names)
@@ -368,7 +389,13 @@ def main() -> None:
     # Train linear probe
     print(f"Training linear probe ({args.epochs} epochs)...")
     preds, confidences = _train_probe(
-        train_emb, train_labels, test_emb, test_labels, n_classes, args.epochs, device,
+        train_emb,
+        train_labels,
+        test_emb,
+        test_labels,
+        n_classes,
+        args.epochs,
+        device,
     )
     acc = (preds == test_labels).mean()
     print(f"Probe accuracy: {acc:.1%}")
@@ -391,7 +418,13 @@ def main() -> None:
     # Visualization
     print("Building visualization...")
     viz = _create_visualization(
-        model, class_names, test_labels, preds, confidences, purity, image_uris,
+        model,
+        class_names,
+        test_labels,
+        preds,
+        confidences,
+        purity,
+        image_uris,
     )
     html_path = viz.write_html(OUTPUT_DIR / "pets_tmap")
     print(f"HTML saved to {html_path}")
