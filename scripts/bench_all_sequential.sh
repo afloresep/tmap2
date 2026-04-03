@@ -7,12 +7,16 @@
 #   bash scripts/bench_all_sequential.sh frontier  # frontier sweep only
 #   bash scripts/bench_all_sequential.sh usearch   # USearch scaling only
 #   bash scripts/bench_all_sequential.sh lsh       # LSH scaling only
+#   bash scripts/bench_all_sequential.sh addpoints # add_points vs refit
+#   bash scripts/bench_all_sequential.sh analysis  # analysis quality
 #
-# Estimated times (Apple M-series, 32 GB):
-#   frontier:  ~30 min  (param sweep on ≤200K)
-#   usearch:   ~40 min  (Jaccard to 5M + cosine to 1M)
-#   lsh:       ~30 min  (TMAP2 Numba + TMAP1 C++ to 1M)
-#   total:     ~1.5 hr
+# Estimated times (Ryzen 5, 64 GB):
+#   frontier:   ~45 min  (param sweep on ≤200K)
+#   usearch:    ~2.5 hr  (Jaccard to 5M + cosine to 5M)
+#   lsh:        ~15 min  (TMAP2 Numba + TMAP1 C++ to 1M)
+#   addpoints:  ~30 min  (incremental vs refit)
+#   analysis:   ~10 min  (tree quality metrics)
+#   total:      ~4 hr
 #
 # Results: benchmarks/results_paper/
 
@@ -54,9 +58,9 @@ if [[ "$SUITE" == "all" || "$SUITE" == "usearch" ]]; then
         --sizes 10000,100000,500000,1000000,2000000,5000000 \
         --ea 256 --es 200
 
-    run_step "USearch scaling: Cosine to 1M (ea=256, es=200)" \
+    run_step "USearch scaling: Cosine to 5M (ea=256, es=200)" \
         scripts/bench_index_scale.py usearch --metric cosine \
-        --sizes 10000,100000,500000,1000000 \
+        --sizes 10000,100000,500000,1000000,2000000,5000000 \
         --ea 256 --es 200
 fi
 
@@ -66,6 +70,24 @@ if [[ "$SUITE" == "all" || "$SUITE" == "lsh" ]]; then
         scripts/bench_index_scale.py lsh \
         --sizes 10000,50000,100000,200000,500000,1000000 \
         --n-perm 512
+fi
+
+# 4. add_points vs full refit
+if [[ "$SUITE" == "all" || "$SUITE" == "addpoints" ]]; then
+    run_step "add_points vs refit: Jaccard (ChEMBL, base=100K)" \
+        scripts/bench_addpoints.py --metric jaccard \
+        --base-n 100000 --insert-sizes 1000,5000,10000,50000
+
+    run_step "add_points vs refit: Cosine (synthetic, base=50K)" \
+        scripts/bench_addpoints.py --metric cosine \
+        --base-n 50000 --insert-sizes 1000,5000,10000
+fi
+
+# 5. Analysis quality (tree-specific metrics on labeled data)
+if [[ "$SUITE" == "all" || "$SUITE" == "analysis" ]]; then
+    run_step "Analysis quality: MNIST + ChEMBL" \
+        scripts/bench_analysis_quality.py \
+        --n-mnist 50000 --n-chembl 50000
 fi
 
 echo ""
