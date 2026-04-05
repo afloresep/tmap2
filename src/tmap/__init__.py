@@ -41,9 +41,16 @@ if TYPE_CHECKING:
         read_protein_csv,
         sequence_properties,
     )
-    from tmap.utils.singlecell import cell_metadata, from_anndata, marker_scores
+    from tmap.utils.singlecell import (
+        cell_metadata,
+        from_anndata,
+        marker_scores,
+        obs_to_numeric,
+        sample_obs_indices,
+        subset_anndata,
+    )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "__version__",
@@ -59,6 +66,7 @@ __all__ = [
     "from_anndata",
     "marker_scores",
     "molecular_properties",
+    "obs_to_numeric",
     "murcko_scaffolds",
     "reaction_properties",
     "parse_alignment",
@@ -70,6 +78,8 @@ __all__ = [
     "read_pdb",
     "read_pdb_dir",
     "read_protein_csv",
+    "sample_obs_indices",
+    "subset_anndata",
 ]
 
 _LAZY_IMPORTS: dict[str, str] = {
@@ -84,6 +94,9 @@ _LAZY_IMPORTS: dict[str, str] = {
     "cell_metadata": "tmap.utils.singlecell",
     "from_anndata": "tmap.utils.singlecell",
     "marker_scores": "tmap.utils.singlecell",
+    "obs_to_numeric": "tmap.utils.singlecell",
+    "sample_obs_indices": "tmap.utils.singlecell",
+    "subset_anndata": "tmap.utils.singlecell",
     "molecular_properties": "tmap.utils.chemistry",
     "murcko_scaffolds": "tmap.utils.chemistry",
     "reaction_properties": "tmap.utils.chemistry",

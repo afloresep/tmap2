@@ -118,10 +118,15 @@ from tmap.utils.singlecell import from_anndata
 |----------|-------|
 | [01 Quick Start](notebooks/01_quickstart.ipynb) | End-to-end walkthrough |
 | [02 MinHash Deep Dive](notebooks/02_minhash_deep_dive.ipynb) | Encoding methods and when to use each |
+| [03 Legacy LSH Pipeline](notebooks/03_legacy_lsh_pipeline.ipynb) | Lower-level MinHash + LSHForest + layout workflow |
 | [04 Notebook Widgets](notebooks/04_jscatter_demo.ipynb) | Selection, filtering, zoom, export |
+| [05 Single-Cell](notebooks/05_single_cell.ipynb) | RNA-seq with PBMC 3k, pseudotime, UMAP comparison |
 | [06 Metric Guide](notebooks/06_metric_guide.ipynb) | Choosing the right metric |
+| [07 FAQ](notebooks/07_faq.ipynb) | Troubleshooting and common questions |
 | [08 Cheminformatics](notebooks/08_cheminformatics.ipynb) | Molecules, fingerprints, SAR |
 | [09 Protein Analysis](notebooks/09_protein_analysis.ipynb) | FASTA, ESM embeddings, AlphaFold |
+| [11 Card Configuration](notebooks/11_card_configuration.ipynb) | Pinned card layout, fields, and links |
+| [11 Default Params Benchmark](notebooks/11_default_params_benchmark.ipynb) | Defaults across dataset sizes and types |
 | [12 USearch Jaccard](notebooks/12_usearch_jaccard.ipynb) | Binary Jaccard with USearch backend |
 
 ## Lower-Level Pipeline
