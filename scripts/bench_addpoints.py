@@ -113,7 +113,12 @@ def bench_metric(
     # Fit base model
     print(f"\n  Fitting base model (n={base_n:,})...", end=" ", flush=True)
     t0 = time.perf_counter()
-    base_model = TMAP(n_neighbors=K, metric=metric, seed=SEED)
+    # store_index=True required for add_points with dense metrics
+    needs_index = metric in ("cosine", "euclidean")
+    base_model = TMAP(
+        n_neighbors=K, metric=metric, seed=SEED,
+        store_index=needs_index,
+    )
     base_model.fit(X_base)
     base_fit_s = time.perf_counter() - t0
     base_emb = base_model.embedding_.copy()
@@ -128,7 +133,10 @@ def bench_metric(
 
         # Method 1: add_points (incremental)
         # Re-fit base to get a fresh model (add_points mutates)
-        model_inc = TMAP(n_neighbors=K, metric=metric, seed=SEED)
+        model_inc = TMAP(
+            n_neighbors=K, metric=metric, seed=SEED,
+            store_index=needs_index,
+        )
         model_inc.fit(X_base)
 
         t0 = time.perf_counter()
