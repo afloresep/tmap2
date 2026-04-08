@@ -150,7 +150,7 @@ def _mol_props_batch(smiles_batch: list[str]) -> NDArray[np.float64]:
     computers = {
         "mw": lambda mol: Descriptors.ExactMolWt(mol),
         "logp": lambda mol: Descriptors.MolLogP(mol),
-        "n_rings": lambda mol: rdMolDescriptors.CalcNumRings(mol),
+        "n_rings": lambda mol: mol.GetNumBonds() - mol.GetNumAtoms() + len(Chem.GetMolFrags(mol)),
         "hba": lambda mol: rdMolDescriptors.CalcNumHBA(mol),
         "hbd": lambda mol: rdMolDescriptors.CalcNumHBD(mol),
         "tpsa": lambda mol: rdMolDescriptors.CalcTPSA(mol),
@@ -214,8 +214,8 @@ def _rxn_props_batch(rxn_smiles_batch: list[str]) -> NDArray[np.float64]:
                 - _sum(r_mols, lambda m: m.GetNumHeavyAtoms())
             ),
             "delta_rings": (
-                _sum(p_mols, rdMolDescriptors.CalcNumRings)
-                - _sum(r_mols, rdMolDescriptors.CalcNumRings)
+                _sum(p_mols, lambda m: m.GetNumBonds() - m.GetNumAtoms() + len(Chem.GetMolFrags(m)))
+                - _sum(r_mols, lambda m: m.GetNumBonds() - m.GetNumAtoms() + len(Chem.GetMolFrags(m)))
             ),
             "delta_aromatic_rings": (
                 _sum(p_mols, rdMolDescriptors.CalcNumAromaticRings)

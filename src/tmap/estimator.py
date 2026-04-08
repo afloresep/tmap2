@@ -24,12 +24,41 @@ if TYPE_CHECKING:
     from tmap.visualization import TmapViz
 
 
-def _resolve_ann_backend(seed: int | None = None) -> USearchIndex:
-    """Return an ANN index for cosine/euclidean kNN search.
+def _hnsw_defaults(
+    metric: str,
+    ndim: int,
+    n_samples: int,
+    n_neighbors: int,
+) -> dict[str, int]:
+    """Select HNSW parameters based on data characteristics.
 
-    Uses USearch (included as a core dependency).
+    Higher dimensionality and larger datasets need denser HNSW graphs
+    (higher connectivity) and deeper search (higher expansion) to
+    maintain recall.  Binary Jaccard uses USearch's bit-vector distance
+    which is cheaper per comparison, so it can afford slightly lower
+    connectivity.
+
+    ``expansion_search`` is floored at ``n_neighbors`` — returning fewer
+    candidates than requested neighbors guarantees recall loss.
     """
-    return USearchIndex(seed=seed)
+    if metric == "jaccard":
+        # Binary Jaccard: cheaper distance, sparser graphs OK.
+        if n_samples >= 1_000_000 or ndim >= 4096:
+            conn, ef_add, ef_search = 32, 256, 256
+        else:
+            conn, ef_add, ef_search = 16, 128, 128
+    else:
+        # Dense cosine / euclidean — dimension is the dominant factor.
+        if ndim >= 512 or n_samples >= 1_000_000:
+            conn, ef_add, ef_search = 48, 512, 512
+        elif ndim >= 256 or n_samples >= 100_000:
+            conn, ef_add, ef_search = 32, 256, 256
+        else:
+            conn, ef_add, ef_search = 16, 128, 128
+
+    # expansion_search must never be less than k.
+    ef_search = max(ef_search, n_neighbors)
+    return dict(connectivity=conn, expansion_add=ef_add, expansion_search=ef_search)
 
 
 def _select_lsh_l(d: int, n_samples: int) -> int:
@@ -90,6 +119,14 @@ class TMAP:
         layout_config: Optional advanced OGDF layout config.
         store_index: If True, keep the dense ANN index after ``fit()`` so you
             can later call ``transform()`` or ``add_points()``.
+        hnsw_connectivity: HNSW graph connectivity (M parameter). Higher
+            values improve recall for high-dimensional data but cost more
+            memory and build time. ``None`` selects automatically.
+        hnsw_expansion_add: HNSW build-time search depth (ef_construction).
+            ``None`` selects automatically.
+        hnsw_expansion_search: HNSW query-time search depth (ef_search).
+            ``None`` selects automatically. Always clamped to at least
+            ``n_neighbors``.
 
     Example:
         >>> model = TMAP(metric="jaccard", n_neighbors=20).fit(binary_matrix)
@@ -108,6 +145,9 @@ class TMAP:
         layout_iterations: int = 1000,
         layout_config: Any | None = None,
         store_index: bool = False,
+        hnsw_connectivity: int | None = None,
+        hnsw_expansion_add: int | None = None,
+        hnsw_expansion_search: int | None = None,
     ) -> None:
         if n_neighbors <= 0:
             raise ValueError(f"n_neighbors must be > 0, got {n_neighbors}")
@@ -131,6 +171,9 @@ class TMAP:
         self.layout_iterations = layout_iterations
         self.layout_config = layout_config
         self.store_index = store_index
+        self.hnsw_connectivity = hnsw_connectivity
+        self.hnsw_expansion_add = hnsw_expansion_add
+        self.hnsw_expansion_search = hnsw_expansion_search
 
         self._embedding: NDArray[np.float32] | None = None
         self._index: Any | None = None
@@ -187,9 +230,21 @@ class TMAP:
                     raise ValueError(
                         f"n_neighbors={self.n_neighbors} must be < n_samples={n_samples}"
                     )
+                auto = _hnsw_defaults("jaccard", n_features, n_samples, self.n_neighbors)
                 index = USearchIndex(
                     seed=self.seed,
-                    expansion_search=512,
+                    connectivity=(
+                        self.hnsw_connectivity if self.hnsw_connectivity is not None
+                        else auto["connectivity"]
+                    ),
+                    expansion_add=(
+                        self.hnsw_expansion_add if self.hnsw_expansion_add is not None
+                        else auto["expansion_add"]
+                    ),
+                    expansion_search=(
+                        self.hnsw_expansion_search if self.hnsw_expansion_search is not None
+                        else auto["expansion_search"]
+                    ),
                 )
                 index.build_from_binary(binary)
                 knn = index.query_knn(k=self.n_neighbors)
@@ -241,7 +296,25 @@ class TMAP:
                 raise ValueError(
                     f"n_neighbors={self.n_neighbors} must be < n_samples={X_dense.shape[0]}"
                 )
-            index = _resolve_ann_backend(seed=self.seed)
+            auto = _hnsw_defaults(
+                self.metric, X_dense.shape[1], X_dense.shape[0], self.n_neighbors,
+            )
+            index = USearchIndex(
+                seed=self.seed,
+                mode="hnsw",
+                connectivity=(
+                    self.hnsw_connectivity if self.hnsw_connectivity is not None
+                    else auto["connectivity"]
+                ),
+                expansion_add=(
+                    self.hnsw_expansion_add if self.hnsw_expansion_add is not None
+                    else auto["expansion_add"]
+                ),
+                expansion_search=(
+                    self.hnsw_expansion_search if self.hnsw_expansion_search is not None
+                    else auto["expansion_search"]
+                ),
+            )
             index.build_from_vectors(X_dense, metric=self.metric)
             knn = index.query_knn(k=self.n_neighbors)
             self._lsh_forest = None

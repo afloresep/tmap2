@@ -7,6 +7,7 @@ import pickle
 import numpy as np
 import pytest
 
+from tmap.estimator import _hnsw_defaults
 from tmap.index.types import KNNGraph
 from tmap.index.usearch_index import USearchIndex
 from tmap.layout import OGDF_AVAILABLE
@@ -494,3 +495,161 @@ class TestEstimatorDenseMetrics:
         idx_l, dist_l = loaded.index_.query_point(data[0], k=5)
         assert idx_l.shape == (5,)
         assert np.all(dist_l >= -1e-6)
+
+    @pytest.mark.skipif(not OGDF_AVAILABLE, reason="OGDF extension not built")
+    def test_hnsw_overrides_propagate(self) -> None:
+        """User-specified HNSW params override the adaptive defaults."""
+        from tmap import TMAP
+
+        data = _clustered_dense_data(n_samples=40, n_features=16)
+        model = TMAP(
+            metric="cosine",
+            n_neighbors=5,
+            seed=42,
+            store_index=True,
+            hnsw_connectivity=64,
+            hnsw_expansion_add=1024,
+            hnsw_expansion_search=800,
+        ).fit(data)
+
+        idx = model.index_
+        assert idx._connectivity == 64
+        assert idx._expansion_add == 1024
+        assert idx._expansion_search == 800
+
+
+# ---------------------------------------------------------------------------
+# _hnsw_defaults policy tests
+# ---------------------------------------------------------------------------
+
+
+class TestHNSWDefaults:
+    """Verify the adaptive HNSW parameter selection policy."""
+
+    def test_high_dim_dense_gets_large_params(self) -> None:
+        d = _hnsw_defaults("cosine", ndim=768, n_samples=100_000, n_neighbors=20)
+        assert d["connectivity"] == 48
+        assert d["expansion_add"] == 512
+        assert d["expansion_search"] >= 512
+
+    def test_low_dim_dense_gets_small_params(self) -> None:
+        d = _hnsw_defaults("euclidean", ndim=32, n_samples=1_000, n_neighbors=10)
+        assert d["connectivity"] == 16
+        assert d["expansion_add"] == 128
+
+    def test_mid_dim_dense_gets_mid_params(self) -> None:
+        d = _hnsw_defaults("cosine", ndim=256, n_samples=50_000, n_neighbors=20)
+        assert d["connectivity"] == 32
+        assert d["expansion_add"] == 256
+
+    def test_large_n_triggers_high_params(self) -> None:
+        d = _hnsw_defaults("cosine", ndim=64, n_samples=2_000_000, n_neighbors=20)
+        assert d["connectivity"] == 48
+
+    def test_jaccard_uses_lower_connectivity(self) -> None:
+        d = _hnsw_defaults("jaccard", ndim=2048, n_samples=500_000, n_neighbors=20)
+        assert d["connectivity"] <= 32
+
+    def test_jaccard_large_scale(self) -> None:
+        d = _hnsw_defaults("jaccard", ndim=4096, n_samples=2_000_000, n_neighbors=20)
+        assert d["connectivity"] == 32
+        assert d["expansion_add"] == 256
+
+    def test_expansion_search_never_below_k(self) -> None:
+        """ef_search must be >= n_neighbors for any configuration."""
+        cases = [
+            ("cosine", 32, 100, 500),
+            ("euclidean", 768, 10_000, 200),
+            ("jaccard", 128, 500, 300),
+            ("cosine", 8, 50, 10),
+        ]
+        for metric, ndim, n_samples, k in cases:
+            d = _hnsw_defaults(metric, ndim=ndim, n_samples=n_samples, n_neighbors=k)
+            assert d["expansion_search"] >= k, (
+                f"ef_search={d['expansion_search']} < k={k} "
+                f"for ({metric}, ndim={ndim}, n={n_samples})"
+            )
+
+
+# ---------------------------------------------------------------------------
+# View mode tests
+# ---------------------------------------------------------------------------
+
+
+class TestUSearchViewMode:
+    """Tests for memory-mapped read-only index loading."""
+
+    def test_view_load_query_works(self, tmp_path) -> None:
+        """A view-loaded index can answer point and batch queries."""
+        data = _clustered_dense_data(n_samples=200, n_features=16)
+        index = USearchIndex(seed=42, mode="hnsw")
+        index.build_from_vectors(data, metric="cosine")
+
+        path = tmp_path / "index.usearch"
+        index.save(path)
+
+        view = USearchIndex.load(path, view=True)
+        assert view.is_view
+        assert view.is_built
+
+        idx, dist = view.query_point(data[0], k=K)
+        assert idx.shape == (K,)
+        assert np.all(dist >= -1e-6)
+
+        idx_b, dist_b = view.query_batch(data[:3], k=K)
+        assert idx_b.shape == (3, K)
+
+    def test_view_add_raises(self, tmp_path) -> None:
+        """add() must raise on a view index."""
+        data = _clustered_dense_data(n_samples=200, n_features=16)
+        index = USearchIndex(seed=42, mode="hnsw")
+        index.build_from_vectors(data, metric="cosine")
+
+        path = tmp_path / "index.usearch"
+        index.save(path)
+
+        view = USearchIndex.load(path, view=True)
+        with pytest.raises(RuntimeError, match="read-only"):
+            view.add(data[:1])
+
+    def test_non_view_load_is_mutable(self, tmp_path) -> None:
+        """Default load (view=False) still allows add()."""
+        data = _clustered_dense_data(n_samples=200, n_features=16)
+        index = USearchIndex(seed=42, mode="hnsw")
+        index.build_from_vectors(data, metric="cosine")
+
+        path = tmp_path / "index.usearch"
+        index.save(path)
+
+        loaded = USearchIndex.load(path, view=False)
+        assert not loaded.is_view
+        keys = loaded.add(data[:1])
+        assert len(keys) == 1
+
+    def test_view_binary_query_works(self, tmp_path) -> None:
+        """View mode works for binary Jaccard indexes too."""
+        data = _binary_data(n_samples=60, n_features=256)
+        index = USearchIndex(seed=42)
+        index.build_from_binary(data)
+
+        path = tmp_path / "binary.usearch"
+        index.save(path)
+
+        view = USearchIndex.load(path, view=True)
+        assert view.is_view
+
+        idx, dist = view.query_point(data[0], k=K)
+        assert idx.shape == (K,)
+
+    def test_view_binary_add_raises(self, tmp_path) -> None:
+        """add() raises on a view binary index too."""
+        data = _binary_data(n_samples=60, n_features=256)
+        index = USearchIndex(seed=42)
+        index.build_from_binary(data)
+
+        path = tmp_path / "binary.usearch"
+        index.save(path)
+
+        view = USearchIndex.load(path, view=True)
+        with pytest.raises(RuntimeError, match="read-only"):
+            view.add(data[:1])

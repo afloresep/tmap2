@@ -63,6 +63,7 @@ class USearchIndex:
         self._binary_vectors: NDArray[np.uint8] | None = None
         self._is_binary: bool = False
         self._usearch_index: Any | None = None  # usearch.index.Index
+        self._is_view = False
         self._is_built = False
         self._n_nodes: int = 0
         self._ndim: int = 0
@@ -85,6 +86,11 @@ class USearchIndex:
     @property
     def effective_mode(self) -> str | None:
         return self._effective_mode
+
+    @property
+    def is_view(self) -> bool:
+        """True if this index is a read-only memory-mapped view."""
+        return self._is_view
 
     # -- build --
 
@@ -217,6 +223,11 @@ class USearchIndex:
             Keys assigned to the new vectors.
         """
         self._check_is_built()
+        if self._is_view:
+            raise RuntimeError(
+                "Cannot add vectors to a read-only view index. "
+                "Load without view=True to get a mutable index."
+            )
 
         vectors = np.asarray(vectors)
         if vectors.ndim != 2:
@@ -377,11 +388,16 @@ class USearchIndex:
             pickle.dump(meta, f)
 
     @classmethod
-    def load(cls, path: str | Path) -> USearchIndex:
+    def load(cls, path: str | Path, *, view: bool = False) -> USearchIndex:
         """Load an index saved with ``save()``.
 
         Args:
             path: File path written by ``save()``.
+            view: If True, memory-map the HNSW index file instead of
+                loading it into RAM. The index becomes read-only —
+                ``query_point()`` and ``query_batch()`` work, but
+                ``add()`` raises. Useful for serving large indexes
+                that don't fit in RAM.
 
         Returns:
             The restored index.
@@ -401,11 +417,12 @@ class USearchIndex:
         )
         is_binary = meta.get("is_binary", False)
         instance._is_binary = is_binary
+        instance._is_view = view
 
         if meta.get("effective_mode") == "hnsw":
             if not path.exists():
                 raise FileNotFoundError(f"USearch index file not found: {path}")
-            instance._usearch_index = Index.restore(str(path))
+            instance._usearch_index = Index.restore(str(path), view=view)
             if is_binary and meta.get("has_vectors"):
                 vectors_path = cls._vectors_path(path)
                 if not vectors_path.exists():
@@ -445,9 +462,10 @@ class USearchIndex:
 
     def __setstate__(self, state: dict) -> None:
         buf = state.pop("_usearch_index_bytes")
-        # Handle loading from older pickles that lack binary fields
+        # Handle loading from older pickles that lack binary/view fields
         state.setdefault("_is_binary", False)
         state.setdefault("_binary_vectors", None)
+        state.setdefault("_is_view", False)
         self.__dict__.update(state)
         if buf is not None:
             from usearch.index import Index

@@ -880,9 +880,12 @@ class TmapViz:
         title_column : str, optional
             Name of an existing column whose value becomes the card
             heading for each point.  Example: ``"Gene Name"``.
+            Supports template strings with ``{column_name}`` placeholders,
+            e.g. ``"Cluster: {Cluster ID}"``.
         subtitle_column : str, optional
             Name of an existing column shown as an italic line below
             the title.  Example: ``"Organism"``.
+            Supports template strings like ``title_column``.
         fields : list of str, optional
             Column names to display as key-value rows in the card body.
             If omitted, all label columns are shown.
@@ -911,12 +914,15 @@ class TmapViz:
         # Validate referenced columns exist
         known = set(self._columns.keys())
         refs: list[str] = []
-        if title_column is not None:
-            config["titleColumn"] = title_column
-            refs.append(title_column)
-        if subtitle_column is not None:
-            config["subtitleColumn"] = subtitle_column
-            refs.append(subtitle_column)
+        import re
+        for key, value in [("titleColumn", title_column), ("subtitleColumn", subtitle_column)]:
+            if value is None:
+                continue
+            config[key] = value
+            if "{" in value:
+                refs.extend(re.findall(r"\{([^}]+)\}", value))
+            else:
+                refs.append(value)
         if fields is not None:
             config["fields"] = list(fields)
             refs.extend(fields)
