@@ -204,6 +204,9 @@ def _rxn_props_batch(rxn_smiles_batch: list[str]) -> NDArray[np.float64]:
         def _sum(mols: list, fn) -> float:  # type: ignore[type-arg]
             return sum(fn(m) for m in mols)
 
+        def _nrings(m):
+            return m.GetNumBonds() - m.GetNumAtoms() + len(Chem.GetMolFrags(m))
+
         r_mw = _sum(r_mols, Descriptors.ExactMolWt)
         p_mw = _sum(p_mols, Descriptors.ExactMolWt)
 
@@ -214,8 +217,7 @@ def _rxn_props_batch(rxn_smiles_batch: list[str]) -> NDArray[np.float64]:
                 - _sum(r_mols, lambda m: m.GetNumHeavyAtoms())
             ),
             "delta_rings": (
-                _sum(p_mols, lambda m: m.GetNumBonds() - m.GetNumAtoms() + len(Chem.GetMolFrags(m)))
-                - _sum(r_mols, lambda m: m.GetNumBonds() - m.GetNumAtoms() + len(Chem.GetMolFrags(m)))
+                _sum(p_mols, _nrings) - _sum(r_mols, _nrings)
             ),
             "delta_aromatic_rings": (
                 _sum(p_mols, rdMolDescriptors.CalcNumAromaticRings)

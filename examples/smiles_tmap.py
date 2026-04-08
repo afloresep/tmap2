@@ -50,7 +50,7 @@ def main() -> None:
     lsh = LSHForest(d=num_perm, l=64)
     lsh.batch_add(signatures)
     lsh.index()
-    print(f"  LSH Forest indexed ({lsh.size()} points)")
+    print(f"  LSH Forest indexed ({lsh.size} points)")
 
     # 4. Compute OGDF layout
     #    layout_from_lsh_forest queries the kNN graph internally,
