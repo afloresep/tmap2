@@ -1,15 +1,21 @@
 #!/usr/bin/env python
-"""Benchmark: End-to-end pipeline — TMAP2 vs UMAP.
+"""Benchmark: End-to-end pipeline — TMAP2 vs UMAP, with external kNN backends.
 
 Full pipeline comparison: data in → 2D embedding out.
 TMAP2 uses frozen HNSW params (no auto-switching). UMAP uses defaults.
+Also benchmarks TMAP2 with external kNN from FAISS and PyNNDescent to show
+that TMAP accepts precomputed kNN and benefits from faster backends.
 Subprocess isolation for fair memory measurement.
 
-Datasets (real data only):
-  - Jaccard: ChEMBL 200K Morgan fingerprints (10K, 50K, 100K, 200K)
-  - Cosine:  MNIST 70K digits d=784 (10K, 30K, 70K)
+Datasets:
+  - Jaccard: ChEMBL/20M-SMILES Morgan FPs (10K to 5M)
+  - Cosine:  MNIST 70K + synthetic beyond (10K to 1M)
 
-Metrics: runtime, peak RSS (via subprocess isolation).
+Methods:
+  - tmap2: Default TMAP2 (USearch HNSW)
+  - tmap2_faiss: TMAP2 with FAISS kNN (cosine/euclidean only)
+  - tmap2_pynndescent: TMAP2 with PyNNDescent kNN
+  - umap: UMAP defaults
 
 Usage:
   python scripts/bench_pipeline.py --metric jaccard
@@ -42,11 +48,28 @@ K = 20
 # Data (real only)
 # ---------------------------------------------------------------------------
 
-def load_chembl(n: int) -> tuple[np.ndarray, str]:
-    X = np.load(ROOT / "data" / "chembl" / "chembl_200k_morgan.npy")
-    if n < X.shape[0]:
-        X = X[np.random.default_rng(SEED).choice(X.shape[0], n, replace=False)]
-    return X.astype(np.uint8), "chembl_200k_morgan"
+def load_jaccard_data(n: int) -> tuple[np.ndarray, str]:
+    """ChEMBL up to 200K, 20M_smiles beyond."""
+    chembl_path = ROOT / "data" / "chembl" / "chembl_200k_morgan.npy"
+    if n <= 200_000 and chembl_path.exists():
+        X = np.load(chembl_path)
+        if n < X.shape[0]:
+            X = X[np.random.default_rng(SEED).choice(X.shape[0], n, replace=False)]
+        return X.astype(np.uint8), "chembl_200k_morgan"
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache = CACHE_DIR / f"smiles_morgan_{n}_2048.npy"
+    if cache.exists():
+        return np.load(cache).astype(np.uint8), f"20M_smiles_morgan_{n}"
+    from tmap import fingerprints_from_smiles
+    with open(ROOT / "data" / "20M_smiles.txt") as f:
+        smiles = [line.strip() for _, line in zip(range(n), f) if line.strip()]
+    import time as _t
+    print(f"  Generating {n:,} Morgan FP...", end=" ", flush=True)
+    t0 = _t.perf_counter()
+    X = fingerprints_from_smiles(smiles[:n], fp_type="morgan", n_bits=2048)
+    print(f"done ({_t.perf_counter() - t0:.1f}s)")
+    np.save(cache, X.astype(np.uint8))
+    return X.astype(np.uint8), f"20M_smiles_morgan_{n}"
 
 
 def load_mnist(n: int) -> tuple[np.ndarray, str]:
@@ -66,6 +89,13 @@ def load_mnist(n: int) -> tuple[np.ndarray, str]:
     if n < X.shape[0]:
         X = X[np.random.default_rng(SEED).choice(X.shape[0], n, replace=False)]
     return X.astype(np.float32), "mnist_784"
+
+
+def make_dense(n: int, d: int = 1280) -> tuple[np.ndarray, str]:
+    X = np.random.default_rng(SEED).standard_normal(
+        (n, d),
+    ).astype(np.float32)
+    return X, f"synthetic_d{d}"
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +123,42 @@ t0 = time.perf_counter()
 
 if method == "tmap2":
     from tmap import TMAP
-    # Frozen HNSW mode: no auto-switching
     model = TMAP(
         n_neighbors=k, metric=metric, seed=seed,
         store_index=(metric in ("cosine", "euclidean")),
     )
     model.fit(X)
+
+elif method == "tmap2_faiss":
+    # TMAP2 with FAISS kNN (cosine/euclidean only)
+    import faiss
+    from tmap import TMAP
+    from tmap.index.types import KNNGraph
+
+    n, d = X.shape
+    if metric == "cosine":
+        faiss.normalize_L2(X)
+    index = faiss.IndexFlatL2(d) if metric != "cosine" else faiss.IndexFlatIP(d)
+    index.add(X)
+    distances, indices = index.search(X, k)
+    if metric == "cosine":
+        distances = 1.0 - distances  # IP → cosine distance
+    knn = KNNGraph(indices=indices.astype(np.int32), distances=distances.astype(np.float32))
+    model = TMAP(n_neighbors=k, metric="precomputed", seed=seed)
+    model.fit(knn_graph=knn)
+
+elif method == "tmap2_pynndescent":
+    # TMAP2 with PyNNDescent kNN
+    from pynndescent import NNDescent
+    from tmap import TMAP
+    from tmap.index.types import KNNGraph
+
+    pynn_metric = metric if metric != "jaccard" else "jaccard"
+    nnd = NNDescent(X, metric=pynn_metric, n_neighbors=k, random_state=seed)
+    indices, distances = nnd.neighbor_graph
+    knn = KNNGraph(indices=indices.astype(np.int32), distances=distances.astype(np.float32))
+    model = TMAP(n_neighbors=k, metric="precomputed", seed=seed)
+    model.fit(knn_graph=knn)
 
 elif method == "umap":
     import umap
@@ -152,32 +212,47 @@ def run_isolated(
 # Benchmark
 # ---------------------------------------------------------------------------
 
-def bench_metric(metric: str, sizes: list[int]) -> list[dict]:
+def _get_methods(metric: str) -> list[str]:
+    """Which methods to benchmark for a given metric."""
+    methods = ["tmap2", "umap"]
+    # FAISS only supports dense metrics (cosine/euclidean)
+    if metric in ("cosine", "euclidean"):
+        methods.append("tmap2_faiss")
+    # PyNNDescent supports all metrics
+    methods.append("tmap2_pynndescent")
+    return methods
+
+
+def bench_metric(
+    metric: str, sizes: list[int], cosine_dataset: str = "mnist",
+    dim: int = 784,
+) -> list[dict]:
     results = []
     is_jaccard = metric == "jaccard"
+    methods = _get_methods(metric)
 
     for n in sizes:
-        X, dataset = load_chembl(n) if is_jaccard else load_mnist(n)
+        if is_jaccard:
+            X, dataset = load_jaccard_data(n)
+        elif cosine_dataset == "mnist" and n <= 70_000:
+            X, dataset = load_mnist(n)
+        else:
+            X, dataset = make_dense(n, d=dim)
         dim = X.shape[1]
 
         print(f"\n{'=' * 70}")
         print(f" Pipeline: metric={metric}  n={n:,}  [{dataset}]")
         print(f"{'=' * 70}")
 
-        for method in ["tmap2", "umap"]:
-            # UMAP doesn't support jaccard on uint8 directly;
-            # it needs the metric name to match its internal handling.
-            umap_metric = metric
+        for method in methods:
             if method == "umap" and metric == "jaccard":
-                # UMAP accepts 'jaccard' for binary data but expects
-                # float input; convert.
                 X_run = X.astype(np.float32)
             else:
                 X_run = X
 
-            print(f"  {method:>6}: ", end="", flush=True)
+            print(f"  {method:>20}: ", end="", flush=True)
             try:
-                r = run_isolated(method, X_run, umap_metric)
+                r = run_isolated(method, X_run, metric)
                 print(
                     f"{r['runtime_s']:>8.1f}s  "
                     f"RSS={r['peak_rss_mb']:>6.0f}MB"
@@ -225,8 +300,16 @@ def main():
         "--metric", choices=["jaccard", "cosine", "all"],
         default="all",
     )
-    p.add_argument("--sizes-jaccard", default="10000,50000,100000,200000")
-    p.add_argument("--sizes-cosine", default="10000,30000,70000")
+    p.add_argument(
+        "--sizes-jaccard",
+        default="10000,50000,100000,200000,500000,1000000,2000000,5000000",
+    )
+    p.add_argument("--sizes-cosine", default="10000,50000,100000,200000,500000,1000000")
+    p.add_argument(
+        "--cosine-dataset", choices=["mnist", "synthetic"],
+        default="mnist",
+    )
+    p.add_argument("--dim", type=int, default=1280, help="Dim for synthetic")
     args = p.parse_args()
 
     metrics = (
@@ -239,7 +322,11 @@ def main():
             if metric == "jaccard"
             else [int(x) for x in args.sizes_cosine.split(",")]
         )
-        results = bench_metric(metric, sizes)
+        results = bench_metric(
+            metric, sizes,
+            cosine_dataset=args.cosine_dataset,
+            dim=args.dim,
+        )
         save(results, metric)
 
 

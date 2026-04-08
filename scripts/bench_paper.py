@@ -72,21 +72,42 @@ def make_binary(n: int, d: int = 2048, density: float = 0.1) -> np.ndarray:
 
 
 def load_molecular_fps(n: int | None = None, n_bits: int = 2048) -> np.ndarray:
-    """Morgan fingerprints from cluster_65053.csv, cached."""
+    """Morgan fingerprints: ChEMBL 200K for n<=200K, 20M SMILES beyond."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache = CACHE_DIR / f"cluster_65053_morgan_{n_bits}.npz"
+
+    # Use ChEMBL 200K if sufficient
+    chembl_path = ROOT / "data" / "chembl" / "chembl_200k_morgan.npy"
+    if n is not None and n <= 200_000 and chembl_path.exists():
+        X = np.load(chembl_path)
+        if n < X.shape[0]:
+            X = X[np.random.default_rng(SEED).choice(X.shape[0], n, replace=False)]
+        return X.astype(np.uint8)
+
+    # For larger n, use 20M_smiles.txt
+    cache = CACHE_DIR / f"smiles_morgan_{n}_{n_bits}.npy"
     if cache.exists():
-        X = np.load(cache)["X"]
-    else:
-        import pandas as pd
+        return np.load(cache).astype(np.uint8)
 
-        from tmap import fingerprints_from_smiles
+    smiles_path = ROOT / "data" / "20M_smiles.txt"
+    if not smiles_path.exists():
+        raise FileNotFoundError(
+            f"Need {smiles_path} for n={n:,}. "
+            "Download or symlink your SMILES file."
+        )
 
-        smiles = pd.read_csv(ROOT / "examples" / "cluster_65053.csv")["smiles"].tolist()
-        X = fingerprints_from_smiles(smiles, fp_type="morgan", n_bits=n_bits)
-        np.savez_compressed(cache, X=X)
-    if n is not None and n < X.shape[0]:
-        X = X[np.random.default_rng(SEED).choice(X.shape[0], n, replace=False)]
+    from tmap import fingerprints_from_smiles
+
+    with open(smiles_path) as f:
+        smiles = [line.strip() for _, line in zip(range(n), f) if line.strip()]
+    if len(smiles) < n:
+        raise ValueError(f"Only {len(smiles)} SMILES available, requested {n}")
+
+    print(f"  Generating {n:,} Morgan FP (cached)...", end=" ", flush=True)
+    import time as _t
+    t0 = _t.perf_counter()
+    X = fingerprints_from_smiles(smiles[:n], fp_type="morgan", n_bits=n_bits)
+    print(f"done ({_t.perf_counter() - t0:.1f}s)")
+    np.save(cache, X.astype(np.uint8))
     return X.astype(np.uint8)
 
 
@@ -200,16 +221,16 @@ def bench_umap(
 
     for n in sizes:
         is_mnist = n <= 70_000
-        X = load_mnist(n) if is_mnist else make_synthetic(n)
+        X = load_mnist(n) if is_mnist else make_synthetic(n, d=784)
         source = "mnist" if is_mnist else "synthetic"
 
         print(f"\n{'=' * 60}")
         print(f" n={n:>8,}  data={source}  metric=cosine  k={K}")
         print(f"{'=' * 60}")
 
-        # Precompute exact kNN once for quality metrics
+        # Precompute exact kNN once for quality metrics (up to 100K)
         idx_exact = None
-        if quality and n <= 70_000:
+        if quality and n <= 100_000:
             print("  Precomputing exact kNN...", end=" ", flush=True)
             t0 = time.perf_counter()
             idx_exact = compute_exact_knn(X, k=K, metric="cosine")
@@ -228,7 +249,7 @@ def bench_umap(
                 print(f"{r['runtime_s']:>8.1f}s  {r['peak_rss_mb']:>7.0f} MB")
 
             tw, kp = "", ""
-            if quality and n <= 70_000 and emb is not None:
+            if quality and n <= 100_000 and emb is not None:
                 print(f"  {'':>6} quality: ", end="", flush=True)
                 tw = trustworthiness_safe(X, emb, k=K, metric="cosine")
                 kp = knn_preservation_precomputed(idx_exact, emb, k=K)
@@ -310,8 +331,10 @@ def _recall_tmap1_jaccard(
     spec.loader.exec_module(tm)
 
     n, _d = X_bin.shape
+    # Use same l as TMAP2 for fair comparison: l = max(8, d//4)
+    l = max(8, n_perm // 4)
     enc = tm.Minhash(n_perm)
-    lf = tm.LSHForest(n_perm)
+    lf = tm.LSHForest(n_perm, l)
 
     for i in range(n):
         fp = tm.VectorUchar(X_bin[i].tolist())
@@ -339,14 +362,8 @@ def bench_tmap1(sizes: list[int], repeats: int) -> list[dict]:
     results = []
 
     for n in sizes:
-        # Use real molecular fingerprints (max ~64K) with random fill for larger
-        mol_max = 64000
-        if n <= mol_max:
-            X_bin = load_molecular_fps(n)
-            source = "molecular"
-        else:
-            X_bin = make_binary(n, d=2048, density=0.1)
-            source = "synthetic"
+        X_bin = load_molecular_fps(n)
+        source = "molecular"
         print(f"\n{'=' * 60}")
         print(f" n={n:>8,}  data={source}  metric=jaccard  k={K}")
         print(f"{'=' * 60}")
@@ -428,54 +445,107 @@ def bench_tmap1(sizes: list[int], repeats: int) -> list[dict]:
 # Suite: USearch index latency  (Table 3)
 # ---------------------------------------------------------------------------
 
-def bench_index(sizes: list[int]) -> list[dict]:
-    from tmap.index.usearch_index import USearchIndex
+def bench_index(sizes: list[int], mmap_mode: bool = False) -> list[dict]:
+    """USearch index latency benchmark.
+
+    With --mmap: build index, save to disk, then query via memory-mapped view().
+    This allows benchmarking indexes that don't fit in RAM (e.g., 100M vectors).
+    Data is generated in chunks to avoid materializing the full matrix at once.
+    """
+    from usearch.index import Index as UsearchIndex
 
     results = []
     d = 768  # typical embedding dim (BERT/ESM)
     n_queries = 100
 
     for n in sizes:
-        print(f"\n--- n={n:,}  d={d} ---")
+        mode_label = "mmap" if mmap_mode else "ram"
+        print(f"\n--- n={n:,}  d={d}  mode={mode_label} ---")
         rng = np.random.default_rng(SEED)
-        X = rng.standard_normal((n, d)).astype(np.float32)
         queries = rng.standard_normal((n_queries, d)).astype(np.float32)
 
         for metric in ["cosine", "euclidean"]:
-            # Build
-            idx = USearchIndex()
-            t0 = time.perf_counter()
-            idx.build_from_vectors(X, metric=metric)
-            build_s = time.perf_counter() - t0
+            usearch_metric = "cos" if metric == "cosine" else "l2sq"
 
-            # Query 1-NN (avg over 3 runs)
-            times_1 = []
-            for _ in range(3):
+            if mmap_mode:
+                import tempfile
+                with tempfile.TemporaryDirectory() as tmp:
+                    idx_path = Path(tmp) / "index.usearch"
+
+                    # Build in chunks to limit peak memory
+                    idx = UsearchIndex(ndim=d, metric=usearch_metric)
+                    chunk_size = min(n, 500_000)
+                    t0 = time.perf_counter()
+                    offset = 0
+                    while offset < n:
+                        batch_n = min(chunk_size, n - offset)
+                        batch = rng.standard_normal((batch_n, d)).astype(np.float32)
+                        keys = np.arange(offset, offset + batch_n, dtype=np.int64)
+                        idx.add(keys, batch)
+                        offset += batch_n
+                    build_s = time.perf_counter() - t0
+
+                    # Save and reopen as mmap
+                    idx.save(str(idx_path))
+                    del idx
+
+                    idx_mmap = UsearchIndex(ndim=d, metric=usearch_metric)
+                    idx_mmap.view(str(idx_path))
+
+                    # Query latency on mmap index
+                    times_1, times_20 = [], []
+                    for _ in range(3):
+                        t0 = time.perf_counter()
+                        idx_mmap.search(queries, 1)
+                        times_1.append((time.perf_counter() - t0) / n_queries * 1000)
+                    for _ in range(3):
+                        t0 = time.perf_counter()
+                        idx_mmap.search(queries, 20)
+                        times_20.append((time.perf_counter() - t0) / n_queries * 1000)
+
+                    q1_ms = float(np.median(times_1))
+                    q20_ms = float(np.median(times_20))
+                    del idx_mmap
+            else:
+                # In-memory mode (original path)
+                X = rng.standard_normal((n, d)).astype(np.float32)
+
+                idx = UsearchIndex(ndim=d, metric=usearch_metric)
                 t0 = time.perf_counter()
-                idx.query_batch(queries, k=1)
-                times_1.append((time.perf_counter() - t0) / n_queries * 1000)
-            q1_ms = float(np.median(times_1))
+                idx.add(np.arange(n, dtype=np.int64), X)
+                build_s = time.perf_counter() - t0
 
-            # Query 20-NN
-            times_20 = []
-            for _ in range(3):
-                t0 = time.perf_counter()
-                idx.query_batch(queries, k=20)
-                times_20.append((time.perf_counter() - t0) / n_queries * 1000)
-            q20_ms = float(np.median(times_20))
+                times_1, times_20 = [], []
+                for _ in range(3):
+                    t0 = time.perf_counter()
+                    idx.search(queries, 1)
+                    times_1.append((time.perf_counter() - t0) / n_queries * 1000)
+                for _ in range(3):
+                    t0 = time.perf_counter()
+                    idx.search(queries, 20)
+                    times_20.append((time.perf_counter() - t0) / n_queries * 1000)
 
-            # Recall@20 (expensive — only for n <= 100K)
+                q1_ms = float(np.median(times_1))
+                q20_ms = float(np.median(times_20))
+                del idx, X
+
+            # Recall@20 (expensive — only for n <= 100K in RAM mode)
             recall = ""
-            if n <= 100_000:
+            if not mmap_mode and n <= 100_000:
                 from sklearn.neighbors import NearestNeighbors
 
+                X_recall = rng.standard_normal((n, d)).astype(np.float32)
                 sample = min(1000, n)
-                Q = X[:sample]
-                # Both return k+1; exclude self for fair comparison
-                pred_idx, _ = idx.query_batch(Q, k=21)
+                Q = X_recall[:sample]
+
+                idx_r = UsearchIndex(ndim=d, metric=usearch_metric)
+                idx_r.add(np.arange(n, dtype=np.int64), X_recall)
+                results_r = idx_r.search(Q, 21)
+                pred_idx = np.array(results_r.keys)
+
                 exact_idx = (
                     NearestNeighbors(n_neighbors=21, metric=metric, algorithm="brute")
-                    .fit(X)
+                    .fit(X_recall)
                     .kneighbors(Q, return_distance=False)
                 )
                 total = 0
@@ -484,6 +554,7 @@ def bench_index(sizes: list[int]) -> list[dict]:
                     truth = set(int(j) for j in exact_idx[i]) - {i}
                     total += len(pred & truth)
                 recall = round(total / (sample * 20), 4)
+                del X_recall, idx_r
 
             line = (
                 f"  {metric:>10}: build={build_s:>6.2f}s  "
@@ -497,6 +568,7 @@ def bench_index(sizes: list[int]) -> list[dict]:
                 "n": n,
                 "d": d,
                 "metric": metric,
+                "mode": mode_label,
                 "build_s": round(build_s, 3),
                 "query_1nn_ms": round(q1_ms, 4),
                 "query_20nn_ms": round(q20_ms, 4),
@@ -549,18 +621,25 @@ def main() -> None:
     sub = p.add_subparsers(dest="suite", required=True)
 
     u = sub.add_parser("umap", help="Table 2: TMAP2 vs UMAP")
-    u.add_argument("--sizes", default="10000,30000,70000")
+    u.add_argument("--sizes", default="10000,50000,100000,200000,500000,1000000")
     u.add_argument("--repeats", type=int, default=3)
 
     t = sub.add_parser("tmap1", help="Table 1: TMAP2 vs TMAP1")
-    t.add_argument("--sizes", default="10000,50000,100000")
+    t.add_argument("--sizes", default="10000,50000,100000,200000,500000,1000000,2000000,5000000")
     t.add_argument("--repeats", type=int, default=3)
 
     i = sub.add_parser("index", help="Table 3: USearch query latency")
-    i.add_argument("--sizes", default="10000,100000,500000,1000000")
+    i.add_argument(
+        "--sizes",
+        default="10000,100000,500000,1000000,5000000,10000000,50000000,100000000",
+    )
+    i.add_argument(
+        "--mmap", action="store_true",
+        help="Use mmap mode: build, save, query via view()",
+    )
 
     s = sub.add_parser("scale", help="Figure: scaling curves (time + memory only)")
-    s.add_argument("--sizes", default="10000,50000,100000,200000,500000")
+    s.add_argument("--sizes", default="10000,50000,100000,200000,500000,1000000")
     s.add_argument("--repeats", type=int, default=3)
 
     args = p.parse_args()
@@ -571,7 +650,7 @@ def main() -> None:
     elif args.suite == "tmap1":
         bench_tmap1(sizes, args.repeats)
     elif args.suite == "index":
-        bench_index(sizes)
+        bench_index(sizes, mmap_mode=getattr(args, "mmap", False))
     elif args.suite == "scale":
         bench_umap(sizes, args.repeats, quality=False, output="figure_scaling.csv")
 

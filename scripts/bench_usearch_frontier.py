@@ -6,7 +6,7 @@ Reports build time, query latency, recall@20, peak RSS.
 Emits a machine-readable chosen default per metric.
 
 Data:
-  - Jaccard: data/chembl/chembl_200k_morgan.npy (real molecular fingerprints)
+  - Jaccard: ChEMBL/20M-SMILES Morgan FPs (scales to 50M+)
   - Cosine:  synthetic d=768 (protein-embedding scale)
 
 Usage:
@@ -62,10 +62,31 @@ def _hardware_meta() -> dict:
 # Data
 # ---------------------------------------------------------------------------
 
-def load_chembl_fps(n: int | None = None) -> np.ndarray:
-    X = np.load(ROOT / "data" / "chembl" / "chembl_200k_morgan.npy")
-    if n is not None and n < X.shape[0]:
-        X = X[np.random.default_rng(SEED).choice(X.shape[0], n, replace=False)]
+CACHE_DIR = ROOT / "benchmarks" / "cache"
+
+
+def load_jaccard_fps(n: int) -> np.ndarray:
+    """ChEMBL up to 200K, 20M_smiles.txt beyond."""
+    chembl_path = ROOT / "data" / "chembl" / "chembl_200k_morgan.npy"
+    if n <= 200_000 and chembl_path.exists():
+        X = np.load(chembl_path)
+        if n < X.shape[0]:
+            X = X[np.random.default_rng(SEED).choice(X.shape[0], n, replace=False)]
+        return X.astype(np.uint8)
+    # Larger: use 20M SMILES
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache = CACHE_DIR / f"smiles_morgan_{n}_2048.npy"
+    if cache.exists():
+        return np.load(cache).astype(np.uint8)
+    from tmap import fingerprints_from_smiles
+    smiles_path = ROOT / "data" / "20M_smiles.txt"
+    with open(smiles_path) as f:
+        smiles = [line.strip() for _, line in zip(range(n), f) if line.strip()]
+    print(f"  Generating {n:,} Morgan FP...", end=" ", flush=True)
+    t0 = time.perf_counter()
+    X = fingerprints_from_smiles(smiles[:n], fp_type="morgan", n_bits=2048)
+    print(f"done ({time.perf_counter() - t0:.1f}s)")
+    np.save(cache, X.astype(np.uint8))
     return X.astype(np.uint8)
 
 
@@ -187,21 +208,31 @@ def run_sweep(metric: str, sizes: list[int]) -> list[dict]:
     expansion_searches = [100, 200, 400, 800]
 
     is_binary = metric == "jaccard"
-    dataset = "chembl_200k_morgan" if is_binary else "synthetic_normal"
     dim = 2048 if is_binary else 768
 
     for n in sizes:
+        dataset = f"20M_smiles_morgan_{n}" if is_binary and n > 200_000 else (
+            "chembl_200k_morgan" if is_binary else f"synthetic_normal_d{dim}")
         print(f"\n{'=' * 70}")
         print(f" metric={metric}  n={n:,}  dataset={dataset}  dim={dim}")
         print(f"{'=' * 70}")
 
-        X = load_chembl_fps(n) if is_binary else make_dense(n)
+        X = load_jaccard_fps(n) if is_binary else make_dense(n)
 
+        # Ground truth: brute-force up to 200K, USearch exact beyond
         n_q = min(N_QUERIES, n)
-        print(f"  Exact kNN ground truth (n_queries={n_q})...", end=" ", flush=True)
-        t0 = time.perf_counter()
-        exact_idx = exact_knn(X, metric=metric, k=K, n_queries=n_q)
-        print(f"done ({time.perf_counter() - t0:.1f}s)")
+        if n <= 200_000:
+            print(f"  Exact kNN ground truth (brute-force, n_queries={n_q})...",
+                  end=" ", flush=True)
+            t0 = time.perf_counter()
+            exact_idx = exact_knn(X, metric=metric, k=K, n_queries=n_q)
+            print(f"done ({time.perf_counter() - t0:.1f}s)")
+        else:
+            print(f"  Exact kNN ground truth (USearch exact, n_queries={n_q})...",
+                  end=" ", flush=True)
+            t0 = time.perf_counter()
+            exact_idx = _exact_knn_usearch(X, metric=metric, k=K, n_queries=n_q)
+            print(f"done ({time.perf_counter() - t0:.1f}s)")
 
         # Exact mode (skip at large n)
         if n <= 100_000:
@@ -227,6 +258,27 @@ def run_sweep(metric: str, sizes: list[int]) -> list[dict]:
                 results.append(r)
 
     return results
+
+
+def _exact_knn_usearch(
+    X: np.ndarray, metric: str, k: int = K, n_queries: int = N_QUERIES,
+) -> np.ndarray:
+    """Ground truth via USearch exact mode for large datasets."""
+    from tmap.index.usearch_index import USearchIndex
+
+    n_q = min(n_queries, len(X))
+    Q = X[:n_q]
+    idx = USearchIndex(seed=SEED, mode="exact")
+    if metric == "jaccard":
+        idx.build_from_binary(X)
+    else:
+        idx.build_from_vectors(X, metric=metric)
+    pred_raw, _ = idx.query_batch(Q, k=k + 1)
+    clean = np.zeros((n_q, k), dtype=np.int32)
+    for i in range(n_q):
+        others = [int(j) for j in pred_raw[i] if j != i][:k]
+        clean[i, : len(others)] = others
+    return clean
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +334,10 @@ def save_defaults(defaults: dict, all_defaults: dict) -> None:
 def main():
     p = argparse.ArgumentParser(description="USearch frontier benchmark")
     p.add_argument("--metric", choices=["jaccard", "cosine", "euclidean", "all"], default="all")
-    p.add_argument("--sizes", default="10000,50000,100000,200000")
+    p.add_argument(
+        "--sizes",
+        default="10000,50000,100000,200000,500000,1000000,2000000,5000000,10000000,50000000",
+    )
     p.add_argument(
         "--min-recall", type=float, default=0.95,
         help="Target recall for default selection",

@@ -4,13 +4,13 @@
 All backends compared on the SAME real data, SAME k, SAME kc.
 Ground truth: sklearn brute-force exact kNN on 1000 query points.
 
-Datasets (no synthetic data):
-  - Jaccard: ChEMBL 200K Morgan fingerprints (10K, 50K, 100K, 200K)
-  - Cosine:  MNIST 70K digits d=784 (10K, 30K, 70K)
+Datasets:
+  - Jaccard:   ChEMBL/20M-SMILES Morgan FPs (10K to 5M)
+  - Cosine:    MNIST 70K + synthetic d=768 beyond (10K to 5M)
+  - Euclidean: synthetic d=768 (10K to 5M)
 
 Backends:
-  - USearch exact (reference)
-  - USearch HNSW (paper defaults)
+  - USearch exact (reference, n <= 200K)
   - USearch HNSW (sweep: ea in [128, 256, 512])
   - TMAP2 Numba LSH d=512 (Jaccard only)
   - TMAP1 C++ LSH d=512 (Jaccard only)
@@ -20,7 +20,8 @@ All LSH methods use kc=50. USearch uses frozen paper defaults.
 Usage:
   python scripts/bench_recall.py --metric jaccard
   python scripts/bench_recall.py --metric cosine
-  python scripts/bench_recall.py  # both
+  python scripts/bench_recall.py --metric euclidean
+  python scripts/bench_recall.py  # all three
 
 Results: benchmarks/results_paper/recall_{metric}.csv
 """
@@ -47,14 +48,35 @@ N_PERM = 512  # MinHash permutations for LSH methods
 
 
 # ---------------------------------------------------------------------------
-# Data (real datasets only)
+# Data
 # ---------------------------------------------------------------------------
 
 def load_chembl(n: int) -> tuple[np.ndarray, str]:
     X = np.load(ROOT / "data" / "chembl" / "chembl_200k_morgan.npy")
-    if n < X.shape[0]:
-        X = X[np.random.default_rng(SEED).choice(X.shape[0], n, replace=False)]
-    return X.astype(np.uint8), "chembl_200k_morgan"
+    if n <= X.shape[0]:
+        if n < X.shape[0]:
+            X = X[np.random.default_rng(SEED).choice(X.shape[0], n, replace=False)]
+        return X.astype(np.uint8), "chembl_200k_morgan"
+    # For larger sizes, use 20M SMILES
+    return load_smiles_fps(n)
+
+
+def load_smiles_fps(n: int, n_bits: int = 2048) -> tuple[np.ndarray, str]:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache = CACHE_DIR / f"smiles_morgan_{n}_{n_bits}.npy"
+    if cache.exists():
+        return np.load(cache).astype(np.uint8), f"20M_smiles_morgan_{n}"
+    from tmap import fingerprints_from_smiles
+    smiles_path = ROOT / "data" / "20M_smiles.txt"
+    with open(smiles_path) as f:
+        smiles = [line.strip() for _, line in zip(range(n), f) if line.strip()]
+    print(f"  Generating {n:,} Morgan FP...", end=" ", flush=True)
+    import time as _t
+    t0 = _t.perf_counter()
+    X = fingerprints_from_smiles(smiles[:n], fp_type="morgan", n_bits=n_bits)
+    print(f"done ({_t.perf_counter() - t0:.1f}s)")
+    np.save(cache, X.astype(np.uint8))
+    return X.astype(np.uint8), f"20M_smiles_morgan_{n}"
 
 
 def load_mnist(n: int) -> tuple[np.ndarray, str]:
@@ -73,6 +95,16 @@ def load_mnist(n: int) -> tuple[np.ndarray, str]:
     if n < X.shape[0]:
         X = X[np.random.default_rng(SEED).choice(X.shape[0], n, replace=False)]
     return X.astype(np.float32), "mnist_784"
+
+
+def load_dense(n: int, d: int = 768, metric_name: str = "cosine") -> tuple[np.ndarray, str]:
+    """MNIST for n<=70K (cosine only), synthetic beyond."""
+    if metric_name == "cosine" and n <= 70_000:
+        return load_mnist(n)
+    return (
+        np.random.default_rng(SEED).standard_normal((n, d)).astype(np.float32),
+        f"synthetic_d{d}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -215,9 +247,11 @@ def recall_tmap1_lsh(
     n = X.shape[0]
     n_q = len(truth)
 
+    # Use same l as TMAP2 for fair comparison: l = max(8, d//4)
+    l = max(8, n_perm // 4)
     t0 = time.perf_counter()
     enc = tm.Minhash(n_perm)
-    lf = tm.LSHForest(n_perm)
+    lf = tm.LSHForest(n_perm, l)
     for i in range(n):
         fp = tm.VectorUchar(X[i].tolist())
         lf.add(enc.from_binary_array(fp))
@@ -266,23 +300,32 @@ def bench_metric(metric: str, sizes: list[int]) -> list[dict]:
     for n in sizes:
         if is_jaccard:
             X, dataset = load_chembl(n)
-            dim = X.shape[1]
         else:
-            X, dataset = load_mnist(n)
-            dim = X.shape[1]
+            X, dataset = load_dense(n, metric_name=metric)
+        dim = X.shape[1]
 
         print(f"\n{'=' * 70}")
         print(f" Recall comparison: metric={metric}  n={n:,}  [{dataset}]")
         print(f"{'=' * 70}")
 
-        # Ground truth
-        print(
-            f"  Exact kNN (brute force, {N_QUERIES} queries)...",
-            end=" ", flush=True,
-        )
-        t0 = time.perf_counter()
-        truth = exact_knn(X, metric=metric, k=K, n_queries=N_QUERIES)
-        print(f"done ({time.perf_counter() - t0:.1f}s)")
+        # Ground truth (brute-force only feasible up to ~200K)
+        if n <= 200_000:
+            print(
+                f"  Exact kNN (brute force, {N_QUERIES} queries)...",
+                end=" ", flush=True,
+            )
+            t0 = time.perf_counter()
+            truth = exact_knn(X, metric=metric, k=K, n_queries=N_QUERIES)
+            print(f"done ({time.perf_counter() - t0:.1f}s)")
+        else:
+            # For n > 200K, use USearch exact on query sample as ground truth
+            print(
+                f"  Ground truth via USearch exact ({N_QUERIES} queries)...",
+                end=" ", flush=True,
+            )
+            t0 = time.perf_counter()
+            truth = _exact_knn_usearch(X, metric=metric, k=K, n_queries=N_QUERIES)
+            print(f"done ({time.perf_counter() - t0:.1f}s)")
 
         base = {
             "n": n,
@@ -294,7 +337,7 @@ def bench_metric(metric: str, sizes: list[int]) -> list[dict]:
             "seed": SEED,
         }
 
-        # USearch exact (reference)
+        # USearch exact (reference, only feasible at moderate sizes)
         if n <= 200_000:
             print("  USearch exact...", end=" ", flush=True)
             r = recall_usearch(X, truth, metric, "exact", 0, 0)
@@ -334,6 +377,30 @@ def bench_metric(metric: str, sizes: list[int]) -> list[dict]:
     return results
 
 
+def _exact_knn_usearch(
+    X: np.ndarray, metric: str, k: int = K, n_queries: int = N_QUERIES,
+) -> np.ndarray:
+    """Ground truth via USearch exact mode for large datasets where sklearn
+    brute-force is too slow/memory-intensive."""
+    from tmap.index.usearch_index import USearchIndex
+
+    n_q = min(n_queries, len(X))
+    Q = X[:n_q]
+
+    idx = USearchIndex(seed=SEED, mode="exact")
+    if metric == "jaccard":
+        idx.build_from_binary(X)
+    else:
+        idx.build_from_vectors(X, metric=metric)
+
+    pred_raw, _ = idx.query_batch(Q, k=k + 1)
+    clean = np.zeros((n_q, k), dtype=np.int32)
+    for i in range(n_q):
+        others = [int(j) for j in pred_raw[i] if j != i][:k]
+        clean[i, : len(others)] = others
+    return clean
+
+
 def save(rows: list[dict], metric: str) -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     path = RESULTS_DIR / f"recall_{metric}.csv"
@@ -349,22 +416,28 @@ def main():
         description="Fair recall comparison across backends",
     )
     p.add_argument(
-        "--metric", choices=["jaccard", "cosine", "all"],
+        "--metric", choices=["jaccard", "cosine", "euclidean", "all"],
         default="all",
     )
-    p.add_argument("--sizes-jaccard", default="10000,50000,100000,200000")
-    p.add_argument("--sizes-cosine", default="10000,30000,70000")
+    p.add_argument(
+        "--sizes-jaccard",
+        default="10000,50000,100000,200000,500000,1000000,2000000,5000000",
+    )
+    p.add_argument(
+        "--sizes-dense",
+        default="10000,50000,100000,200000,500000,1000000,2000000,5000000",
+    )
     args = p.parse_args()
 
     metrics = (
-        ["jaccard", "cosine"] if args.metric == "all"
+        ["jaccard", "cosine", "euclidean"] if args.metric == "all"
         else [args.metric]
     )
     for metric in metrics:
         if metric == "jaccard":
             sizes = [int(x) for x in args.sizes_jaccard.split(",")]
         else:
-            sizes = [int(x) for x in args.sizes_cosine.split(",")]
+            sizes = [int(x) for x in args.sizes_dense.split(",")]
         results = bench_metric(metric, sizes)
         save(results, metric)
 

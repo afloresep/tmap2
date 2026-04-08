@@ -262,7 +262,7 @@ def bench_tmap2_lsh(sizes: list[int], n_perm: int = 512) -> list[dict]:
     return results
 
 
-def bench_tmap1_lsh(sizes: list[int], n_perm: int = 512) -> list[dict]:
+def bench_tmap1_lsh(sizes: list[int], n_perm: int = 512, l: int | None = None) -> list[dict]:
     import glob as g
     import importlib.util
     import sysconfig
@@ -276,16 +276,20 @@ def bench_tmap1_lsh(sizes: list[int], n_perm: int = 512) -> list[dict]:
     tm = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tm)
 
+    # Use same l as TMAP2 for fair comparison (default: d//4, min 8)
+    if l is None:
+        l = max(8, n_perm // 4)
+
     results = []
     for n in sizes:
         X, dataset = load_jaccard_data(n)
         dim = X.shape[1]
-        print(f"\n  TMAP1 C++ LSH (d={n_perm}, kc={KC}) n={n:,} [{dataset}]", flush=True)
+        print(f"\n  TMAP1 C++ LSH (d={n_perm}, l={l}, kc={KC}) n={n:,} [{dataset}]", flush=True)
 
         # Encode + add (row-by-row, this is the bottleneck)
         t0 = time.perf_counter()
         enc = tm.Minhash(n_perm)
-        lf = tm.LSHForest(n_perm)
+        lf = tm.LSHForest(n_perm, l)
         for i in range(n):
             fp = tm.VectorUchar(X[i].tolist())
             lf.add(enc.from_binary_array(fp))
@@ -313,7 +317,7 @@ def bench_tmap1_lsh(sizes: list[int], n_perm: int = 512) -> list[dict]:
               f"RSS={rss:>6.0f}MB", flush=True)
 
         row = _base_row(n, "jaccard", "tmap1_cpp", dataset, dim,
-                        n_perm=n_perm, kc=KC)
+                        n_perm=n_perm, l=l, kc=KC)
         row.update({
             "encode_s": round(encode_s, 2),
             "index_s": round(index_s, 2),
@@ -370,15 +374,20 @@ def main():
     u.add_argument("--es", type=int, default=400, help="expansion_search (frozen)")
 
     l = sub.add_parser("lsh", help="LSH backends scaling (TMAP2 Numba + TMAP1 C++)")
-    l.add_argument("--sizes", default="10000,50000,100000,200000,500000,1000000")
+    l.add_argument("--sizes", default="10000,50000,100000,200000,500000,1000000,2000000,5000000")
     l.add_argument("--n-perm", type=int, default=512)
+    l.add_argument("--l", type=int, default=None, help="Number of prefix trees (default: d//4)")
 
     a = sub.add_parser("all", help="Run all index benchmarks")
     a.add_argument("--sizes-usearch", default="10000,100000,500000,1000000,2000000,5000000")
-    a.add_argument("--sizes-lsh", default="10000,50000,100000,200000,500000,1000000")
+    a.add_argument(
+        "--sizes-lsh",
+        default="10000,50000,100000,200000,500000,1000000,2000000,5000000",
+    )
     a.add_argument("--ea", type=int, default=512)
     a.add_argument("--es", type=int, default=400)
     a.add_argument("--n-perm", type=int, default=512)
+    a.add_argument("--l", type=int, default=None, help="Number of prefix trees (default: d//4)")
 
     args = p.parse_args()
     save_meta()
@@ -391,13 +400,15 @@ def main():
 
     elif args.suite == "lsh":
         sizes = [int(x) for x in args.sizes.split(",")]
+        lsh_l = getattr(args, "l", None)
         r2 = bench_tmap2_lsh(sizes, n_perm=args.n_perm)
-        r1 = bench_tmap1_lsh(sizes, n_perm=args.n_perm)
+        r1 = bench_tmap1_lsh(sizes, n_perm=args.n_perm, l=lsh_l)
         save_csv(r2 + r1, "index_scale_lsh.csv")
 
     elif args.suite == "all":
         sizes_u = [int(x) for x in args.sizes_usearch.split(",")]
         sizes_l = [int(x) for x in args.sizes_lsh.split(",")]
+        lsh_l = getattr(args, "l", None)
 
         for metric in ["jaccard", "cosine"]:
             scaling, queries = bench_usearch(sizes_u, metric, ea=args.ea, es=args.es)
@@ -405,7 +416,7 @@ def main():
             save_csv(queries, f"index_scale_usearch_{metric}_queries.csv")
 
         r2 = bench_tmap2_lsh(sizes_l, n_perm=args.n_perm)
-        r1 = bench_tmap1_lsh(sizes_l, n_perm=args.n_perm)
+        r1 = bench_tmap1_lsh(sizes_l, n_perm=args.n_perm, l=lsh_l)
         save_csv(r2 + r1, "index_scale_lsh.csv")
 
 
