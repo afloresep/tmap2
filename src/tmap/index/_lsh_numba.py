@@ -321,6 +321,50 @@ def compute_hash_bands(
 
 
 @numba.njit(parallel=True, cache=True)
+def compute_trie_keys(
+    signatures: NDArray[np.uint64],
+    l: int,
+    k: int,
+) -> NDArray[np.uint64]:
+    """
+    Compute trie-style keys for all N signatures in parallel.
+
+    Packs k signature values into a single uint64 key per band by taking
+    bits_per_level bits from each value and placing them MSB-first.
+    Sorting these keys gives a single sorted array per band that supports
+    prefix queries at any depth via range searches.
+
+    Args:
+        signatures: (N, d) uint64 array of MinHash signatures
+        l: Number of bands
+        k: Band width (d // l), also the number of prefix levels
+
+    Returns:
+        trie_keys: (N, l) uint64 array — one key per (point, band)
+    """
+    n = signatures.shape[0]
+    trie_keys = np.empty((n, l), dtype=np.uint64)
+    bits_per_level = np.uint64(64 // k)
+    mask = (np.uint64(1) << bits_per_level) - np.uint64(1)
+    GOLDEN = np.uint64(0x9E3779B97F4A7C15)
+
+    for i in prange(n):
+        for band in range(l):
+            start = band * k
+            key = np.uint64(0)
+            for level in range(k):
+                v = signatures[i, start + level]
+                # Hash to uniformize bits (MinHash values cluster near 0)
+                v ^= v >> np.uint64(33)
+                v *= GOLDEN
+                v ^= v >> np.uint64(33)
+                key = (key << bits_per_level) | (v & mask)
+            trie_keys[i, band] = key
+
+    return trie_keys
+
+
+@numba.njit(parallel=True, cache=True)
 def compute_hash_bands_weighted(
     signatures: NDArray[np.uint64],
     l: int,
@@ -358,6 +402,44 @@ def compute_hash_bands_weighted(
             hash_bands[i, band] = h
 
     return hash_bands
+
+
+@numba.njit(parallel=True, cache=True)
+def compute_trie_keys_weighted(
+    signatures: NDArray[np.uint64],
+    l: int,
+    k: int,
+) -> NDArray[np.uint64]:
+    """
+    Compute trie-style keys for weighted MinHash signatures.
+
+    Args:
+        signatures: (N, d, 2) uint64 array of weighted MinHash signatures
+        l: Number of bands
+        k: Band width / number of prefix levels
+
+    Returns:
+        trie_keys: (N, l) uint64 array
+    """
+    n = signatures.shape[0]
+    trie_keys = np.empty((n, l), dtype=np.uint64)
+    bits_per_level = np.uint64(64 // k)
+    mask = (np.uint64(1) << bits_per_level) - np.uint64(1)
+    GOLDEN = np.uint64(0x9E3779B97F4A7C15)
+
+    for i in prange(n):
+        for band in range(l):
+            start = band * k
+            key = np.uint64(0)
+            for level in range(k):
+                v = signatures[i, start + level, 0]
+                v ^= v >> np.uint64(33)
+                v *= GOLDEN
+                v ^= v >> np.uint64(33)
+                key = (key << bits_per_level) | (v & mask)
+            trie_keys[i, band] = key
+
+    return trie_keys
 
 
 @numba.njit(cache=True)
@@ -549,6 +631,110 @@ def query_lsh_forest_batch(
                         seen_count += 1
 
                     if n_cand >= max_results:
+                        break
+
+            if n_cand >= max_results:
+                break
+
+        counts[q] = n_cand
+
+    return candidates, counts
+
+
+@numba.njit(cache=True)
+def _hashset_check_add(table: NDArray[np.int32], table_mask: int, idx: np.int32) -> bool:
+    """Insert idx into open-addressing hash table. Return True if new."""
+    # Fibonacci hashing to spread indices across table
+    h = (idx * 2654435769) & table_mask  # 0x9E3779B9 as int32-safe
+    while True:
+        v = table[h]
+        if v == idx:
+            return False  # already seen
+        if v == -1:
+            table[h] = idx
+            return True  # new entry
+        h = (h + 1) & table_mask
+
+
+@numba.njit(parallel=True, cache=True)
+def query_lsh_forest_batch_prefix(
+    query_keys: NDArray[np.uint64],
+    sorted_keys_flat: NDArray[np.uint64],
+    sorted_indices_flat: NDArray[np.int32],
+    band_offsets: NDArray[np.int64],
+    n_levels: int,
+    max_results: int,
+) -> tuple[NDArray[np.int32], NDArray[np.int32]]:
+    """
+    Query LSH forest with trie-style prefix relaxation.
+
+    Each band has a single sorted array of trie keys. Prefix matching at
+    depth j is a range query: [key_prefix << shift, key_prefix << shift | ones].
+    Tries the deepest (most selective) level first, relaxes until candidates found.
+
+    Args:
+        query_keys: (n_queries, l) array of full-depth trie keys
+        sorted_keys_flat: Flattened sorted trie keys for all bands
+        sorted_indices_flat: Flattened sorted indices for all bands
+        band_offsets: (l + 1,) offsets into flat arrays
+        n_levels: Number of prefix levels per band (k)
+        max_results: Maximum candidates per query
+
+    Returns:
+        candidates: (n_queries, max_results) padded with -1
+        counts: (n_queries,) number of valid candidates per query
+    """
+    n_queries = query_keys.shape[0]
+    l = query_keys.shape[1]
+    bits_per_level = np.uint64(64 // n_levels)
+
+    candidates = np.full((n_queries, max_results), -1, dtype=np.int32)
+    counts = np.zeros(n_queries, dtype=np.int32)
+
+    # Hash table size: next power of 2 >= max_results * 4
+    table_bits = 0
+    ts = max_results * 4
+    while (1 << table_bits) < ts:
+        table_bits += 1
+    table_size = 1 << table_bits
+    table_mask = table_size - 1
+
+    for q in prange(n_queries):
+        seen = np.full(table_size, np.int32(-1), dtype=np.int32)
+        n_cand = 0
+
+        for band in range(l):
+            band_start = band_offsets[band]
+            band_end = band_offsets[band + 1]
+            band_keys = sorted_keys_flat[band_start:band_end]
+            band_indices = sorted_indices_flat[band_start:band_end]
+
+            full_key = query_keys[q, band]
+
+            # Try levels from deepest (most selective) to shallowest
+            for depth in range(n_levels, 0, -1):
+                # depth = number of prefix components to match (k..1)
+                shift = np.uint64((n_levels - depth)) * bits_per_level
+                prefix = full_key >> shift
+                lo = prefix << shift
+                hi = lo | ((np.uint64(1) << shift) - np.uint64(1))
+
+                left = _binary_search_left(band_keys, lo)
+                right = _binary_search_left(band_keys, hi + np.uint64(1))
+
+                n_matches = right - left
+                if n_matches > 0:
+                    for i in range(left, right):
+                        idx = band_indices[i]
+                        if _hashset_check_add(seen, table_mask, idx):
+                            if n_cand < max_results:
+                                candidates[q, n_cand] = idx
+                                n_cand += 1
+                            if n_cand >= max_results:
+                                break
+
+                    # Stop relaxing if we found real neighbors (not just self)
+                    if n_matches >= 2:
                         break
 
             if n_cand >= max_results:
