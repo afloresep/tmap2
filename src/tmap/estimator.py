@@ -64,21 +64,12 @@ def _hnsw_defaults(
 def _select_lsh_l(d: int, n_samples: int) -> int:
     """Auto-select number of LSH prefix trees based on d and dataset size.
 
-    The LSH band width (k_band = d // l) controls discrimination:
-    - Short bands (small k_band): high recall but many false positives.
-      At large N, the candidate budget (k*kc) overflows with random matches.
-    - Long bands (large k_band): precise candidates but low recall.
-      At small N, too few collisions to find any neighbors.
-
-    We use k_band=4 up to ~1M points (tested optimal for 100k molecules),
-    then gradually increase for larger datasets where the collision pool
-    would otherwise overwhelm the candidate budget.
+    With prefix relaxation enabled (the default), k_band=8 works at any
+    scale because the query starts at full-length prefix and relaxes
+    automatically for sparse regions. This eliminates the need for
+    scale-dependent k_band tuning.
     """
-    if n_samples <= 1_000_000:
-        k_band = 4
-    else:
-        # Scale up gently: k_band=5 at ~2M, 6 at ~4M, 7 at ~8M
-        k_band = max(4, 4 + round(math.log2(n_samples / 1_000_000)))
+    k_band = 8
     n_trees = max(8, d // k_band)
     return min(n_trees, d)
 
