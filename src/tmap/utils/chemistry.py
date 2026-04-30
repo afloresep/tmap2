@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 _FP_RADIUS: int = 2
 _FP_NBITS: int = 1024
 _DRFP_PARAMS: dict[str, Any] = {}
+_MHFP_PARAMS: dict[str, Any] = {}
 _PROP_NAMES: list[str] = []
 
 AVAILABLE_PROPERTIES: list[str] = [
@@ -61,6 +62,23 @@ def _init_drfp_worker(n_folded_length: int, radius: int, min_radius: int, rings:
         "radius": radius,
         "min_radius": min_radius,
         "rings": rings,
+    }
+
+
+def _init_mhfp_worker(
+    length: int,
+    radius: int,
+    rings: bool,
+    kekulize: bool,
+    sanitize: bool,
+) -> None:
+    global _MHFP_PARAMS
+    _MHFP_PARAMS = {
+        "length": length,
+        "radius": radius,
+        "rings": rings,
+        "kekulize": kekulize,
+        "sanitize": sanitize,
     }
 
 
@@ -139,6 +157,39 @@ def _drfp_fp_batch(smiles_batch: list[str]) -> NDArray[np.uint8]:
     return np.array(fps_list, dtype=np.uint8)
 
 
+def _mhfp_fp_batch(smiles_batch: list[str]) -> NDArray[np.uint8]:
+    """Process a batch of SMILES, return SECFP (folded MHFP) fingerprints for valid entries.
+
+    SECFP is MHFP's folded binary variant: a uint8 {0,1} vector suitable
+    for the Jaccard-on-binary path used by the other fingerprint types.
+    """
+    from mhfp.encoder import MHFPEncoder
+    from rdkit import Chem
+
+    encoder = MHFPEncoder()
+    length = _MHFP_PARAMS.get("length", 2048)
+    fps: list[NDArray[np.uint8]] = []
+    for smi in smiles_batch:
+        if not smi:
+            continue
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            continue
+        fp = encoder.secfp_from_smiles(
+            smi,
+            length=length,
+            radius=_MHFP_PARAMS.get("radius", 3),
+            rings=_MHFP_PARAMS.get("rings", True),
+            kekulize=_MHFP_PARAMS.get("kekulize", True),
+            sanitize=_MHFP_PARAMS.get("sanitize", False),
+        )
+        if fp is not None:
+            fps.append(np.asarray(fp, dtype=np.uint8))
+    if fps:
+        return np.stack(fps)
+    return np.empty((0, length), dtype=np.uint8)
+
+
 # Property batch functions (called inside Pool workers)
 
 
@@ -150,7 +201,7 @@ def _mol_props_batch(smiles_batch: list[str]) -> NDArray[np.float64]:
     computers = {
         "mw": lambda mol: Descriptors.ExactMolWt(mol),
         "logp": lambda mol: Descriptors.MolLogP(mol),
-        "n_rings": lambda mol: rdMolDescriptors.CalcNumRings(mol),
+        "n_rings": lambda mol: mol.GetNumBonds() - mol.GetNumAtoms() + len(Chem.GetMolFrags(mol)),
         "hba": lambda mol: rdMolDescriptors.CalcNumHBA(mol),
         "hbd": lambda mol: rdMolDescriptors.CalcNumHBD(mol),
         "tpsa": lambda mol: rdMolDescriptors.CalcTPSA(mol),
@@ -204,6 +255,9 @@ def _rxn_props_batch(rxn_smiles_batch: list[str]) -> NDArray[np.float64]:
         def _sum(mols: list, fn) -> float:  # type: ignore[type-arg]
             return sum(fn(m) for m in mols)
 
+        def _nrings(m):
+            return m.GetNumBonds() - m.GetNumAtoms() + len(Chem.GetMolFrags(m))
+
         r_mw = _sum(r_mols, Descriptors.ExactMolWt)
         p_mw = _sum(p_mols, Descriptors.ExactMolWt)
 
@@ -214,8 +268,7 @@ def _rxn_props_batch(rxn_smiles_batch: list[str]) -> NDArray[np.float64]:
                 - _sum(r_mols, lambda m: m.GetNumHeavyAtoms())
             ),
             "delta_rings": (
-                _sum(p_mols, rdMolDescriptors.CalcNumRings)
-                - _sum(r_mols, rdMolDescriptors.CalcNumRings)
+                _sum(p_mols, _nrings) - _sum(r_mols, _nrings)
             ),
             "delta_aromatic_rings": (
                 _sum(p_mols, rdMolDescriptors.CalcNumAromaticRings)
@@ -257,14 +310,14 @@ def _map4_fingerprints(smiles: list[str], n_workers: int, **kwargs: Any) -> NDAr
     """Compute MAP4 fingerprints using the map4 package.
 
     MAP4 (MinHashed Atom-Pair fingerprint of radius 2) encodes molecules
-    by extracting all atom-pair shingles at multiple radii, then hashing
-    and folding into a fixed-length binary vector.
+    by extracting all atom-pair shingles at multiple radii, MinHashing
+    them, and folding the signature into a fixed-length binary vector.
+    That folded output feeds TMAP's binary-Jaccard path directly.
 
-    Uses MAP4Calculator.calculate_many() which handles parallelization
-    internally.
+    The ``map4`` package parallelizes internally inside ``calculate_many``.
     """
     try:
-        from map4 import MAP4Calculator
+        from map4 import MAP4
     except ImportError:
         raise ImportError(
             "map4 is required for fp_type='map4'. Install with: pip install map4"
@@ -273,10 +326,14 @@ def _map4_fingerprints(smiles: list[str], n_workers: int, **kwargs: Any) -> NDAr
 
     dimensions = kwargs.get("dimensions", 1024)
     radius = kwargs.get("radius", 2)
-    is_counted = kwargs.get("is_counted", False)
+    include_duplicated_shingles = kwargs.get("include_duplicated_shingles", False)
+    seed = kwargs.get("seed", 75434278)
 
-    calc = MAP4Calculator(
-        dimensions=dimensions, radius=radius, is_folded=True, is_counted=is_counted
+    calc = MAP4(
+        dimensions=dimensions,
+        radius=radius,
+        include_duplicated_shingles=include_duplicated_shingles,
+        seed=seed,
     )
 
     mols = []
@@ -297,8 +354,8 @@ def _map4_fingerprints(smiles: list[str], n_workers: int, **kwargs: Any) -> NDAr
             len(smiles),
         )
 
-    fps = calc.calculate_many(mols)
-    return np.array(fps, dtype=np.uint8)
+    fps = calc.calculate_many(mols, number_of_threads=n_workers)
+    return np.asarray(fps, dtype=np.uint8)
 
 
 # fingerprints_from_smiles
@@ -327,9 +384,14 @@ def fingerprints_from_smiles(
         - ``'mxfp'`` -- Macromolecule Extended Fingerprint, 217-dim
           pharmacophoric distance counts (``int64``). Requires the
           ``mxfp`` package. No additional kwargs.
-        - ``'map4'`` -- MinHashed Atom-Pair fingerprint (``uint8``).
-          Requires the ``map4`` package. kwargs: ``dimensions=1024``,
-          ``radius=2``, ``is_counted=False``.
+        - ``'map4'`` -- MinHashed Atom-Pair fingerprint, folded to a
+          binary vector (``uint8``, values 0/1). Requires the ``map4``
+          package. kwargs: ``dimensions=1024``, ``radius=2``,
+          ``include_duplicated_shingles=False``, ``seed=75434278``.
+        - ``'mhfp'`` -- SECFP, the folded binary variant of MHFP
+          (``uint8``, values 0/1). Requires the ``mhfp`` package.
+          kwargs: ``length=2048``, ``radius=3``, ``rings=True``,
+          ``kekulize=True``, ``sanitize=False``.
         - ``'drfp'`` -- Differential Reaction Fingerprint for chemical
           reactions (``uint8``). Requires the ``drfp`` package.
           kwargs: ``n_folded_length=2048``, ``radius=3``,
@@ -344,7 +406,7 @@ def fingerprints_from_smiles(
     fps : ndarray of shape ``(n_valid, n_bits)``
         Fingerprint matrix. Invalid SMILES are silently skipped (a
         warning is logged with the count). Dtype depends on
-        ``fp_type``: ``uint8`` for Morgan/DRFP/MAP4, ``int16`` for
+        ``fp_type``: ``uint8`` for Morgan/DRFP/MAP4/MHFP, ``int16`` for
         MQN, ``int64`` for MXFP.
 
     Examples
@@ -367,6 +429,7 @@ def fingerprints_from_smiles(
         "mxfp": (217, np.int64),
         "drfp": (kwargs.get("n_folded_length", 2048), np.uint8),
         "map4": (kwargs.get("dimensions", 1024), np.uint8),
+        "mhfp": (kwargs.get("length", 2048), np.uint8),
     }
 
     n = len(smiles)
@@ -412,9 +475,26 @@ def fingerprints_from_smiles(
             initargs=(n_folded_length, drfp_radius, min_radius, rings),
         ) as pool:
             batch_results = pool.map(_drfp_fp_batch, chunks)
+    elif fp_type == "mhfp":
+        if importlib.util.find_spec("mhfp") is None:
+            raise ImportError("mhfp is required for fp_type='mhfp'. Install with: pip install mhfp")
+        mhfp_args = (
+            kwargs.get("length", 2048),
+            kwargs.get("radius", 3),
+            kwargs.get("rings", True),
+            kwargs.get("kekulize", True),
+            kwargs.get("sanitize", False),
+        )
+        with ctx.Pool(
+            n_workers,
+            initializer=_init_mhfp_worker,
+            initargs=mhfp_args,
+        ) as pool:
+            batch_results = pool.map(_mhfp_fp_batch, chunks)
     else:
         raise ValueError(
-            f"Unsupported fp_type={fp_type!r}. Use 'morgan', 'mqn', 'mxfp', 'map4', or 'drfp'."
+            f"Unsupported fp_type={fp_type!r}. "
+            "Use 'morgan', 'mqn', 'mxfp', 'map4', 'mhfp', or 'drfp'."
         )
 
     fps_parts = [r for r in batch_results if len(r) > 0]
