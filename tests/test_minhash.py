@@ -562,9 +562,10 @@ class TestWeightedMinHashIntegration:
         wmh = WeightedMinHash(dim=100, num_perm=128, seed=42)
 
         # Simulate two documents with word counts
-        doc1 = np.random.uniform(0.1, 10, size=100)
+        rng = np.random.default_rng(42)
+        doc1 = rng.uniform(0.1, 10, size=100)
         doc2 = doc1.copy()
-        doc2[:10] = np.random.uniform(0.1, 10, size=10)  # Modify first 10 words
+        doc2[:10] = rng.uniform(0.1, 10, size=10)  # Modify first 10 words
 
         sig1 = wmh.from_weight_array(doc1)
         sig2 = wmh.from_weight_array(doc2)

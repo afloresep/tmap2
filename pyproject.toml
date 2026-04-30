@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "tmap2"
-version = "0.2.0"
+version = "0.2.1"
 description = "Tree-based visualization for high-dimensional data"
 readme = "README.md"
 license = {text = "MIT"}
