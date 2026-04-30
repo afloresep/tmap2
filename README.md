@@ -26,9 +26,9 @@ For example, in a TMAP of pet breed images, following the branch from terriers t
 Because the layout is a tree, you get operations that point clouds can't support:
 
 ```python
-path = model.path(idx_a, idx_b) # nodes along the tree path
-d = model.distance(idx_a, idx_b # sum of edge weights along the path
-pseudotime = model.distances_from(idx) # tree distance from one point to all others
+path = model.path(idx_a, idx_b)        # nodes along the tree path
+d = model.distance(idx_a, idx_b)        # sum of edge weights along the path
+pseudotime = model.distances_from(idx)  # tree distance from one point to all others
 ```
 
 ## Installation
@@ -116,22 +116,22 @@ from tmap.utils.singlecell import from_anndata
 
 | Notebook | Topic |
 |----------|-------|
-| [01 Quick Start](notebooks/01_quickstart.ipynb) | End-to-end walkthrough |
-| [02 MinHash Deep Dive](notebooks/02_minhash_deep_dive.ipynb) | Encoding methods and when to use each |
-| [03 Legacy LSH Pipeline](notebooks/03_legacy_lsh_pipeline.ipynb) | Lower-level MinHash + LSHForest + layout workflow |
-| [04 Notebook Widgets](notebooks/04_jscatter_demo.ipynb) | Selection, filtering, zoom, export |
+| [01 Quickstart](notebooks/01_quickstart.ipynb) | Shortest end-to-end walkthrough on a small molecule table |
+| [02 Cheminformatics](notebooks/02_cheminformatics.ipynb) | SMILES → fingerprints → interactive molecular map |
+| [03 Continuous Embeddings](notebooks/03_continuous_embeddings.ipynb) | Cosine and euclidean on MNIST: when to use each |
+| [04 What's New](notebooks/04_new_functionalities.ipynb) | `add_points`, `transform`, tree paths, save/load, external kNN |
 | [05 Single-Cell](notebooks/05_single_cell.ipynb) | RNA-seq with PBMC 3k, pseudotime, UMAP comparison |
-| [06 Metric Guide](notebooks/06_metric_guide.ipynb) | Choosing the right metric |
-| [07 FAQ](notebooks/07_faq.ipynb) | Troubleshooting and common questions |
-| [08 Cheminformatics](notebooks/08_cheminformatics.ipynb) | Molecules, fingerprints, SAR |
-| [09 Protein Analysis](notebooks/09_protein_analysis.ipynb) | FASTA, ESM embeddings, AlphaFold |
-| [11 Card Configuration](notebooks/11_card_configuration.ipynb) | Pinned card layout, fields, and links |
-| [11 Default Params Benchmark](notebooks/11_default_params_benchmark.ipynb) | Defaults across dataset sizes and types |
-| [12 USearch Jaccard](notebooks/12_usearch_jaccard.ipynb) | Binary Jaccard with USearch backend |
+| [06 FAQ](notebooks/06_faq.ipynb) | Troubleshooting and common questions |
+| [07 MinHash Deep Dive](notebooks/07_minhash_deep_dive.ipynb) | Encoding methods and when to use each |
+| [08 Notebook Widgets](notebooks/08_jscatter_demo.ipynb) | Coloring, tooltips, lasso selection with jupyter-scatter |
+| [09 Card Configuration](notebooks/09_card_configuration.ipynb) | Pinned card layout, fields, and links |
+| [10 Protein Analysis](notebooks/10_protein_analysis.ipynb) | FASTA, ESM embeddings, AlphaFold |
+| [11 USearch Jaccard](notebooks/11_usearch_jaccard.ipynb) | Native binary Jaccard backend (high recall, low memory) |
+| [12 Legacy LSH Pipeline](notebooks/12_legacy_lsh_pipeline.ipynb) | Lower-level MinHash + LSHForest + layout workflow |
 
 ## Lower-Level Pipeline
 
-For direct control over indexing, hashing, and layout, see the [legacy pipeline notebook](notebooks/03_legacy_lsh_pipeline.ipynb). The main building blocks:
+For direct control over indexing, hashing, and layout, see the [legacy pipeline notebook](notebooks/12_legacy_lsh_pipeline.ipynb). The main building blocks:
 
 ```python
 from tmap.index import USearchIndex           # dense / binary kNN
