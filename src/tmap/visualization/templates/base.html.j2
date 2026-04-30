@@ -880,7 +880,7 @@
   <!-- fflate for decompression -->
   <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.min.js"></script>
   <!-- SmilesDrawer for molecule rendering -->
-  <script src="https://unpkg.com/smiles-drawer@2.1.7/dist/smiles-drawer.min.js"></script>
+  <script src="https://unpkg.com/smiles-drawer@2.2.1/dist/smiles-drawer.min.js"></script>
 
   <script type="module">
     const decode = (b64) => atob(b64);
@@ -1149,7 +1149,7 @@ function parseEdgeColor(str) {
   if (m) return [+m[1]/255, +m[2]/255, +m[3]/255, m[4] !== undefined ? +m[4] : 1];
   return [0, 0, 0, 0.5];
 }
-const edgeColor = parseEdgeColor(edgeStrokeStyle);
+let edgeColor = parseEdgeColor(edgeStrokeStyle);
 
 const edgeToggle = document.getElementById('edge-toggle');
 const tbEdges = document.getElementById('tb-edges');
@@ -1365,9 +1365,8 @@ function escapeHtml(s) {
 
 function formatValue(val) {
   if (typeof val === 'number') {
-    const abs = Math.abs(val);
-    if (abs >= 1000 || (abs > 0 && abs < 0.01)) return val.toExponential(2);
-    return val.toFixed(3);
+    if (Number.isInteger(val)) return val.toLocaleString();
+    return parseFloat(val.toFixed(3)).toString();
   }
   return escapeHtml(val);
 }
@@ -1686,14 +1685,20 @@ function renderCardStack() {
   const idx = pinnedCards[currentCardIndex];
   const cardConfig = metadata.card || null;
 
-  // Determine card title
-  let cardTitle;
-  if (cardConfig && cardConfig.titleColumn) {
-    const titleCol = columns[cardConfig.titleColumn];
-    cardTitle = titleCol ? String(titleCol.values[idx]) : getLabel(idx);
-  } else {
-    cardTitle = getLabel(idx);
+  // Resolve a card config value: template ("{col}") or plain column name
+  function resolveCardField(template, idx, fallback) {
+    if (!template) return fallback;
+    if (template.includes('{')) {
+      return template.replace(/\{([^}]+)\}/g, (match, colName) => {
+        const c = columns[colName];
+        return c ? String(c.values[idx]) : match;
+      });
+    }
+    const col = columns[template];
+    return col ? String(col.values[idx]) : fallback;
   }
+
+  const cardTitle = resolveCardField(cardConfig && cardConfig.titleColumn, idx, getLabel(idx));
 
   // Find SMILES column (if any)
   const smilesColName = metadata.smilesColumn;
@@ -1720,10 +1725,10 @@ function renderCardStack() {
   html += '<div class="card-label">' + truncateString(cardTitle, 40) + '</div>';
 
   // Subtitle (from card config)
-  if (cardConfig && cardConfig.subtitleColumn) {
-    const subCol = columns[cardConfig.subtitleColumn];
-    if (subCol) {
-      html += '<div class="card-subtitle">' + truncateString(String(subCol.values[idx]), 50) + '</div>';
+  {
+    const subtitle = resolveCardField(cardConfig && cardConfig.subtitleColumn, idx, null);
+    if (subtitle) {
+      html += '<div class="card-subtitle">' + truncateString(subtitle, 50) + '</div>';
     }
   }
 
@@ -1907,7 +1912,7 @@ async function exportData(separator, extension) {
       const col = columns[name];
       if (!col) return '';
       const val = col.values[idx];
-      let strVal = typeof val === 'number' ? formatValue(val) : String(val ?? '');
+      let strVal = val == null ? '' : String(val);
       if (strVal.includes(separator) || strVal.includes('"') || strVal.includes('\\n')) {
         strVal = '"' + strVal.replace(/"/g, '""') + '"';
       }
@@ -2504,6 +2509,7 @@ tbTheme.addEventListener('click', () => {
   isDarkTheme = !isDarkTheme;
   document.documentElement.dataset.theme = isDarkTheme ? '' : 'light';
   scatterplot.set({ backgroundColor: isDarkTheme ? darkBg : lightBg });
+  edgeColor = isDarkTheme ? parseEdgeColor(edgeStrokeStyle) : [1, 1, 1, edgeColor[3]];
   edgeNeedsRedraw = true;
   if (typeof renderEdges === 'function') renderEdges();
   tbTheme.innerHTML = isDarkTheme
