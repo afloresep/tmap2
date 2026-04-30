@@ -313,8 +313,6 @@ def _map4_fingerprints(smiles: list[str], n_workers: int, **kwargs: Any) -> NDAr
     by extracting all atom-pair shingles at multiple radii, MinHashing
     them, and folding the signature into a fixed-length binary vector.
     That folded output feeds TMAP's binary-Jaccard path directly.
-
-    The ``map4`` package parallelizes internally inside ``calculate_many``.
     """
     try:
         from map4 import MAP4
