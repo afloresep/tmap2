@@ -77,6 +77,7 @@ sdist.exclude = [
 ]
 
 [tool.scikit-build.cmake.define]
+OGDF_ARCH = "x86-64"
 
 [tool.ruff]
 line-length = 100

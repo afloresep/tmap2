@@ -61,15 +61,24 @@ jobs:
 
           # Linux: install build tools inside the container
           CIBW_BEFORE_ALL_LINUX: >
-            dnf install -y cmake gcc-c++ make openblas-devel || true
+            dnf install -y binutils cmake gcc-c++ make openblas-devel || true
 
           # macOS: cmake is pre-installed on GitHub runners
           CIBW_BEFORE_ALL_MACOS: >
             brew install cmake || true
 
-          # Verify the extension loaded after build
+          # Verify the extension loaded after build on every published platform.
           CIBW_TEST_COMMAND: >
-            python -c "from tmap.layout._ogdf import _AVAILABLE; assert _AVAILABLE, 'OGDF extension not available'"
+            python -c "from tmap.layout._ogdf import _AVAILABLE; assert _AVAILABLE, 'OGDF extension not available'" &&
+            python -c "from tmap.layout import layout_from_edge_list; x, y, s, t = layout_from_edge_list(3, [(0, 1, 1.0), (1, 2, 1.0)]); assert len(x) == 3 and len(s) == 2"
+
+          # Linux wheels must not contain EVEX instructions (0x62), which are
+          # emitted by AVX-512 and caused SIGILL on older x86_64 CPUs when OGDF
+          # was compiled with its default -march=native.
+          CIBW_TEST_COMMAND_LINUX: >
+            python -c "from tmap.layout._ogdf import _AVAILABLE; assert _AVAILABLE, 'OGDF extension not available'" &&
+            python -c "from tmap.layout import layout_from_edge_list; x, y, s, t = layout_from_edge_list(3, [(0, 1, 1.0), (1, 2, 1.0)]); assert len(x) == 3 and len(s) == 2" &&
+            python -c "import glob, os, re, subprocess, tmap.layout; p = glob.glob(os.path.join(os.path.dirname(tmap.layout.__file__), '_tmap_ogdf*.so'))[0]; d = subprocess.check_output(['objdump', '-d', p], text=True); assert not re.search(r'^\\s*[0-9a-f]+:\\s+62(?:\\s|$)', d, re.MULTILINE | re.IGNORECASE), f'AVX-512 instruction found in {p}'"
 
           # macOS arm64 only on macos-14 runner
           CIBW_ARCHS_MACOS: "native"
