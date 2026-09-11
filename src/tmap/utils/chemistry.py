@@ -295,7 +295,8 @@ def _rxn_props_batch(rxn_smiles_batch: list[str]) -> NDArray[np.float64]:
 
 
 def _get_mp_context() -> multiprocessing.context.BaseContext:  # type:ignore
-    if sys.platform == "darwin":
+    # "forkserver" is Unix-only; Windows has "spawn" only.
+    if sys.platform == "darwin" or sys.platform.startswith("win"):
         return multiprocessing.get_context("spawn")
     return multiprocessing.get_context("forkserver")
 

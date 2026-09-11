@@ -89,3 +89,20 @@ class TestAlignmentAcrossHelpers:
         benzene_mw = molecular_properties(["c1ccccc1"], ["mw"], n_workers=1)["mw"][0]
         assert mw[1] == pytest.approx(benzene_mw)
         assert kept_scaffolds[1] == "c1ccccc1"
+
+
+class TestMultiprocessingContext:
+    """Regression for GH-48: ``forkserver`` does not exist on Windows."""
+
+    @pytest.mark.parametrize("platform", ["win32", "darwin"])
+    def test_spawn_on_windows_and_macos(self, monkeypatch, platform):
+        from tmap.utils import chemistry
+
+        monkeypatch.setattr(chemistry.sys, "platform", platform)
+        assert chemistry._get_mp_context().get_start_method() == "spawn"
+
+    def test_forkserver_on_linux(self, monkeypatch):
+        from tmap.utils import chemistry
+
+        monkeypatch.setattr(chemistry.sys, "platform", "linux")
+        assert chemistry._get_mp_context().get_start_method() == "forkserver"
