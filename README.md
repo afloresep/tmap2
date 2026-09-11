@@ -28,14 +28,19 @@ Because the layout is a tree, you get operations that point clouds can't support
 ```python
 path = model.path(idx_a, idx_b)        # nodes along the tree path
 d = model.distance(idx_a, idx_b)        # sum of edge weights along the path
+n = model.hops(idx_a, idx_b)            # number of tree edges between two points
 pseudotime = model.distances_from(idx)  # tree distance from one point to all others
 ```
+
+The same path tracing and tree-distance colouring are available inside the interactive HTML: pin two points and the inspector lists the path, or colour the whole map by tree distance from a selected point.
 
 ## Installation
 
 ```bash
 pip install tmap2
 ```
+
+Wheels are published for Linux x86_64 and macOS arm64 (Apple Silicon) on Python 3.11 to 3.13. Other platforms build the OGDF layout extension from source and need CMake and a C++17 compiler. Windows is not tested or supported; use [WSL2](https://learn.microsoft.com/windows/wsl/install), where the Linux wheel installs directly.
 
 Optional extras:
 
@@ -55,30 +60,37 @@ pip install biopython # protein helpers (ProtParam properties, PDB parsing)
 from tmap.utils import fingerprints_from_smiles
 from tmap import TMAP
 
-smiles = [...] # Your smiles list
-# Get Binary fingerprints (Need Jaccard distance)
-fps = fingerprints_from_smiles(smiles, fp_type="morgan", radius=2, n_bits=2048)
-model = TMAP(metric="jaccard", n_neighbors=20, seed=42).fit(fps)
-model.write_html("map.html") # Save in html file
-# model.show() # See in Jupyter Notebook 
+smiles = [...]  # your SMILES list
+# Binary fingerprints (Jaccard distance). `valid` flags the SMILES RDKit could parse,
+# so you can drop the same rows from any labels or properties you attach later.
+fps, valid = fingerprints_from_smiles(smiles, fp_type="morgan", radius=2, n_bits=2048, return_valid=True)
+model = TMAP(metric="jaccard", n_neighbors=20).fit(fps)
+viz = model.to_tmapviz()
+viz.write_html("map.html")  # interactive HTML, open in a browser
+# viz.show()                # or render inline in a Jupyter notebook
 ```
 
 ### Continuous Vectors (e.g. Protein Embeddings)
 
 ```python
+import numpy as np
+from tmap import TMAP
+
 # embeddings (use cosine / euclidean distances)
 X = np.random.random((1000, 128)).astype(np.float32)
 model = TMAP(metric="cosine", n_neighbors=20).fit(X)
-# model.write_html("tmap.html") # Save in html file
-model.show() # See in Jupyter Notebook 
+viz = model.to_tmapviz()
+viz.show()                    # inline in a Jupyter notebook
+# viz.write_html("tmap.html") # or save as interactive HTML
 ```
 
 ## Key Features
 
-- **Tree structure**: follow branches, trace paths, compute pseudotime
-- **Deterministic**: same input + seed = same output
-- **Multiple metrics**: `jaccard`, `cosine`, `euclidean`, `precomputed`
-- **Incremental**: `add_points()` and `transform()` for adding new data into an existing TMAP 
+- **Tree structure**: follow branches, trace paths, count hops, compute pseudotime
+- **Always one tree**: a too-low `n_neighbors` can fragment the kNN graph; TMAP bridges the pieces so `path` and `distance` stay defined (`connect_components=True`, inspect with `n_components_`)
+- **Deterministic**: the layout is always seeded and deterministic. For cosine/euclidean, pass `reproducible=True` to also make the HNSW index build bit-identical across runs (slower)
+- **Multiple metrics**: `jaccard`, `cosine`, `euclidean`, `precomputed`, or bring your own kNN graph
+- **Incremental**: `add_points()` and `transform()` for adding new data into an existing TMAP
 - **Model persistence**: `save()` / `load()`
 - **Three viz backends**: interactive HTML, jupyter-scatter, matplotlib
 
@@ -101,12 +113,28 @@ viz.add_label("SMILES", smiles_list)
 viz.show(width=1000, height=620, controls=True) # to see in jupyter notebook
 # viz.write_html("mytmap.html") # to save and see as HTML in the browser
 ```
-> Here SMILES are added as label which will not trigger the 2D image of the structure. If you want to see the structures add smiles via
-> `add_smiles(smiles_list)`
+> Here SMILES are added as a plain label, so no 2D structure is drawn. To render structures in tooltips and cards, use `viz.add_smiles(smiles_list)` instead. For image datasets use `viz.add_images(paths_or_urls)`.
 
-If you save using `viz.write_html("name.html")` the **Interactive HTML** becomes available which supports lasso selection, light/dark theme, filter and search panels, pinned metadata cards, binary mode for large datasets.
+### Filters, cards and structures
 
-Alternatively, you can see it with matplotlib by using **Static plots** matplotlib for publication figures: `model.plot_static(color_by=labels)` 
+```python
+viz.add_filter("Ring Count", n_rings, categorical=True)   # filter-panel column without a colour map
+viz.configure_column("UniProt ID", link_template="https://www.uniprot.org/uniprotkb/{value}")
+viz.configure_card(title_column="Name", fields=["Molecular Weight", "Scaffold"])
+viz.add_3d_structures(alphafold_urls, source="url", fmt="pdb")   # or add_3d_structure_files(local_paths)
+```
+
+`add_filter` puts a column in the filter panel without computing colours for it, which is cheaper than `add_color_layout` when you only want to filter. Colour layouts are always filterable. `configure_column` and `configure_card` control links, formatting and what the pinned card shows. `add_3d_structures` and `add_3d_structure_files` attach PDB or mmCIF structures that render in the card.
+
+### Interactive HTML
+
+`viz.write_html("name.html")` writes a self-contained page with lasso selection, light/dark theme, filter and search panels, pinned metadata cards, and a binary mode for large datasets. Selecting a point opens the **inspector**:
+
+- **Neighbors**: the point's tree neighbours with similarity scores, property differences and structures or images. Hovering a neighbour highlights the connecting edge.
+- **Path**: pin a second point to trace the tree path between them, listing each node with its step number and running tree distance.
+- **Colour by tree distance**: colour the whole map by tree distance from the selected point, using the normal colour menu.
+
+For publication figures use matplotlib: `model.plot_static(color_by=labels)`.
 
 ## Domain Utilities
 
@@ -120,10 +148,18 @@ from tmap.utils.singlecell import from_anndata
 
 | Domain | Metric | Utilities |
 |--------|--------|-----------|
-| Chemoinformatics | `jaccard` | `fingerprints_from_smiles`, `molecular_properties`, `murcko_scaffolds` |
-| Proteins | `cosine` / `euclidean` | `fetch_uniprot`, `fetch_alphafold`, `read_fasta`, `sequence_properties` |
-| Single-cell | `cosine` / `euclidean` | `from_anndata`, `cell_metadata`, `marker_scores` |
+| Chemoinformatics | `jaccard` | `fingerprints_from_smiles` (`return_valid=True` flags unparseable SMILES), `molecular_properties`, `murcko_scaffolds`, `reaction_properties` |
+| Proteins | `cosine` / `euclidean` | `fetch_uniprot`, `fetch_alphafold`, `read_fasta`, `read_pdb`, `read_pdb_dir`, `read_protein_csv`, `sequence_properties`, `parse_alignment` |
+| Single-cell | `cosine` / `euclidean` | `from_anndata`, `cell_metadata`, `marker_scores`, `obs_to_numeric`, `subset_anndata`, `sample_obs_indices` |
 | Generic embeddings | `cosine` / `euclidean` / `precomputed` | No domain utils needed |
+
+## Examples
+
+Runnable scripts for chemistry, images, proteins and text live in [`examples/`](examples/README.md). The shortest one is:
+
+```bash
+python examples/chemistry/molecules_tmap.py --nrows 3000
+```
 
 ## Notebooks
 
