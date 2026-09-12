@@ -40,7 +40,7 @@ The same path tracing and tree-distance colouring are available inside the inter
 pip install tmap2
 ```
 
-Wheels are published for Linux x86_64 and macOS arm64 (Apple Silicon) on Python 3.11 to 3.13. Other platforms build the OGDF layout extension from source and need CMake and a C++17 compiler. Windows is not tested or supported; use [WSL2](https://learn.microsoft.com/windows/wsl/install), where the Linux wheel installs directly.
+Wheels are published for Linux x86_64, macOS arm64 (Apple Silicon), and Windows x86_64 on Python 3.11 to 3.13. Other platforms build the OGDF layout extension from source and need CMake and a C++17 compiler.
 
 Optional extras:
 
