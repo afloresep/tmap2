@@ -5,6 +5,9 @@ on:
     branches: [main, master, visualization]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:  # manual trigger, also runs the Windows job
+  schedule:
+    - cron: "0 3 * * 1"  # weekly, Monday 03:00 UTC; runs the Windows job
 
 # Cancel in-progress runs when a new push is made
 concurrency:
@@ -74,6 +77,42 @@ jobs:
       - name: Verify OGDF extension
         run: |
           python -c "from tmap.layout import OGDF_AVAILABLE; print('OGDF:', OGDF_AVAILABLE); assert OGDF_AVAILABLE"
+
+      - name: Run all tests
+        run: python -m pytest -v
+
+  # Full tests with OGDF layout on Windows (MSVC). Building OGDF from source
+  # takes 20-30 minutes, so this runs only on manual trigger or on schedule,
+  # not on every push/PR. Not required for PRs to be mergeable.
+  pytest-windows:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install tmap with bundled OGDF (MSVC)
+        env:
+          # Short build dir: OGDF include paths plus the default temp build
+          # dir can exceed MSVC's MAX_PATH limit.
+          SKBUILD_BUILD_DIR: C:/tb
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Verify OGDF extension
+        run: python -c "from tmap.layout import OGDF_AVAILABLE; print('OGDF:', OGDF_AVAILABLE); assert OGDF_AVAILABLE"
 
       - name: Run all tests
         run: python -m pytest -v
