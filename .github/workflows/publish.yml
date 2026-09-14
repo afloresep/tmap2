@@ -38,9 +38,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-14, windows-latest]
         # ubuntu-latest  = Linux x86_64
         # macos-14       = macOS arm64 (Apple Silicon)
+        # windows-latest = Windows x86_64 (MSVC)
 
     steps:
       - uses: actions/checkout@v5
@@ -83,6 +84,12 @@ jobs:
           # macOS arm64 only on macos-14 runner
           CIBW_ARCHS_MACOS: "native"
           CIBW_ARCHS_LINUX: "x86_64"
+          CIBW_ARCHS_WINDOWS: "AMD64"
+
+          # Windows: OGDF has deep include paths and MSVC still honours the
+          # 260-character MAX_PATH limit in places, so build in a short
+          # directory instead of cibuildwheel's temp dir.
+          CIBW_ENVIRONMENT_WINDOWS: 'SKBUILD_BUILD_DIR="C:/tb/{wheel_tag}"'
 
       - uses: actions/upload-artifact@v5
         with:
