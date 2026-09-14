@@ -1,6 +1,7 @@
 [![Tests](https://github.com/afloresep/tmap2/actions/workflows/tests.yml/badge.svg)](https://github.com/afloresep/tmap2/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/tmap2)](https://pypi.org/project/tmap2/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](#installation)
 
 # TMAP2
 
@@ -41,6 +42,8 @@ pip install tmap2
 ```
 
 Wheels are published for Linux x86_64, macOS arm64 (Apple Silicon), and Windows x86_64 on Python 3.11 to 3.13. Other platforms build the OGDF layout extension from source and need CMake and a C++17 compiler.
+
+On Windows and macOS the chemistry helpers (`fingerprints_from_smiles`, `molecular_properties`) start worker processes with the `spawn` method, so scripts that call them need the usual `if __name__ == "__main__":` guard. Notebooks are unaffected.
 
 Optional extras:
 
