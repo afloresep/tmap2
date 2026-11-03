@@ -1,6 +1,6 @@
 # Molecule Tutorial
 
-This is the clearest end-to-end TMAP workflow for chemistry:
+This tutorial walks through a full chemistry workflow:
 
 1. Load SMILES from `examples/cluster_65053.csv`
 2. Compute Morgan fingerprints
@@ -11,24 +11,25 @@ This is the clearest end-to-end TMAP workflow for chemistry:
 ## Requirements
 
 ```bash
-python -m pip install .
-python -m pip install rdkit jupyter-scatter
+pip install "tmap2[chemistry,notebook]"
 ```
 
-`rdkit` is needed for fingerprints and molecular properties. `jupyter-scatter` is only needed for notebook widgets.
+The `chemistry` extra installs RDKit, which the fingerprint and property helpers need. The `notebook` extra installs jupyter-scatter, which is only needed for notebook widgets.
+
+Run the code from the repository root. The helpers in step 2 start worker processes, so if you paste the code into a script, put it under `if __name__ == "__main__":`. Notebooks don't need that.
 
 ## 1. Load A Molecule Table
 
 ```python
 import pandas as pd
 
-df = pd.read_csv("../examples/cluster_65053.csv", nrows=3000)
+df = pd.read_csv("examples/cluster_65053.csv", nrows=3000)
 smiles = df["smiles"].tolist()
 
 print(f"{len(smiles):,} molecules")
 ```
 
-Use a small subset first. Once the workflow is working, remove `nrows=3000`.
+Use a small subset first. Once the workflow is working, remove `nrows=3000` (the full file has about 64,000 molecules).
 
 ## 2. Compute Fingerprints, Properties, And Scaffolds
 
@@ -51,22 +52,20 @@ scaffolds = murcko_scaffolds(smiles)
 Without `return_valid=True` you get just the matrix, and a single bad SMILES
 shifts every row after it in `props` and `scaffolds`.
 
+`molecular_properties` can compute any of the names in `tmap.utils.AVAILABLE_PROPERTIES`, such as `"tpsa"`, `"hbd"`, `"hba"` or `"fraction_csp3"`.
+
 ## 3. Fit TMAP
 
 ```python
 from tmap import TMAP
 
-model = TMAP(
-    metric="jaccard",
-    n_neighbors=20,
-    n_permutations=512,
-    kc=50,
-    seed=42,
-).fit(fps)
+model = TMAP(metric="jaccard", n_neighbors=20, seed=42).fit(fps)
 
 print(model.embedding_.shape)
 print(model.tree_.edges.shape)
 ```
+
+For a binary matrix like this one, TMAP finds neighbors with a USearch HNSW index on the raw bits. The index is built on several threads, so two runs can give slightly different maps. Pass `reproducible=True` if you need identical coordinates every time; the build gets slower.
 
 ## 4. Build A Visualization
 
@@ -87,44 +86,60 @@ This gives you:
 - multiple property views
 - scaffold labels in the tooltip
 
+The [visualization guide](visualization_guide.md) covers filters, search, pinned cards and links.
+
 ## 5. Explore In A Notebook
 
 ```python
-widget = viz.to_widget(width=1000, height=650, controls=True)
-widget.show()
+viz.show(width=1000, height=650, controls=True)
 ```
 
 Use this when you want to switch color layers, filter categories, and inspect points interactively in Jupyter.
 
-Note: notebook widgets do not draw tree edges yet. HTML export does.
+Note: notebook widgets do not draw tree edges yet, and they warn about it. HTML export does draw them.
 
-## 6. Save A Shareable HTML File
+## 6. Follow The Tree
+
+The fitted model answers questions about the tree directly:
+
+```python
+a, b = 0, 100
+print(model.path(a, b))       # molecules along the tree path from a to b
+print(model.hops(a, b))       # number of edges on that path
+print(model.distance(a, b))   # summed Jaccard distance along the path
+
+steps = model.hops_from(a)    # edges from molecule a to every other molecule
+```
+
+`model.distances_from(a)` gives the summed distances instead of edge counts. Both make good color layers: `viz.add_color_layout("Hops from 0", steps.tolist())`.
+
+## 7. Save A Shareable HTML File
 
 ```python
 path = viz.write_html("cluster_65053.html")
 print(path)
 ```
 
-This writes one self-contained HTML file that you can open in a browser.
+This writes one HTML file with the data embedded, which you can open in a browser without a server. The page loads a few JavaScript libraries from a CDN, so it needs internet access.
 
-## 7. Serve A Larger Map Locally
+## 8. Serve A Larger Map Locally
 
 ```python
 viz.serve(port=8050)
 ```
 
-Use `serve()` when the map is large enough that one HTML file becomes inconvenient. `serve()` writes static assets and starts a small local HTTP server.
+Use `serve()` when the map is large enough that one HTML file becomes inconvenient. It writes the page and its data files to a temporary folder, opens your browser, and keeps serving until you press Ctrl+C. To keep the files, or to put them on a web server, use `viz.write_static("cluster_65053_site/")` instead.
 
-## 8. Save The Model Too
+## 9. Save The Model Too
 
 ```python
-model.save("cluster_65053_model.pkl")
-loaded = TMAP.load("cluster_65053_model.pkl")
+model.save("cluster_65053.tmap")
+loaded = TMAP.load("cluster_65053.tmap")
 ```
 
 This is useful when you want to keep the fitted tree and coordinates for later analysis.
 
-## 9. Script Version
+## 10. Script Version
 
 If you want the same workflow as a script, run:
 
@@ -133,3 +148,5 @@ python examples/chemistry/molecules_tmap.py --nrows 3000 --output examples/clust
 ```
 
 Add `--serve` if you want it to start a local viewer.
+
+For a longer version with the full 64,000 molecules and more color layers, see [notebook 02](../notebooks/02_cheminformatics.ipynb).

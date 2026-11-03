@@ -1,8 +1,11 @@
 # Examples
 
-Runnable scripts grouped by data type. Each one is self-contained: run it from
-the repository root and it downloads or caches whatever it needs under
-`examples/data/`, then writes its output to `examples/`.
+Runnable scripts grouped by data type. Run them from the repository root. Each
+script's docstring lists the extra packages it needs (for example `torch`,
+`datasets` or `sentence-transformers`). Datasets and cached embeddings go to
+`examples/data/`; some raw datasets and model weights use their library's own
+cache instead (Hugging Face, scikit-learn, torchvision). Outputs are written to
+`examples/`.
 
 ```bash
 python examples/chemistry/molecules_tmap.py --nrows 3000
@@ -13,7 +16,6 @@ python examples/chemistry/molecules_tmap.py --nrows 3000
 | Example | Description |
 |---------|-------------|
 | [`chemistry/molecules_tmap.py`](chemistry/molecules_tmap.py) | The simplest chemistry example: SMILES → fingerprints → interactive map, with molecular properties and Murcko scaffolds |
-| [`chemistry/smiles_tmap.py`](chemistry/smiles_tmap.py) | The same map built step by step: `MinHash` → `LSHForest` → OGDF layout → `TmapViz` |
 | [`chemistry/molecules_tmap_legacy.py`](chemistry/molecules_tmap_legacy.py) | `molecules_tmap.py` with the adaptive layout and untangle post-pass switched off, for comparison |
 
 ## Images
@@ -25,7 +27,7 @@ python examples/chemistry/molecules_tmap.py --nrows 3000
 | [`images/emnist_characters_tmap.py`](images/emnist_characters_tmap.py) | Handwritten digits and letters together, showing where OCR confuses the two |
 | [`images/flowers_tmap.py`](images/flowers_tmap.py) | Oxford Flowers 102: morphological gradients across species |
 | [`images/cub200_birds_tmap.py`](images/cub200_birds_tmap.py) | CUB-200 birds: morphological paths across 200 species |
-| [`images/wikiart_tmap.py`](images/wikiart_tmap.py) | WikiArt paintings coloured by artistic style |
+| [`images/wikiart_tmap.py`](images/wikiart_tmap.py) | WikiArt paintings colored by artistic style |
 
 ## Proteins
 
@@ -37,7 +39,7 @@ python examples/chemistry/molecules_tmap.py --nrows 3000
 
 | Example | Description |
 |---------|-------------|
-| [`text/word_embeddings_tmap.py`](text/word_embeddings_tmap.py) | ~800 common English words embedded with a sentence-transformer |
+| [`text/word_embeddings_tmap.py`](text/word_embeddings_tmap.py) | About 1,200 common English words in 19 categories, embedded with a sentence-transformer |
 | [`text/word_embeddings_50k.py`](text/word_embeddings_50k.py) | The same idea at 50,000 WordNet nouns |
 
 ## Layout internals
@@ -48,13 +50,17 @@ python examples/chemistry/molecules_tmap.py --nrows 3000
 
 ## Data
 
-- `cluster_65053.csv` — ~6k SMILES from an Enamine chemical cluster. Used by the
-  chemistry examples, the layout demo, and several docs and notebooks.
-- `data/` — datasets and cached embeddings downloaded by the examples on first
+- `cluster_65053.csv`: about 64,000 SMILES from an Enamine chemical cluster. Used
+  by the chemistry examples, the layout demo, and several docs and notebooks.
+- `data/`: datasets and cached embeddings downloaded by the examples on first
   run. Not tracked in git, and can be deleted to reclaim the space.
 
-Outputs (`.html`, `.png`) are written to `examples/` and are not tracked either.
+Scripts write their outputs (`.html` maps, `.png` figures, `.txt` reports, and
+`esm_atlas_out/` for the protein example) to `examples/`. Only the `.html` files
+and `data/` are in `.gitignore`, so the others show up in `git status`.
 
 ## Notebooks
 
-Step-by-step walkthroughs live in [`notebooks/`](../notebooks) rather than here.
+Step-by-step walkthroughs live in [`notebooks/`](../notebooks). The lower-level
+MinHash → LSHForest → OGDF layout → `TmapViz` pipeline is in
+[`notebooks/12_lower_level_pipeline.ipynb`](../notebooks/12_lower_level_pipeline.ipynb).

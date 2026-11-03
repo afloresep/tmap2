@@ -1,6 +1,6 @@
-"""Word embedding TMAP — semantic map of English words.
+"""Word embedding TMAP: a semantic map of English words.
 
-Embed ~800 common English words with a sentence-transformer, build a TMAP
+Embed ~1,200 common English words with a sentence-transformer, build a TMAP
 with cosine metric, and explore semantic neighborhoods: animals cluster near
 animals, countries near countries, and the tree paths between them reveal
 thematic transitions (e.g., "salmon → trout → bass → guitar").
@@ -42,7 +42,7 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1]
 
 OUTPUT_DIR = EXAMPLES_DIR
 
-# Vocabulary: ~800 words across 15 semantic categories
+# Vocabulary: ~1,200 words across 19 semantic categories
 
 VOCABULARY: dict[str, list[str]] = {
     "animals": [

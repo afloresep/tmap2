@@ -4,7 +4,7 @@ The simplest chemistry example: load SMILES, compute fingerprints and
 properties using domain utilities, fit a TMAP, and export an interactive
 HTML visualization.
 
-For the step-by-step low-level pipeline, see smiles_tmap.py.
+For the step-by-step low-level pipeline, see notebooks/12_lower_level_pipeline.ipynb.
 
 Usage:
     python examples/chemistry/molecules_tmap.py

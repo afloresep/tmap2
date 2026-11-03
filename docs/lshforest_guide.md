@@ -8,7 +8,9 @@ This guide explains how LSH Forest works in TMAP and helps you choose the right 
 
 LSH Forest is an **index structure** for fast approximate nearest neighbor search. It takes MinHash signatures and enables rapid similarity queries.
 
-**The key insight:** Instead of comparing every item to every other item (O(n²)), LSH Forest uses sorted MinHash prefixes to find likely neighbors efficiently.
+Comparing every item with every other item takes O(n²) time. LSH Forest sorts slices of the MinHash signatures so that likely neighbors end up next to each other, and then only compares those.
+
+**When TMAP uses it:** `TMAP(metric="jaccard").fit(X)` builds an LSH Forest for lists of feature indices, lists of string tokens and SciPy sparse matrices. Dense 0/1 matrices go to USearch instead (see the [USearch guide](usearch_backend.md)). The estimator picks `l` itself and uses its own `n_permutations` (512) and `kc` (50); after fitting, the forest is available as `model.lsh_forest_`. This guide covers using the class directly.
 
 ```txt
 MinHash Signatures
@@ -30,7 +32,7 @@ mh = MinHash(num_perm=128, seed=42)
 signatures = mh.batch_from_binary_array(fingerprints)
 
 # 2. Build the index
-lsh = LSHForest(d=128, l=16)  # d must match num_perm
+lsh = LSHForest(d=128, l=32)  # d must match num_perm
 lsh.batch_add(signatures)
 lsh.index()  # Don't forget this!
 
@@ -54,17 +56,17 @@ Think of LSH Forest as maintaining several sorted indexes over different parts o
 ```txt
 Signature (128 values)
     ↓
-Split into l=16 bands (8 values each)
+Split into l=32 bands (4 values each)
     ↓
-Tree 0: sort values 0..7
-Tree 1: sort values 8..15
-Tree 2: sort values 16..23
+Tree 0: sort values 0..3
+Tree 1: sort values 4..7
+Tree 2: sort values 8..11
 ...
     ↓
-Query: try prefix lengths 8, 7, ... 1 until enough candidates exist
+Query: try prefix lengths 4, 3, 2, 1 until enough candidates exist
 ```
 
-**Why adaptive prefixes?** A strict eight-value collision is often too rare. Backoff preserves selective matches when they exist but still returns useful candidates for moderately similar data.
+**Why adaptive prefixes?** A strict full-band collision is often too rare. Backoff preserves selective matches when they exist but still returns useful candidates for moderately similar data.
 
 ---
 
@@ -85,26 +87,28 @@ Controls the **recall vs speed** tradeoff.
 
 | Configuration | Band width | Tradeoff |
 |---------------|------------|----------|
-| `d=128, l=8` | 16 | Legacy TMAP default; lowest index memory |
-| `d=128, l=16` | 8 | Good compatibility/quality starting point |
-| `d=128, l=32` | 4 | More trees and memory; useful for difficult set data |
+| `d=128, l=8` | 16 | Constructor default (`l=None` means `min(8, d)`); lowest index memory |
+| `d=128, l=16` | 8 | Fewer trees, less memory |
+| `d=128, l=32` | 4 | What `TMAP` picks for up to a million points |
 | `d=128, l=64` | 2 | Aggressive, usually unnecessary with prefix backoff |
 
-**Rule of thumb:** Start with `l=d//8` and tune `kc` first. More trees consume memory linearly and are no longer required merely to avoid empty exact-band buckets.
+**Rule of thumb:** Start with `l=d//4`, the same band width of 4 that `TMAP` uses (it was the best setting on 100k molecules), and tune `kc` next. Memory grows linearly with `l`. Above a million points `TMAP` widens the bands gradually (width 5 at about 2M points, 6 at about 4M).
+
+If `d` is not a multiple of `l`, the last `d % l` values of each signature are not indexed. For example, `d=128, l=48` gives bands of 2 values and leaves 32 values out.
 
 ```python
 # For a 50k molecule dataset
-lsh = LSHForest(d=128, l=16)
+lsh = LSHForest(d=128, l=32)
 ```
 
 ### `store` - Signature Storage
 
-Controls whether signature-dependent refinement and inspection methods are exposed. Adaptive prefix lookup itself must retain the indexed band values, so `store=False` no longer removes the core signature memory.
+Controls whether the methods that look up signatures by ID are available. The prefix search keeps the band values either way, so `store=False` saves no memory.
 
 | Value | Capabilities |
 |-------|--------------|
 | `True` (default) | Full functionality: queries, distances, k-NN graph |
-| `False` | Prefix queries only; no linear scan, distances, or k-NN graph |
+| `False` | `query(signature, k)` only |
 
 ```python
 # Prefix candidate queries only
@@ -114,7 +118,7 @@ lsh = LSHForest(d=128, store=False)
 lsh = LSHForest(d=128, store=True)
 ```
 
-**Note:** `store=False` disables `get_knn_graph()`, `linear_scan()`, `get_distance_by_id()`, etc.
+**Note:** With `store=False`, `get_knn_graph()`, `query_by_id()`, `query_linear_scan()`, `query_linear_scan_by_id()`, `query_external_batch()`, `linear_scan()`, `get_distance_by_id()`, `get_all_distances()` and `get_hash()` all raise `ValueError`.
 
 ### `weighted` - Weighted MinHash Support
 
@@ -134,18 +138,20 @@ lsh = LSHForest(d=128, weighted=True)
 
 ## Query Methods: Which One to Use?
 
-LSH Forest provides multiple query methods. Here's when to use each:
+Which query method to use depends on whether the point is already in the index and whether you need distances.
 
 ### Decision Tree
 
 ```txt
 What do you need?
 │
-├─ k-NN graph of ALL points → get_knn_graph() ⭐ MAIN METHOD
+├─ k-NN graph of ALL points → get_knn_graph()  (main method)
 │
 ├─ Query a NEW point (not in index)?
 │   │
 │   ├─ Need accurate distances? → query_linear_scan()
+│   │
+│   ├─ Many new points at once? → query_external_batch()
 │   │
 │   └─ Just need candidates? → query()
 │
@@ -163,15 +169,16 @@ What do you need?
 | `get_knn_graph(k, kc)` | KNNGraph | High | Fast | **Build TMAP layout** |
 | `query_linear_scan(sig, k, kc)` | [(dist, idx), ...] | High | Medium | Query new point |
 | `query_linear_scan_by_id(id, k, kc)` | [(dist, idx), ...] | High | Medium | Query existing point |
-| `query(sig, k)` | [idx, ...] | Low | Fast | Get candidates only |
-| `query_by_id(id, k)` | [idx, ...] | Low | Fast | Get candidates only |
+| `query_external_batch(sigs, k, kc)` | (indices, distances) | High | Fast | Query many new points |
+| `query(sig, k)` | int32 array | Low | Fast | Get candidates only |
+| `query_by_id(id, k)` | int32 array | Low | Fast | Get candidates only (includes the point itself) |
 | `linear_scan(sig, indices, k)` | [(dist, idx), ...] | Exact | Varies | Refine candidates |
 
 ---
 
 ## Method Details
 
-### `get_knn_graph(k, kc)` - The Primary Method
+### `get_knn_graph(k, kc)`: The Primary Method
 
 **Use this for building TMAP visualizations.**
 
@@ -197,7 +204,7 @@ print(f"Each point has up to {knn.k} neighbors")
 
 ---
 
-### `query_linear_scan(signature, k, kc)` - Query New Point
+### `query_linear_scan(signature, k, kc)`: Query New Point
 
 **For querying a point not in the index.**
 
@@ -219,9 +226,11 @@ for distance, idx in neighbors:
 2. Linear scan computes exact distances to candidates
 3. Returns best `k` sorted by distance
 
+For many new points, `query_external_batch(signatures, k, kc)` does the same in one call and returns `(indices, distances)` arrays of shape `(m, k)`, padded with `-1` and `inf` where fewer than `k` neighbors were found. `TMAP.transform()` and `add_points()` use it on this path.
+
 ---
 
-### `query_linear_scan_by_id(id, k, kc)` - Query Existing Point
+### `query_linear_scan_by_id(id, k, kc)`: Query Existing Point
 
 **For querying a point that's already indexed.**
 
@@ -236,7 +245,7 @@ for distance, idx in neighbors:
 
 ---
 
-### `query(signature, k)` - Fast Approximate Query
+### `query(signature, k)`: Fast Approximate Query
 
 **For getting candidate indices without distance computation.**
 
@@ -246,11 +255,11 @@ candidates = lsh.query(signature, k=100)
 print(f"Found {len(candidates)} candidates")
 ```
 
-**Note:** Results are not sorted by distance. Use `linear_scan()` to refine.
+**Note:** Results come back as an int32 array, not sorted by distance. Use `linear_scan()` to refine. `query_by_id()` works the same way for an indexed point, and the point itself is among its results.
 
 ---
 
-### `linear_scan(signature, indices, k)` - Refine Candidates
+### `linear_scan(signature, indices, k)`: Refine Candidates
 
 **For computing exact distances on a subset.**
 
@@ -278,14 +287,14 @@ How many neighbors to keep per point.
 | k | Effect | Use Case |
 |---|--------|----------|
 | 5-10 | Sparse graph, may disconnect | Quick exploration |
-| 20-30 | **Good connectivity** | Most cases |
+| 20-30 | Good connectivity | Most cases |
 | 50-100 | Very dense graph | When connectivity is critical |
 
-**Tip:** If your TMAP shows disconnected clusters (grid of dots), increase `k`.
+**Tip:** If your map falls apart into separate islands, increase `k` or `kc`. `TMAP` itself joins the pieces with bridging edges by default (`connect_components=True`) and reports how many there were in `model.n_components_`; the low-level `layout_from_lsh_forest` leaves them separate.
 
 ### `kc` - Search Quality Multiplier
 
-How many candidates to consider before keeping best `k`.
+How many candidates to consider before keeping best `k`. Every `LSHForest` method defaults to `kc=10`; `TMAP` uses `kc=50`. The candidate count `k * kc` is capped at the number of indexed points.
 
 | kc | Candidates Searched | Quality | Speed |
 |----|---------------------|---------|-------|
@@ -359,7 +368,7 @@ knn = lsh.get_knn_graph(k=20, kc=50)
 
 ```python
 # Build index (expensive)
-lsh = LSHForest(d=128, l=16)
+lsh = LSHForest(d=128, l=32)
 lsh.batch_add(all_signatures)
 lsh.index()
 lsh.save("index.pkl")
@@ -373,7 +382,7 @@ knn = lsh.get_knn_graph(k=20, kc=50)
 
 ```python
 # Initial index
-lsh = LSHForest(d=128, l=16)
+lsh = LSHForest(d=128, l=32)
 lsh.batch_add(initial_signatures)
 lsh.index()
 
@@ -389,7 +398,7 @@ knn = lsh.get_knn_graph(k=20, kc=50)
 
 ```python
 # Build index of known compounds
-lsh = LSHForest(d=128, l=16)
+lsh = LSHForest(d=128, l=32)
 lsh.batch_add(known_signatures)
 lsh.index()
 
@@ -405,29 +414,29 @@ neighbors = lsh.query_linear_scan(new_sig, k=10, kc=50)
 ### 1. Forgetting to Call `index()`
 
 ```python
-# ❌ WRONG - index() not called
+# Wrong: index() not called
 lsh = LSHForest(d=128)
 lsh.batch_add(signatures)
-knn = lsh.get_knn_graph(k=20, kc=50)  # RuntimeError!
+knn = lsh.get_knn_graph(k=20, kc=50)  # RuntimeError
 
-# ✓ Correct
+# Right
 lsh = LSHForest(d=128)
 lsh.batch_add(signatures)
-lsh.index()  # Don't forget!
+lsh.index()
 knn = lsh.get_knn_graph(k=20, kc=50)
 ```
 
 ### 2. Mismatched Dimensions
 
 ```python
-# ❌ WRONG - d doesn't match signature dimension
+# Wrong: d doesn't match the signature dimension
 mh = MinHash(num_perm=128)
 signatures = mh.batch_from_binary_array(fps)  # Shape: (n, 128)
 
-lsh = LSHForest(d=64)  # Wrong! Should be 128
-lsh.batch_add(signatures)  # ValueError!
+lsh = LSHForest(d=64)       # should be 128
+lsh.batch_add(signatures)   # ValueError
 
-# ✓ Correct
+# Right
 lsh = LSHForest(d=128)  # Match num_perm
 ```
 
@@ -443,30 +452,32 @@ lsh.index()
 assert lsh.is_clean  # Now it's clean
 ```
 
+Querying a stale index does not raise. `get_knn_graph()` and the other queries quietly answer from the old index, so points added since the last `index()` are missing from the results.
+
 ### 4. Using store=False Then Expecting Full Functionality
 
 ```python
-# ❌ WRONG - store=False limits functionality
+# Wrong: store=False limits functionality
 lsh = LSHForest(d=128, store=False)
 lsh.batch_add(signatures)
 lsh.index()
-knn = lsh.get_knn_graph(k=20, kc=50)  # ValueError!
+knn = lsh.get_knn_graph(k=20, kc=50)  # ValueError
 
-# ✓ If you need k-NN graph, use store=True (default)
+# Right: if you need a k-NN graph, use store=True (the default)
 lsh = LSHForest(d=128, store=True)
 ```
 
 ### 5. Mixing Regular and Weighted Signatures
 
 ```python
-# ❌ WRONG - weighted mode mismatch
+# Wrong: weighted mode mismatch
 wmh = WeightedMinHash(dim=100, num_perm=128)
-sigs = wmh.batch_from_weight_array(weights)  # Shape: (n, 128, 2)
+sigs = wmh.batch_from_weight_array(weights, n_jobs=1)  # Shape: (n, 128, 2)
 
-lsh = LSHForest(d=128, weighted=False)  # Wrong!
-lsh.batch_add(sigs)  # ValueError!
+lsh = LSHForest(d=128, weighted=False)  # should be weighted=True
+lsh.batch_add(sigs)  # ValueError
 
-# ✓ Correct
+# Right
 lsh = LSHForest(d=128, weighted=True)
 ```
 
@@ -490,10 +501,9 @@ print(knn.distances.shape)  # (n_nodes, k)
 # Access neighbors of point 0
 point_0_neighbors = knn.indices[0]
 point_0_distances = knn.distances[0]
-
-# Convert to edge list (for debugging/export)
-edge_list = knn.to_edge_list()
 ```
+
+To get a tree from it, use `tmap.graph.tree_from_knn_graph(knn)`; to lay it out, use `tmap.layout.layout_from_knn_graph(knn)`; or pass it to `TMAP().fit(knn_graph=knn)` for a full map.
 
 **Special values:**
 - `indices[i, j] == -1`: No valid neighbor (sparse)
@@ -506,11 +516,11 @@ edge_list = knn.to_edge_list()
 ### 1. Batch Add Is Faster
 
 ```python
-# ⚡ Fast
+# Fast
 lsh.batch_add(all_signatures)
 lsh.index()
 
-# 🐌 Slow
+# Slow
 for sig in all_signatures:
     lsh.add(sig)
 lsh.index()
@@ -519,7 +529,7 @@ lsh.index()
 ### 2. Index Once, Query Many
 
 ```python
-# ⚡ Index once
+# Index once
 lsh.index()
 
 # Can query many times without re-indexing
@@ -531,8 +541,8 @@ knn3 = lsh.get_knn_graph(k=30, kc=100)
 ### 3. Tune Candidate Budget Before Adding Trees
 
 ```python
-# Compatibility-oriented starting point
-lsh = LSHForest(d=128, l=16)
+# Same band width as TMAP
+lsh = LSHForest(d=128, l=32)
 
 # Search more candidates before increasing index memory
 knn = lsh.get_knn_graph(k=20, kc=100)
@@ -557,7 +567,7 @@ mh = MinHash(num_perm=128, seed=42)
 signatures = mh.batch_from_binary_array(fps)
 
 # 3. Build LSH Forest
-lsh = LSHForest(d=128, l=16)
+lsh = LSHForest(d=128, l=32)
 lsh.batch_add(signatures)
 lsh.index()
 
@@ -573,6 +583,8 @@ print(f"k-NN graph: {knn.n_nodes} nodes, {knn.k} neighbors each")
 cfg = LayoutConfig()
 cfg.k = 20
 cfg.kc = 50
+cfg.deterministic = True  # same coordinates on every run
+cfg.seed = 42
 x, y, s, t = layout_from_lsh_forest(lsh, cfg)
 
 print(f"Layout complete: {len(x)} points, {len(s)} edges")
@@ -587,4 +599,4 @@ lsh.save("molecular_index.pkl")
 
 - See [MinHash Guide](minhash_guide.md) for encoding options
 - See [Layout Guide](layout_guide.md) for visualization parameters
-- Try the example: `examples/chemistry/smiles_tmap.py`
+- Run the lower-level pipeline end to end in [notebook 12](../notebooks/12_lower_level_pipeline.ipynb)
